@@ -1,174 +1,247 @@
-#include <iostream>
-#include <algorithm>
 #include "world.h"
+
+#include <iostream>
+
 #include "entity.h"
+#include "system.h"
 
-// 辅助函数：获取实体名称
-static std::string getEntityName(const entt::registry &registry, entt::entity entity)
-{
-	// 优先返回NameComponent的名称
-	if (registry.all_of<NameComponent>(entity))
-	{
-		return registry.get<NameComponent>(entity).name;
-	}
-	// 如果没有NameComponent但有PlayerComponent，则返回玩家名
-	else if (registry.all_of<PlayerComponent>(entity))
-	{
-		return registry.get<PlayerComponent>(entity).name;
-	}
-	// 默认名称
-	return "unnamed";
+// ============ World 实现 ============
+
+World::World() {
+    initializeBlockGrid();
+
+    // 注册系统
+    registerSystem(std::make_unique<PhysicsSystem>());
+    registerSystem(std::make_unique<GameLogicSystem>());
+    registerSystem(std::make_unique<LifeSystem>());
+    registerSystem(std::make_unique<RenderSystem>());
 }
 
-// World 实现
-World::World()
-{
-	// 初始化默认系统
-	registerSystem(std::make_unique<MovementSystem>());
-	registerSystem(std::make_unique<RenderSystem>());
-	registerSystem(std::make_unique<LifeSystem>());
+World::~World() = default;
+
+void World::initializeBlockGrid() {
+    // 初始化块网格，所有位置都设为null
+    for (int x = 0; x < WORLD_WIDTH; ++x) {
+        for (int y = 0; y < WORLD_HEIGHT; ++y) {
+            for (int z = 0; z < WORLD_DEPTH; ++z) {
+                blockGrid_[x][y][z] = entt::null;
+            }
+        }
+    }
 }
 
-entt::entity World::createEntity()
-{
-	return registry_.create();
+entt::entity World::createEntity() { return registry_.create(); }
+
+entt::entity World::createNamedEntity(const std::string& name) {
+    auto entity = registry_.create();
+    registry_.emplace<NameComponent>(entity, name);
+    nameToEntityMap_[name] = entity;
+    return entity;
 }
 
-entt::entity World::createNamedEntity(const std::string &name)
-{
-	auto entity = registry_.create();
-	registry_.emplace<NameComponent>(entity, name);
-	nameToEntityMap_[name] = entity;
-	return entity;
+entt::entity World::createPlayer(const std::string& name, glm::vec3 position) {
+    auto entity = registry_.create();
+
+    // 添加玩家组件
+    registry_.emplace<PlayerComponent>(entity, name);
+    registry_.emplace<Position>(entity, position);
+    registry_.emplace<Velocity>(entity);
+    registry_.emplace<Health>(entity, 100.0f);
+    registry_.emplace<NameComponent>(entity, name);
+    registry_.emplace<Renderable>(entity, glm::vec3(0.2f, 0.6f, 0.9f));  // 蓝色
+    registry_.emplace<PhysicsComponent>(entity);
+
+    nameToEntityMap_[name] = entity;
+
+    std::cout << "[World] Player '" << name << "' created at (" << position.x
+              << ", " << position.y << ", " << position.z << ")" << std::endl;
+
+    return entity;
 }
 
-entt::entity World::createPlayer(const std::string &name, glm::vec3 position)
-{
-	auto entity = registry_.create();
+entt::entity World::createBlock(int x, int y, int z, BlockType type) {
+    if (!isValidPosition(x, y, z)) {
+        return entt::null;
+    }
 
-	// 添加组件
-	registry_.emplace<Position>(entity, position);
-	registry_.emplace<PlayerComponent>(entity, name);
-	registry_.emplace<Health>(entity, 100.0f);                          // 玩家默认100血量
-	registry_.emplace<Renderable>(entity, glm::vec3(0.0f, 0.0f, 1.0f)); // 蓝色表示玩家
-	registry_.emplace<NameComponent>(entity, name);                     // 同时也添加通用名称组件
+    // 如果该位置已有方块，先销毁它
+    auto existing = blockGrid_[x][y][z];
+    if (existing != entt::null) {
+        registry_.destroy(existing);
+    }
 
-	// 注册名称映射
-	nameToEntityMap_[name] = entity;
+    auto entity = registry_.create();
 
-	return entity;
+    // 添加方块组件
+    auto color = [type]() -> glm::vec3 {
+        switch (type) {
+        case BlockType::Stone:
+            return glm::vec3(0.5f, 0.5f, 0.5f);  // 灰色
+        case BlockType::Dirt:
+            return glm::vec3(0.6f, 0.4f, 0.2f);  // 棕色
+        case BlockType::Grass:
+            return glm::vec3(0.2f, 0.8f, 0.2f);  // 绿色
+        case BlockType::Wood:
+            return glm::vec3(0.6f, 0.3f, 0.1f);  // 深棕色
+        case BlockType::Leaves:
+            return glm::vec3(0.1f, 0.6f, 0.1f);  // 深绿色
+        case BlockType::Water:
+            return glm::vec3(0.2f, 0.4f, 0.9f);  // 蓝色
+        case BlockType::Sand:
+            return glm::vec3(0.9f, 0.9f, 0.5f);  // 淡黄色
+        default:
+            return glm::vec3(1.0f, 1.0f, 1.0f);  // 白色（空气）
+    } }();
+    registry_.emplace<Renderable>(entity, color);
+    registry_.emplace<GridPosition>(entity, x, z);
+
+    // 更新快速查询网格
+    blockGrid_[x][y][z] = entity;
+
+    return entity;
 }
 
-void World::registerSystem(std::unique_ptr<BaseSystem> system)
-{
-	systems_.push_back(std::move(system));
+void World::registerSystem(std::unique_ptr<BaseSystem> system) {
+    systems_.push_back(std::move(system));
 }
 
-void World::update(float deltaTime)
-{
-	for (auto &system : systems_)
-	{
-		system->update(*this, deltaTime);
-	}
+void World::update(float deltaTime) {
+    for (auto& system : systems_) {
+        system->update(*this, deltaTime);
+    }
 }
 
-void World::render()
-{
-	// 渲染系统会自动处理渲染逻辑
-	// 这里可以作为入口点调用渲染系统
-	for (auto &system : systems_)
-	{
-		if (dynamic_cast<RenderSystem *>(system.get()))
-		{
-			system->update(*this, 0.0f); // 渲染通常不需要时间增量
-			break;
-		}
-	}
+void World::render() {
+    // 如果需要单独渲染，可以调用RenderSystem
+    for (auto& system : systems_) {
+        if (dynamic_cast<RenderSystem*>(system.get())) {
+            system->update(*this, 0.0f);
+            break;
+        }
+    }
 }
 
-void World::destroyEntity(entt::entity entity)
-{
-	// 如果实体有名称组件，则从名称映射中删除
-	if (registry_.all_of<NameComponent>(entity))
-	{
-		auto &nameComp = registry_.get<NameComponent>(entity);
-		nameToEntityMap_.erase(nameComp.name);
-	}
+void World::destroyEntity(entt::entity entity) {
+    if (registry_.all_of<NameComponent>(entity)) {
+        auto& nameComp = registry_.get<NameComponent>(entity);
+        nameToEntityMap_.erase(nameComp.name);
+    }
 
-	registry_.destroy(entity);
+    registry_.destroy(entity);
 }
 
-entt::entity World::findEntityByName(const std::string &name) const
-{
-	auto it = nameToEntityMap_.find(name);
-	if (it != nameToEntityMap_.end())
-	{
-		return it->second;
-	}
-	return entt::null;
+entt::entity World::findEntityByName(const std::string& name) const {
+    auto it = nameToEntityMap_.find(name);
+    return (it != nameToEntityMap_.end()) ? it->second : entt::null;
 }
 
-// MovementSystem 实现
-void MovementSystem::update(World &world, float deltaTime)
-{
-	auto &registry = world.getRegistry();
-
-	// 更新所有同时具有位置和速度组件的实体
-	auto view = registry.view<Position, Velocity>();
-	for (auto entity : view)
-	{
-		auto &position = registry.get<Position>(entity);
-		auto &velocity = registry.get<Velocity>(entity);
-
-		// 更新位置
-		position.value += velocity.value * deltaTime;
-	}
+entt::entity World::getBlockAt(int x, int y, int z) const {
+    if (!isValidPosition(x, y, z)) {
+        return entt::null;
+    }
+    return blockGrid_[x][y][z];
 }
 
-// RenderSystem 实现
-void RenderSystem::update(World &world, float deltaTime)
-{
-	auto &registry = world.getRegistry();
-
-	// 渲染所有可渲染的实体
-	auto view = registry.view<Renderable, Position>();
-	for (auto entity : view)
-	{
-		auto &renderable = registry.get<Renderable>(entity);
-		auto &position = registry.get<Position>(entity);
-
-		// 统一获取实体名称的方法
-		std::string name = getEntityName(registry, entity);
-
-		std::cout << "Rendering " << name
-				  << " at (" << position.value.x << ", " << position.value.y << ", " << position.value.z << ")"
-				  << " with color (" << renderable.color.x << ", " << renderable.color.y << ", " << renderable.color.z << ")"
-				  << std::endl;
-	}
+void World::setBlockAt(int x, int y, int z, BlockType type) {
+    createBlock(x, y, z, type);
 }
 
-// LifeSystem 实现
-void LifeSystem::update(World &world, float deltaTime)
-{
-	auto &registry = world.getRegistry();
+bool World::isValidPosition(int x, int y, int z) const {
+    return x >= 0 && x < WORLD_WIDTH && y >= 0 && y < WORLD_HEIGHT && z >= 0 &&
+           z < WORLD_DEPTH;
+}
 
-	// 更新所有有健康组件的实体
-	auto view = registry.view<Health>();
-	for (auto entity : view)
-	{
-		auto &health = registry.get<Health>(entity);
+std::vector<entt::entity> World::getAllPlayers() const {
+    std::vector<entt::entity> players;
+    auto view = registry_.view<PlayerComponent>();
+    for (auto entity : view) {
+        players.push_back(entity);
+    }
+    return players;
+}
 
-		// 示例：每秒恢复1点生命值
-		if (health.current < health.max)
-		{
-			health.current = std::min(health.max, health.current + 1.0f * deltaTime);
-		}
+void World::initializeDefaultWorld() {
+    std::cout << "\n[World] Initializing default world (16x16x16)..."
+              << std::endl;
 
-		// 检查是否有玩家组件，显示玩家状态
-		if (registry.all_of<PlayerComponent>(entity))
-		{
-			auto &player = registry.get<PlayerComponent>(entity);
-			std::cout << "Player " << player.name << " HP: " << health.current << "/" << health.max << std::endl;
-		}
-	}
+    // 创建地面（Y=0）
+    for (int x = 0; x < WORLD_WIDTH; ++x) {
+        for (int z = 0; z < WORLD_DEPTH; ++z) {
+            // 下层：石头
+            createBlock(x, 0, z, BlockType::Stone);
+
+            // 中层：草地
+            createBlock(x, 1, z, BlockType::Grass);
+
+            // 上层：部分树木
+            if ((x + z) % 5 == 0) {
+                createBlock(x, 2, z, BlockType::Wood);
+                createBlock(x, 3, z, BlockType::Leaves);
+            }
+        }
+    }
+
+    // 创建一个小沙滩区域
+    for (int x = 10; x < 14; ++x) {
+        for (int z = 10; z < 14; ++z) {
+            createBlock(x, 1, z, BlockType::Sand);
+        }
+    }
+
+    // 创建一个小水池
+    for (int x = 6; x < 10; ++x) {
+        for (int z = 6; z < 10; ++z) {
+            createBlock(x, 2, z, BlockType::Water);
+        }
+    }
+}
+
+size_t World::getPlayerCount() const {
+    return registry_.storage<PlayerComponent>()->size();
+}
+
+size_t World::getTotalEntityCount() const {
+    return registry_.storage<entt::entity>()->size();
+}
+
+// ========= Chunk 相关操作实现 =========
+Chunk& World::getOrCreateChunk(glm::ivec3 chunkPos) {
+    auto it = chunks_.find(chunkPos);
+    if (it != chunks_.end()) {
+        return *(it->second);
+    }
+
+    auto& chunk = chunks_[chunkPos] = std::make_unique<Chunk>(chunkPos);
+    return *chunk;
+}
+
+BlockData World::getBlockInChunk(int worldX, int worldY, int worldZ) const {
+    // 计算块坐标和局部坐标
+    glm::ivec3 chunkPos{
+        worldX < 0 ? (worldX - Chunk::SIZE + 1) / Chunk::SIZE : worldX / Chunk::SIZE,
+        worldY < 0 ? (worldY - Chunk::SIZE + 1) / Chunk::SIZE : worldY / Chunk::SIZE,
+        worldZ < 0 ? (worldZ - Chunk::SIZE + 1) / Chunk::SIZE : worldZ / Chunk::SIZE};
+
+    glm::ivec3 localPos = Chunk::worldToLocal({worldX, worldY, worldZ}, chunkPos);
+
+    auto it = chunks_.find(chunkPos);
+    if (it == chunks_.end()) {
+        // 如果Chunk不存在，返回默认的空方块数据
+        return BlockData{BlockType::Air, BlockOrientation::North};
+    }
+
+    return it->second->getBlock(localPos.x, localPos.y, localPos.z);
+}
+
+void World::setBlockInChunk(int worldX, int worldY, int worldZ, BlockData blockData) {
+    // 计算块坐标和局部坐标
+    glm::ivec3 chunkPos{
+        worldX < 0 ? (worldX - Chunk::SIZE + 1) / Chunk::SIZE : worldX / Chunk::SIZE,
+        worldY < 0 ? (worldY - Chunk::SIZE + 1) / Chunk::SIZE : worldY / Chunk::SIZE,
+        worldZ < 0 ? (worldZ - Chunk::SIZE + 1) / Chunk::SIZE : worldZ / Chunk::SIZE};
+
+    glm::ivec3 localPos = Chunk::worldToLocal({worldX, worldY, worldZ}, chunkPos);
+
+    auto& chunk = getOrCreateChunk(chunkPos);
+    chunk.setBlock(localPos.x, localPos.y, localPos.z, blockData);
 }

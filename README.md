@@ -1,5 +1,10 @@
 # Mineworld
 
+## 开始
+
+已关闭cpptools提供的IntelliSense功能，因此c_cpp_properties.json已被弃用。
+使用clangd代码高亮和格式化，需要手动安装。
+
 ## 计划
 
 --integrated-server
