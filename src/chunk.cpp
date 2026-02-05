@@ -9,41 +9,44 @@ Chunk::Chunk(glm::ivec3 chunkPos) : chunkPosition_(chunkPos) {
         }
     }
 }
+bool Chunk::isValidLocalPosition(glm::ivec3 pos) {
+    return pos.x >= 0 && pos.x < SIZE && pos.y >= 0 && pos.y < SIZE && pos.z >= 0 && pos.z < SIZE;
+}
 
-BlockData Chunk::getBlock(int localX, int localY, int localZ) const {
-    if (!isValidLocalPosition(localX, localY, localZ)) {
+glm::ivec3 Chunk::worldToChunk(glm::ivec3 worldPos) {
+    return worldPos / SIZE;
+}
+
+glm::ivec3 Chunk::worldToLocal(glm::ivec3 worldPos) {
+    return worldPos - worldPos / SIZE * SIZE;
+}
+
+glm::ivec3 Chunk::localToWorld(glm::ivec3 localPos) const {
+    return glm::ivec3(chunkPosition_.x * SIZE + localPos.x,
+                      chunkPosition_.y * SIZE + localPos.y,
+                      chunkPosition_.z * SIZE + localPos.z);
+}
+
+BlockData Chunk::getBlock(glm::ivec3 localPos) const {
+    if (!isValidLocalPosition(localPos)) {
         return BlockData{BlockType::Air, BlockOrientation::North};
     }
-    return blocks_[localX][localY][localZ];
+    return blocks_[localPos.x][localPos.y][localPos.z];
 }
 
-void Chunk::setBlock(int localX, int localY, int localZ, BlockData blockData) {
-    if (isValidLocalPosition(localX, localY, localZ)) {
-        blocks_[localX][localY][localZ] = blockData;
+void Chunk::setBlock(glm::ivec3 localPos, BlockData blockData) {
+    if (isValidLocalPosition(localPos)) {
+        blocks_[localPos.x][localPos.y][localPos.z] = blockData;
     }
 }
 
-void Chunk::clearBlock(int localX, int localY, int localZ) {
-    if (isValidLocalPosition(localX, localY, localZ)) {
-        blocks_[localX][localY][localZ] = BlockData{BlockType::Air, BlockOrientation::North};
+void Chunk::clearBlock(glm::ivec3 localPos) {
+    if (isValidLocalPosition(localPos)) {
+        blocks_[localPos.x][localPos.y][localPos.z] = BlockData{BlockType::Air, BlockOrientation::North};
     }
 }
 
-bool Chunk::isValidLocalPosition(int x, int y, int z) {
-    return x >= 0 && x < SIZE && y >= 0 && y < SIZE && z >= 0 && z < SIZE;
-}
-
-glm::ivec3 Chunk::worldToLocal(glm::ivec3 worldPos, glm::ivec3 chunkPos) {
-    return worldPos - (chunkPos * SIZE);
-}
-
-glm::ivec3 Chunk::localToWorld(int localX, int localY, int localZ) const {
-    return glm::ivec3(chunkPosition_.x * SIZE + localX,
-                      chunkPosition_.y * SIZE + localY,
-                      chunkPosition_.z * SIZE + localZ);
-}
-
-size_t Chunk::getNonEmptyBlockCount() const {
+size_t Chunk::getBlockCount() const {
     size_t count = 0;
     for (int x = 0; x < SIZE; ++x) {
         for (int y = 0; y < SIZE; ++y) {

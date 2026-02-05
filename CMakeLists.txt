@@ -7,9 +7,9 @@ find_package(glm CONFIG REQUIRED)
 
 if(MSVC)
 	add_compile_options(/utf-8)
+	add_compile_options(/std:c++23preview)
 endif()
 
-set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(src)

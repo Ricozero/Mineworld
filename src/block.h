@@ -13,7 +13,6 @@ enum class BlockType : uint8_t {
     Sand = 7
 };
 
-// 添加方块朝向枚举
 enum class BlockOrientation : uint8_t {
     North = 0,
     East = 1,
