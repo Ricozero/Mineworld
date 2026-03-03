@@ -1,12 +1,12 @@
 #include "system.h"
 
-#include <print>
+#include <spdlog/spdlog.h>
 
 #include "entity.h"
 #include "world.h"
 
 void InputSystem::update(World& world, float deltaTime) {
-    updatePlayerInput(world.getRegistry(), deltaTime);
+    updatePlayerInput(world.getActorWorld().registry(), deltaTime);
 }
 
 void InputSystem::updatePlayerInput(entt::registry& registry, float deltaTime) {
@@ -17,8 +17,15 @@ void InputSystem::updatePlayerInput(entt::registry& registry, float deltaTime) {
 }
 
 void PhysicsSystem::update(World& world, float deltaTime) {
-    applyGravity(world.getRegistry(), deltaTime);
-    updateMovement(world.getRegistry(), deltaTime);
+    auto& registry = world.getActorWorld().registry();
+    applyGravity(registry, deltaTime);
+    updateMovement(registry, deltaTime);
+
+    auto view = registry.view<TransformComponent, PhysicsComponent>();
+    for (auto entity : view) {
+        auto& transform = registry.get<TransformComponent>(entity);
+        world.getActorWorld().updateEntityChunk(entity, transform.position);
+    }
 }
 
 void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
@@ -47,16 +54,17 @@ void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
 
 void RenderSystem::update(World& world, float deltaTime) {
     static float totalTime = 0.0f;
-    if (int(totalTime + deltaTime) <= int(totalTime)) return;
     totalTime += deltaTime;
+    if (int(totalTime + deltaTime) <= int(totalTime)) return;
+    spdlog::info("Rendering world at time {:.2f}s", totalTime);
 
-    auto& registry = world.getRegistry();
+    auto& registry = world.getActorWorld().registry();
     auto playerView = registry.view<PlayerComponent, TransformComponent>();
     for (auto entity : playerView) {
         auto& player = registry.get<PlayerComponent>(entity);
         auto& transform = registry.get<TransformComponent>(entity);
         auto& name = registry.get<NameComponent>(entity);
-        std::println("Player {} at ({:.2f}, {:.2f}, {:.2f})", name.name, transform.position.x, transform.position.y, transform.position.z);
+        spdlog::info("Player {} at ({:.2f}, {:.2f}, {:.2f})", name.name, transform.position.x, transform.position.y, transform.position.z);
     }
 }
 

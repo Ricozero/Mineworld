@@ -9,12 +9,9 @@ Chunk::Chunk(glm::ivec3 chunkPos) : chunkPosition_(chunkPos) {
         }
     }
 }
+
 bool Chunk::isValidLocalPosition(glm::ivec3 pos) {
     return pos.x >= 0 && pos.x < SIZE && pos.y >= 0 && pos.y < SIZE && pos.z >= 0 && pos.z < SIZE;
-}
-
-glm::ivec3 Chunk::worldToChunk(glm::ivec3 worldPos) {
-    return worldPos / SIZE;
 }
 
 glm::ivec3 Chunk::worldToLocal(glm::ivec3 worldPos) {
@@ -29,7 +26,7 @@ glm::ivec3 Chunk::localToWorld(glm::ivec3 localPos) const {
 
 BlockData Chunk::getBlock(glm::ivec3 localPos) const {
     if (!isValidLocalPosition(localPos)) {
-        return BlockData{BlockType::Air, BlockOrientation::North};
+        assert(false && "Invalid local position");
     }
     return blocks_[localPos.x][localPos.y][localPos.z];
 }

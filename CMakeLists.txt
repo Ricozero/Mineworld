@@ -4,6 +4,7 @@ project(mineworld)
 
 find_package(EnTT REQUIRED)
 find_package(glm CONFIG REQUIRED)
+find_package(spdlog REQUIRED)
 
 if(MSVC)
 	add_compile_options(/utf-8)
