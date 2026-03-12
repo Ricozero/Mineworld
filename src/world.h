@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
 
 #include "actor_world.h"
 #include "voxel_world.h"
@@ -24,6 +25,16 @@ public:
 
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
+    bool loadChunkServer(glm::ivec3 chunkPos);
+    bool unloadChunkServer(glm::ivec3 chunkPos);
+    bool loadChunkClient(glm::ivec3 chunkPos);
+    bool unloadChunkClient(glm::ivec3 chunkPos);
+
+    BlockData getBlockClient(glm::ivec3 worldPos) const;
+    void setBlockServer(glm::ivec3 worldPos, BlockData blockData);
+    void setBlockClientFromSnapshot(glm::ivec3 worldPos, BlockData blockData);
+
+    std::vector<glm::ivec3> getLoadedChunks() const;
 
     entt::registry& getRegistry() { return actorWorld_.registry(); }
     const entt::registry& getRegistry() const { return actorWorld_.registry(); }

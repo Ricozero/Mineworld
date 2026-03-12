@@ -1,5 +1,9 @@
 #include "chunk.h"
 
+#include <spdlog/spdlog.h>
+
+#include <glm/gtx/string_cast.hpp>
+
 Chunk::Chunk(glm::ivec3 chunkPos) : chunkPosition_(chunkPos) {
     for (int x = 0; x < SIZE; ++x) {
         for (int y = 0; y < SIZE; ++y) {
@@ -25,21 +29,27 @@ glm::ivec3 Chunk::localToWorld(glm::ivec3 localPos) const {
 }
 
 BlockData Chunk::getBlock(glm::ivec3 localPos) const {
-    if (!isValidLocalPosition(localPos)) {
-        assert(false && "Invalid local position");
+    if (isValidLocalPosition(localPos)) {
+        return blocks_[localPos.x][localPos.y][localPos.z];
+    } else {
+        spdlog::error("Attempted to get block at {}", glm::to_string(localToWorld(localPos)));
+        return BlockData{BlockType::Air, BlockOrientation::North};
     }
-    return blocks_[localPos.x][localPos.y][localPos.z];
 }
 
 void Chunk::setBlock(glm::ivec3 localPos, BlockData blockData) {
     if (isValidLocalPosition(localPos)) {
         blocks_[localPos.x][localPos.y][localPos.z] = blockData;
+    } else {
+        spdlog::error("Attempted to set block at {}", glm::to_string(localToWorld(localPos)));
     }
 }
 
 void Chunk::clearBlock(glm::ivec3 localPos) {
     if (isValidLocalPosition(localPos)) {
         blocks_[localPos.x][localPos.y][localPos.z] = BlockData{BlockType::Air, BlockOrientation::North};
+    } else {
+        spdlog::error("Attempted to clear block at {}", glm::to_string(localToWorld(localPos)));
     }
 }
 

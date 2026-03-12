@@ -1,13 +1,29 @@
-cmake_minimum_required(VERSION 3.10)
-
 file(GLOB_RECURSE APPLICATION_SOURCE *.cpp)
-
-add_compile_definitions(GLM_ENABLE_EXPERIMENTAL)
 
 add_executable(mineworld ${APPLICATION_SOURCE})
 
-target_link_libraries(mineworld PRIVATE EnTT::EnTT)
-target_link_libraries(mineworld PRIVATE glm::glm)
-target_link_libraries(mineworld PRIVATE spdlog::spdlog_header_only)
+target_link_libraries(mineworld PRIVATE
+    EnTT::EnTT
+    glm::glm
+    spdlog::spdlog
+    asio::asio
+    kcp::kcp
+    flatbuffers::flatbuffers
+)
 
-set(EXECUTABLE_OUTPUT_PATH ../../bin)
+target_compile_definitions(mineworld PRIVATE
+    GLM_ENABLE_EXPERIMENTAL
+)
+
+if(WIN32)
+    target_compile_definitions(mineworld PRIVATE
+        _WIN32_WINNT=0x0A00
+        WIN32_LEAN_AND_MEAN
+    )
+endif()
+
+if(MSVC)
+    target_compile_options(mineworld PRIVATE
+        /utf-8
+    )
+endif()
