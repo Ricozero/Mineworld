@@ -1,238 +1,197 @@
 #include "net_protocol.h"
 
-#include <cstddef>
 #include <cstring>
-#include <limits>
+
+#include <flatbuffers/flatbuffers.h>
+#include <flatbuffers/verifier.h>
+
+#include "net_protocol_generated.h"
 
 namespace {
 
-class ByteWriter {
-public:
-    void writeU8(uint8_t value) {
-        data_.push_back(value);
-    }
+constexpr size_t kMaxActors = 2048;
+constexpr size_t kMaxChunks = 65536;
+constexpr size_t kMaxBlocks = 65536;
 
-    void writeU32(uint32_t value) {
-        data_.push_back(static_cast<uint8_t>(value & 0xFFu));
-        data_.push_back(static_cast<uint8_t>((value >> 8u) & 0xFFu));
-        data_.push_back(static_cast<uint8_t>((value >> 16u) & 0xFFu));
-        data_.push_back(static_cast<uint8_t>((value >> 24u) & 0xFFu));
-    }
-
-    void writeI32(int32_t value) {
-        writeU32(static_cast<uint32_t>(value));
-    }
-
-    void writeF32(float value) {
-        static_assert(sizeof(float) == sizeof(uint32_t));
-        uint32_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(float));
-        writeU32(bits);
-    }
-
-    void writeString(const std::string& value) {
-        writeU32(static_cast<uint32_t>(value.size()));
-        data_.insert(data_.end(), value.begin(), value.end());
-    }
-
-    std::vector<uint8_t> take() {
-        return std::move(data_);
-    }
-
-private:
-    std::vector<uint8_t> data_;
-};
-
-class ByteReader {
-public:
-    explicit ByteReader(std::span<const uint8_t> data) : data_(data) {}
-
-    bool readU8(uint8_t& out) {
-        if (!ensure(1)) return false;
-        out = data_[offset_++];
-        return true;
-    }
-
-    bool readU32(uint32_t& out) {
-        if (!ensure(4)) return false;
-        out = static_cast<uint32_t>(data_[offset_]) |
-              (static_cast<uint32_t>(data_[offset_ + 1]) << 8u) |
-              (static_cast<uint32_t>(data_[offset_ + 2]) << 16u) |
-              (static_cast<uint32_t>(data_[offset_ + 3]) << 24u);
-        offset_ += 4;
-        return true;
-    }
-
-    bool readI32(int32_t& out) {
-        uint32_t value = 0;
-        if (!readU32(value)) return false;
-        std::memcpy(&out, &value, sizeof(int32_t));
-        return true;
-    }
-
-    bool readF32(float& out) {
-        uint32_t bits = 0;
-        if (!readU32(bits)) return false;
-        std::memcpy(&out, &bits, sizeof(float));
-        return true;
-    }
-
-    bool readString(std::string& out) {
-        uint32_t size = 0;
-        if (!readU32(size)) return false;
-        if (!ensure(size)) return false;
-        out.assign(reinterpret_cast<const char*>(data_.data() + offset_), size);
-        offset_ += size;
-        return true;
-    }
-
-    bool isEnd() const {
-        return offset_ == data_.size();
-    }
-
-private:
-    bool ensure(size_t count) const {
-        if (count > std::numeric_limits<size_t>::max() - offset_) {
-            return false;
-        }
-        return offset_ + count <= data_.size();
-    }
-
-    std::span<const uint8_t> data_;
-    size_t offset_ = 0;
-};
-
-void writeVec3(ByteWriter& writer, const glm::vec3& value) {
-    writer.writeF32(value.x);
-    writer.writeF32(value.y);
-    writer.writeF32(value.z);
+flatbuffers::DetachedBuffer finish(flatbuffers::FlatBufferBuilder& builder,
+                                   flatbuffers::Offset<mineworld::net::NetMessage> message) {
+    // Generated helper includes the file identifier from the schema.
+    mineworld::net::FinishNetMessageBuffer(builder, message);
+    return builder.Release();
 }
 
-bool readVec3(ByteReader& reader, glm::vec3& out) {
-    return reader.readF32(out.x) && reader.readF32(out.y) && reader.readF32(out.z);
+const mineworld::net::NetMessage* tryGetMessage(std::span<const uint8_t> bytes) {
+    flatbuffers::Verifier verifier(bytes.data(), bytes.size());
+    if (!mineworld::net::VerifyNetMessageBuffer(verifier)) {
+        return nullptr;
+    }
+    return mineworld::net::GetNetMessage(bytes.data());
 }
 
-void writeIVec3(ByteWriter& writer, const glm::ivec3& value) {
-    writer.writeI32(value.x);
-    writer.writeI32(value.y);
-    writer.writeI32(value.z);
+mineworld::net::Vec3 toFbVec3(const glm::vec3& value) {
+    return mineworld::net::Vec3(value.x, value.y, value.z);
 }
 
-bool readIVec3(ByteReader& reader, glm::ivec3& out) {
-    return reader.readI32(out.x) && reader.readI32(out.y) && reader.readI32(out.z);
+mineworld::net::IVec3 toFbIVec3(const glm::ivec3& value) {
+    return mineworld::net::IVec3(value.x, value.y, value.z);
+}
+
+glm::vec3 fromFbVec3(const mineworld::net::Vec3* value) {
+    if (!value) {
+        return glm::vec3(0.0f);
+    }
+    return glm::vec3(value->x(), value->y(), value->z());
+}
+
+glm::ivec3 fromFbIVec3(const mineworld::net::IVec3* value) {
+    if (!value) {
+        return glm::ivec3(0);
+    }
+    return glm::ivec3(value->x(), value->y(), value->z());
 }
 
 }  // namespace
 
 std::vector<uint8_t> serializeClientHello() {
-    ByteWriter writer;
-    writer.writeU8(static_cast<uint8_t>(NetMessageType::ClientHello));
-    return writer.take();
+    flatbuffers::FlatBufferBuilder builder;
+    const auto hello = mineworld::net::CreateClientHello(builder);
+    const auto msg = mineworld::net::CreateNetMessage(
+        builder,
+        mineworld::net::NetMessagePayload::ClientHello,
+        hello.Union());
+
+    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
 }
 
 bool deserializeClientHello(std::span<const uint8_t> bytes) {
-    ByteReader reader(bytes);
-    uint8_t messageType = 0;
-    return reader.readU8(messageType) &&
-           messageType == static_cast<uint8_t>(NetMessageType::ClientHello) &&
-           reader.isEnd();
+    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
+    if (!msg) {
+        return false;
+    }
+    return msg->payload_type() == mineworld::net::NetMessagePayload::ClientHello;
 }
 
 std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot) {
-    ByteWriter writer;
-    writer.writeU8(static_cast<uint8_t>(NetMessageType::Snapshot));
-    writer.writeU32(snapshot.sequence);
+    flatbuffers::FlatBufferBuilder builder;
 
-    writer.writeU32(static_cast<uint32_t>(snapshot.actors.size()));
+    std::vector<flatbuffers::Offset<mineworld::net::ActorState>> actorOffsets;
+    actorOffsets.reserve(snapshot.actors.size());
     for (const auto& actor : snapshot.actors) {
-        writer.writeString(actor.name);
-        writeVec3(writer, actor.position);
-        writeVec3(writer, actor.velocity);
+        const auto name = builder.CreateString(actor.name);
+        const mineworld::net::Vec3 position = toFbVec3(actor.position);
+        const mineworld::net::Vec3 velocity = toFbVec3(actor.velocity);
+        actorOffsets.push_back(mineworld::net::CreateActorState(
+            builder,
+            name,
+            &position,
+            &velocity));
     }
+    const auto actorsVec = builder.CreateVector(actorOffsets);
 
-    writer.writeU32(static_cast<uint32_t>(snapshot.chunks.size()));
+    std::vector<flatbuffers::Offset<mineworld::net::ChunkState>> chunkOffsets;
+    chunkOffsets.reserve(snapshot.chunks.size());
     for (const auto& chunk : snapshot.chunks) {
-        writeIVec3(writer, chunk.chunkPos);
-        writer.writeU8(chunk.loaded ? 1 : 0);
+        const mineworld::net::IVec3 chunkPos = toFbIVec3(chunk.chunkPos);
+        chunkOffsets.push_back(mineworld::net::CreateChunkState(
+            builder,
+            &chunkPos,
+            chunk.loaded));
     }
+    const auto chunksVec = builder.CreateVector(chunkOffsets);
 
-    writer.writeU32(static_cast<uint32_t>(snapshot.blocks.size()));
+    std::vector<flatbuffers::Offset<mineworld::net::BlockState>> blockOffsets;
+    blockOffsets.reserve(snapshot.blocks.size());
     for (const auto& block : snapshot.blocks) {
-        writeIVec3(writer, block.worldPos);
-        writer.writeU8(static_cast<uint8_t>(block.data.type));
-        writer.writeU8(static_cast<uint8_t>(block.data.orientation));
+        const mineworld::net::IVec3 worldPos = toFbIVec3(block.worldPos);
+        blockOffsets.push_back(mineworld::net::CreateBlockState(
+            builder,
+            &worldPos,
+            static_cast<uint8_t>(block.data.type),
+            static_cast<uint8_t>(block.data.orientation)));
     }
+    const auto blocksVec = builder.CreateVector(blockOffsets);
 
-    return writer.take();
+    const auto snapshotOffset = mineworld::net::CreateSnapshot(
+        builder,
+        snapshot.sequence,
+        actorsVec,
+        chunksVec,
+        blocksVec);
+
+    const auto msg = mineworld::net::CreateNetMessage(
+        builder,
+        mineworld::net::NetMessagePayload::Snapshot,
+        snapshotOffset.Union());
+
+    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
 }
 
 bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapshot) {
-    ByteReader reader(bytes);
+    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
+    if (!msg || msg->payload_type() != mineworld::net::NetMessagePayload::Snapshot) {
+        return false;
+    }
 
-    uint8_t messageType = 0;
-    if (!reader.readU8(messageType) ||
-        messageType != static_cast<uint8_t>(NetMessageType::Snapshot)) {
+    const mineworld::net::Snapshot* fbSnapshot = msg->payload_as_Snapshot();
+    if (!fbSnapshot) {
         return false;
     }
 
     NetSnapshot snapshot;
-    if (!reader.readU32(snapshot.sequence)) {
-        return false;
-    }
+    snapshot.sequence = fbSnapshot->sequence();
 
-    uint32_t actorCount = 0;
-    if (!reader.readU32(actorCount)) {
-        return false;
-    }
-    snapshot.actors.reserve(actorCount);
-    for (uint32_t i = 0; i < actorCount; ++i) {
-        NetActorState actor;
-        if (!reader.readString(actor.name) ||
-            !readVec3(reader, actor.position) ||
-            !readVec3(reader, actor.velocity)) {
+    if (const auto* actors = fbSnapshot->actors()) {
+        if (actors->size() > kMaxActors) {
             return false;
         }
-        snapshot.actors.push_back(std::move(actor));
+        snapshot.actors.reserve(actors->size());
+        for (const mineworld::net::ActorState* actor : *actors) {
+            if (!actor || !actor->name()) {
+                return false;
+            }
+            NetActorState outActor;
+            outActor.name = actor->name()->str();
+            outActor.position = fromFbVec3(actor->position());
+            outActor.velocity = fromFbVec3(actor->velocity());
+            snapshot.actors.push_back(std::move(outActor));
+        }
     }
 
-    uint32_t chunkCount = 0;
-    if (!reader.readU32(chunkCount)) {
-        return false;
-    }
-    snapshot.chunks.reserve(chunkCount);
-    for (uint32_t i = 0; i < chunkCount; ++i) {
-        NetChunkState chunk;
-        uint8_t loaded = 0;
-        if (!readIVec3(reader, chunk.chunkPos) || !reader.readU8(loaded)) {
+    if (const auto* chunks = fbSnapshot->chunks()) {
+        if (chunks->size() > kMaxChunks) {
             return false;
         }
-        chunk.loaded = loaded != 0;
-        snapshot.chunks.push_back(chunk);
+        snapshot.chunks.reserve(chunks->size());
+        for (const mineworld::net::ChunkState* chunk : *chunks) {
+            if (!chunk) {
+                return false;
+            }
+            NetChunkState outChunk;
+            outChunk.chunkPos = fromFbIVec3(chunk->chunk_pos());
+            outChunk.loaded = chunk->loaded();
+            snapshot.chunks.push_back(outChunk);
+        }
     }
 
-    uint32_t blockCount = 0;
-    if (!reader.readU32(blockCount)) {
-        return false;
-    }
-    snapshot.blocks.reserve(blockCount);
-    for (uint32_t i = 0; i < blockCount; ++i) {
-        NetBlockState block;
-        uint8_t type = 0;
-        uint8_t orientation = 0;
-        if (!readIVec3(reader, block.worldPos) ||
-            !reader.readU8(type) ||
-            !reader.readU8(orientation)) {
+    if (const auto* blocks = fbSnapshot->blocks()) {
+        if (blocks->size() > kMaxBlocks) {
             return false;
         }
-        block.data = BlockData{
-            static_cast<BlockType>(type),
-            static_cast<BlockOrientation>(orientation),
-        };
-        snapshot.blocks.push_back(block);
-    }
-
-    if (!reader.isEnd()) {
-        return false;
+        snapshot.blocks.reserve(blocks->size());
+        for (const mineworld::net::BlockState* block : *blocks) {
+            if (!block) {
+                return false;
+            }
+            NetBlockState outBlock;
+            outBlock.worldPos = fromFbIVec3(block->world_pos());
+            outBlock.data = BlockData{
+                static_cast<BlockType>(block->type()),
+                static_cast<BlockOrientation>(block->orientation()),
+            };
+            snapshot.blocks.push_back(outBlock);
+        }
     }
 
     outSnapshot = std::move(snapshot);

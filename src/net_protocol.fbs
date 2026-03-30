@@ -1,0 +1,54 @@
+namespace mineworld.net;
+
+file_identifier "MWNP";
+file_extension "mwnp";
+
+struct Vec3 {
+  x:float;
+  y:float;
+  z:float;
+}
+
+struct IVec3 {
+  x:int;
+  y:int;
+  z:int;
+}
+
+table ClientHello {
+}
+
+table ActorState {
+  name:string;
+  position:Vec3;
+  velocity:Vec3;
+}
+
+table ChunkState {
+  chunk_pos:IVec3;
+  loaded:bool;
+}
+
+table BlockState {
+  world_pos:IVec3;
+  type:ubyte;
+  orientation:ubyte;
+}
+
+table Snapshot {
+  sequence:uint;
+  actors:[ActorState];
+  chunks:[ChunkState];
+  blocks:[BlockState];
+}
+
+union NetMessagePayload {
+  ClientHello,
+  Snapshot
+}
+
+table NetMessage {
+  payload:NetMessagePayload;
+}
+
+root_type NetMessage;

@@ -8,11 +8,6 @@
 
 #include "block.h"
 
-enum class NetMessageType : uint8_t {
-    ClientHello = 1,
-    Snapshot = 2,
-};
-
 struct NetActorState {
     std::string name;
     glm::vec3 position{0.0f};
