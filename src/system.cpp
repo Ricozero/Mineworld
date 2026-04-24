@@ -2,6 +2,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
+#include <thread>
+
 #include "entity.h"
 #include "world.h"
 
@@ -54,12 +57,14 @@ void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
 
 void RenderSystem::update(World& world, float deltaTime) {
     static float totalTime = 0.0f;
+    int oldTime = (int)totalTime;
     totalTime += deltaTime;
-    if (int(totalTime + deltaTime) <= int(totalTime)) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds((int)(deltaTime * 1000)));
+    if (oldTime == int(totalTime)) return;
     spdlog::info("Rendering world at time {:.2f}s", totalTime);
 
     auto& registry = world.getActorWorld().registry();
-    auto playerView = registry.view<PlayerComponent, TransformComponent>();
+    auto playerView = registry.view<PlayerComponent, TransformComponent, NameComponent>();
     for (auto entity : playerView) {
         auto& player = registry.get<PlayerComponent>(entity);
         auto& transform = registry.get<TransformComponent>(entity);

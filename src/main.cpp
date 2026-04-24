@@ -15,9 +15,10 @@ int main(int argc, char* argv[]) {
     server.loadChunk(glm::ivec3(0, 0, 0));
     server.setBlock(glm::ivec3(1, 2, 3), BlockData{BlockType::Stone, BlockOrientation::North});
 
-    float deltaTime = 0.016f;
-    int totalFrames = 120;
-    for (int frame = 0; frame < totalFrames; ++frame) {
+    int fps = 60;
+    float deltaTime = 1.0f / fps;
+    int runSeconds = 3;
+    for (int frame = 0; frame < fps * runSeconds; ++frame) {
         server.update(deltaTime);
         client.update(deltaTime);
     }
