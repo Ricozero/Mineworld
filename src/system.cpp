@@ -5,10 +5,11 @@
 #include <chrono>
 #include <thread>
 
+#include "client_world.h"
 #include "entity.h"
-#include "world.h"
+#include "server_world.h"
 
-void InputSystem::update(World& world, float deltaTime) {
+void InputSystem::update(ClientWorld& world, float deltaTime) {
     updatePlayerInput(world.getActorWorld().registry(), deltaTime);
 }
 
@@ -19,7 +20,7 @@ void InputSystem::updatePlayerInput(entt::registry& registry, float deltaTime) {
     }
 }
 
-void PhysicsSystem::update(World& world, float deltaTime) {
+void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
     auto& registry = world.getActorWorld().registry();
     applyGravity(registry, deltaTime);
     updateMovement(registry, deltaTime);
@@ -55,7 +56,7 @@ void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
     }
 }
 
-void RenderSystem::update(World& world, float deltaTime) {
+void RenderSystem::update(ClientWorld& world, float deltaTime) {
     static float totalTime = 0.0f;
     int oldTime = (int)totalTime;
     totalTime += deltaTime;

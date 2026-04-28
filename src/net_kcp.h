@@ -7,20 +7,21 @@
 #include <asio.hpp>
 #include <ikcp.h>
 
-class KcpChannel {
+#include "net_channel.h"
+
+class KcpChannel : public IPacketChannel {
 public:
     using Udp = asio::ip::udp;
-    using Endpoint = Udp::endpoint;
 
     KcpChannel(asio::io_context& ioContext, uint16_t localPort, uint32_t conv);
-    ~KcpChannel();
+    ~KcpChannel() override;
 
-    void setRemote(const Endpoint& endpoint);
-    bool hasRemote() const { return remote_.has_value(); }
+    void setRemote(const Endpoint& endpoint) override;
+    bool hasRemote() const override { return remote_.has_value(); }
 
-    void sendReliable(const std::vector<uint8_t>& payload);
-    void pump();
-    bool popPacket(std::vector<uint8_t>& outPacket);
+    void sendReliable(const std::vector<uint8_t>& payload) override;
+    void pump() override;
+    bool popPacket(std::vector<uint8_t>& outPacket) override;
 
 private:
     static int kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user);

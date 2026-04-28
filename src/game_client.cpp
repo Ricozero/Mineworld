@@ -3,15 +3,17 @@
 #include <spdlog/spdlog.h>
 
 #include "entity.h"
+#include "net_kcp.h"
 #include "system.h"
 
 GameClient::GameClient() {
-    channel_ = std::make_unique<KcpChannel>(ioContext_, DEFAULT_CLIENT_PORT, DEFAULT_CONV);
-    const auto serverEndpoint = KcpChannel::Endpoint(
+    auto channel = std::make_unique<KcpChannel>(ioContext_, DEFAULT_CLIENT_PORT, DEFAULT_CONV);
+    const auto serverEndpoint = IPacketChannel::Endpoint(
         asio::ip::make_address("127.0.0.1"),
         DEFAULT_SERVER_PORT);
-    channel_->setRemote(serverEndpoint);
-    channel_->sendReliable(serializeClientHello());
+    channel->setRemote(serverEndpoint);
+    channel->sendReliable(serializeClientHello());
+    channel_ = std::move(channel);
 
     registerSystem(std::make_unique<InputSystem>());
     registerSystem(std::make_unique<RenderSystem>());
@@ -19,7 +21,7 @@ GameClient::GameClient() {
 
 GameClient::~GameClient() = default;
 
-void GameClient::registerSystem(std::unique_ptr<BaseSystem> system) {
+void GameClient::registerSystem(std::unique_ptr<ClientSystem> system) {
     systems_.push_back(std::move(system));
 }
 
@@ -67,17 +69,17 @@ void GameClient::replaySnapshots() {
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
-            world_.loadChunkClient(chunk.chunkPos);
+            world_.loadChunk(chunk.chunkPos);
         } else {
-            world_.unloadChunkClient(chunk.chunkPos);
+            world_.unloadChunk(chunk.chunkPos);
         }
     }
 
     for (const auto& block : snapshot.blocks) {
-        world_.setBlockClientFromSnapshot(block.worldPos, block.data);
+        world_.applyBlockSnapshot(block.worldPos, block.data);
     }
 
-    auto& registry = world_.getRegistry();
+    auto& registry = world_.getActorWorld().registry();
     for (const auto& actor : snapshot.actors) {
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {

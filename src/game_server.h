@@ -5,21 +5,21 @@
 #include <memory>
 #include <vector>
 
-#include "net_kcp.h"
+#include "net_channel.h"
 #include "net_protocol.h"
-#include "world.h"
+#include "server_world.h"
 
-class BaseSystem;
+class ServerSystem;
 
 class GameServer {
 public:
     GameServer();
     ~GameServer();
 
-    World& world() { return world_; }
-    const World& world() const { return world_; }
+    ServerWorld& world() { return world_; }
+    const ServerWorld& world() const { return world_; }
 
-    void registerSystem(std::unique_ptr<BaseSystem> system);
+    void registerSystem(std::unique_ptr<ServerSystem> system);
     void update(float deltaTime);
 
     bool loadChunk(glm::ivec3 chunkPos);
@@ -34,11 +34,11 @@ private:
     static constexpr uint16_t DEFAULT_SERVER_PORT = 40000;
     static constexpr uint32_t DEFAULT_CONV = 114514;
 
-    World world_;
-    std::vector<std::unique_ptr<BaseSystem>> systems_;
+    ServerWorld world_;
+    std::vector<std::unique_ptr<ServerSystem>> systems_;
 
     asio::io_context ioContext_;
-    std::unique_ptr<KcpChannel> channel_;
+    std::unique_ptr<IPacketChannel> channel_;
     uint32_t snapshotSequence_ = 0;
     float snapshotTimer_ = 0.0f;
     bool initialSnapshotSent_ = false;

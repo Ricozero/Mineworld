@@ -2,37 +2,45 @@
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <string>
 
 #include "block.h"
 
-class World;
+class ClientWorld;
+class ServerWorld;
 
-class BaseSystem {
+class ClientSystem {
 public:
-    virtual ~BaseSystem() = default;
-    virtual void update(World& world, float deltaTime) = 0;
+    virtual ~ClientSystem() = default;
+    virtual void update(ClientWorld& world, float deltaTime) = 0;
 };
 
-class InputSystem : public BaseSystem {
+class ServerSystem {
 public:
-    void update(World& world, float deltaTime) override;
+    virtual ~ServerSystem() = default;
+    virtual void update(ServerWorld& world, float deltaTime) = 0;
+};
+
+class InputSystem : public ClientSystem {
+public:
+    void update(ClientWorld& world, float deltaTime) override;
 
 private:
     void updatePlayerInput(entt::registry& registry, float deltaTime);
 };
 
-class PhysicsSystem : public BaseSystem {
+class PhysicsSystem : public ServerSystem {
 public:
-    void update(World& world, float deltaTime) override;
+    void update(ServerWorld& world, float deltaTime) override;
 
 private:
     void applyGravity(entt::registry& registry, float deltaTime);
     void updateMovement(entt::registry& registry, float deltaTime);
 };
 
-class RenderSystem : public BaseSystem {
+class RenderSystem : public ClientSystem {
 public:
-    void update(World& world, float deltaTime) override;
+    void update(ClientWorld& world, float deltaTime) override;
 
 private:
     void renderBlock(const glm::ivec3& pos, BlockType type);

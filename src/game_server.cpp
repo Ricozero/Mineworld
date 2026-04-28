@@ -1,10 +1,11 @@
 #include "game_server.h"
 
-#include <utility>
-
 #include <spdlog/spdlog.h>
 
+#include <utility>
+
 #include "entity.h"
+#include "net_kcp.h"
 #include "system.h"
 
 GameServer::GameServer() {
@@ -14,7 +15,7 @@ GameServer::GameServer() {
 
 GameServer::~GameServer() = default;
 
-void GameServer::registerSystem(std::unique_ptr<BaseSystem> system) {
+void GameServer::registerSystem(std::unique_ptr<ServerSystem> system) {
     systems_.push_back(std::move(system));
 }
 
@@ -37,7 +38,7 @@ void GameServer::update(float deltaTime) {
 }
 
 bool GameServer::loadChunk(glm::ivec3 chunkPos) {
-    if (!world_.loadChunkServer(chunkPos)) {
+    if (!world_.loadChunk(chunkPos)) {
         return false;
     }
     pendingChunkUpdates_.push_back(NetChunkState{chunkPos, true});
@@ -45,7 +46,7 @@ bool GameServer::loadChunk(glm::ivec3 chunkPos) {
 }
 
 bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
-    if (!world_.unloadChunkServer(chunkPos)) {
+    if (!world_.unloadChunk(chunkPos)) {
         return false;
     }
     pendingChunkUpdates_.push_back(NetChunkState{chunkPos, false});
@@ -53,7 +54,7 @@ bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
 }
 
 void GameServer::setBlock(glm::ivec3 worldPos, BlockData blockData) {
-    world_.setBlockServer(worldPos, blockData);
+    world_.setBlock(worldPos, blockData);
     pendingBlockUpdates_.push_back(NetBlockState{worldPos, blockData});
 }
 
@@ -61,7 +62,7 @@ NetSnapshot GameServer::buildSnapshot(bool forceFullChunkState) {
     NetSnapshot snapshot;
     snapshot.sequence = ++snapshotSequence_;
 
-    auto& registry = world_.getRegistry();
+    auto& registry = world_.getActorWorld().registry();
     auto view = registry.view<NameComponent, TransformComponent, PhysicsComponent>();
     snapshot.actors.reserve(view.size_hint());
     for (auto entity : view) {
