@@ -1,16 +1,15 @@
 #include "actor_world.h"
 
-#include <spdlog/spdlog.h>
-
 #include <algorithm>
 #include <cmath>
 
 #include "chunk.h"
 #include "entity.h"
+#include "log.h"
 
 entt::entity ActorWorld::createPlayer(const std::string& name, glm::vec3 position) {
     if (getEntityByName(name) != entt::null) {
-        spdlog::error("Player '{}' already exists", name);
+        logging::error("Player '{}' already exists", name);
         return entt::null;
     }
     auto entity = registry_.create();
@@ -21,7 +20,7 @@ entt::entity ActorWorld::createPlayer(const std::string& name, glm::vec3 positio
     registry_.emplace<PlayerComponent>(entity);
     nameToEntityMap_[name] = entity;
     updateEntityChunk(entity, position);
-    spdlog::info("Player '{}' created at ({}, {}, {})", name, position.x, position.y, position.z);
+    logging::info("Player '{}' created at ({}, {}, {})", name, position.x, position.y, position.z);
     return entity;
 }
 

@@ -1,11 +1,10 @@
 #include "net_kcp.h"
 
-#include <spdlog/spdlog.h>
-
 #include <chrono>
 #include <cstring>
 
 #include "helper.h"
+#include "log.h"
 
 namespace {
 
@@ -46,7 +45,7 @@ void KcpChannel::sendReliable(const std::vector<uint8_t>& payload) {
     }
     const int result = ikcp_send(kcp_, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
     if (result < 0) {
-        spdlog::warn("ikcp_send failed: {}", result);
+        logging::warn("ikcp_send failed: {}", result);
     }
 }
 
@@ -63,7 +62,7 @@ void KcpChannel::pump() {
             break;
         }
         if (ec) {
-            spdlog::warn("UDP receive error: {}", ec.message());
+            logging::warn("UDP receive error: {}", ec.message());
             break;
         }
         if (!remote_) {
@@ -75,7 +74,7 @@ void KcpChannel::pump() {
 
         const int inputResult = ikcp_input(kcp_, reinterpret_cast<const char*>(recvBuffer_.data()), static_cast<long>(received));
         if (inputResult < 0) {
-            spdlog::warn("ikcp_input failed: {}", inputResult);
+            logging::warn("ikcp_input failed: {}", inputResult);
         }
     }
 
@@ -113,7 +112,7 @@ int KcpChannel::sendRaw(const char* data, size_t size) {
     asio::error_code ec;
     socket_.send_to(asio::buffer(data, size), *remote_, 0, ec);
     if (ec) {
-        spdlog::warn("UDP send error: {}", ec.message());
+        logging::warn("UDP send error: {}", ec.message());
         return -1;
     }
     return 0;

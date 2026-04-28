@@ -1,14 +1,15 @@
 #include "game_server.h"
 
-#include <spdlog/spdlog.h>
-
 #include <utility>
 
 #include "entity.h"
+#include "log.h"
 #include "net_kcp.h"
 #include "system.h"
 
 GameServer::GameServer() {
+    logging::Scope logScope(logging::Channel::Server);
+
     channel_ = std::make_unique<KcpChannel>(ioContext_, DEFAULT_SERVER_PORT, DEFAULT_CONV);
     registerSystem(std::make_unique<PhysicsSystem>());
 }
@@ -20,6 +21,8 @@ void GameServer::registerSystem(std::unique_ptr<ServerSystem> system) {
 }
 
 void GameServer::update(float deltaTime) {
+    logging::Scope logScope(logging::Channel::Server);
+
     pumpNetwork();
 
     for (auto& system : systems_) {
@@ -106,8 +109,8 @@ void GameServer::pumpNetwork() {
 
 void GameServer::onClientPacket(const std::vector<uint8_t>& packet) {
     if (deserializeClientHello(packet)) {
-        spdlog::info("Client hello received, remote endpoint bound");
+        logging::info("Client hello received, remote endpoint bound");
         return;
     }
-    spdlog::warn("Server ignored unknown client packet");
+    logging::warn("Ignored unknown client packet");
 }

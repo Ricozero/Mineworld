@@ -1,12 +1,13 @@
 #include "game_client.h"
 
-#include <spdlog/spdlog.h>
-
 #include "entity.h"
+#include "log.h"
 #include "net_kcp.h"
 #include "system.h"
 
 GameClient::GameClient() {
+    logging::Scope logScope(logging::Channel::Client);
+
     auto channel = std::make_unique<KcpChannel>(ioContext_, DEFAULT_CLIENT_PORT, DEFAULT_CONV);
     const auto serverEndpoint = IPacketChannel::Endpoint(
         asio::ip::make_address("127.0.0.1"),
@@ -26,6 +27,8 @@ void GameClient::registerSystem(std::unique_ptr<ClientSystem> system) {
 }
 
 void GameClient::update(float deltaTime) {
+    logging::Scope logScope(logging::Channel::Client);
+
     pumpNetwork();
     replaySnapshots();
 
@@ -46,7 +49,7 @@ void GameClient::pumpNetwork() {
         if (deserializeSnapshot(packet, snapshot)) {
             snapshotBuffer_.push_back(std::move(snapshot));
         } else {
-            spdlog::warn("Client ignored unknown packet");
+            logging::warn("Ignored unknown packet");
         }
     }
 }

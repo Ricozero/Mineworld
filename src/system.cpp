@@ -1,12 +1,11 @@
 #include "system.h"
 
-#include <spdlog/spdlog.h>
-
 #include <chrono>
 #include <thread>
 
 #include "client_world.h"
 #include "entity.h"
+#include "log.h"
 #include "server_world.h"
 
 void InputSystem::update(ClientWorld& world, float deltaTime) {
@@ -62,7 +61,7 @@ void RenderSystem::update(ClientWorld& world, float deltaTime) {
     totalTime += deltaTime;
     std::this_thread::sleep_for(std::chrono::milliseconds((int)(deltaTime * 1000)));
     if (oldTime == int(totalTime)) return;
-    spdlog::info("Rendering world at time {:.2f}s", totalTime);
+    logging::info("Rendering world at time {:.2f}s", totalTime);
 
     auto& registry = world.getActorWorld().registry();
     auto playerView = registry.view<PlayerComponent, TransformComponent, NameComponent>();
@@ -70,7 +69,7 @@ void RenderSystem::update(ClientWorld& world, float deltaTime) {
         auto& player = registry.get<PlayerComponent>(entity);
         auto& transform = registry.get<TransformComponent>(entity);
         auto& name = registry.get<NameComponent>(entity);
-        spdlog::info("Player {} at ({:.2f}, {:.2f}, {:.2f})", name.name, transform.position.x, transform.position.y, transform.position.z);
+        logging::info("Player {} at ({:.2f}, {:.2f}, {:.2f})", name.name, transform.position.x, transform.position.y, transform.position.z);
     }
 }
 
