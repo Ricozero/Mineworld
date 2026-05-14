@@ -5,7 +5,7 @@
 #include "net_kcp.h"
 #include "system.h"
 
-GameClient::GameClient() {
+GameClient::GameClient(RenderContext* renderContext) : renderContext_(renderContext) {
     logging::Scope logScope(logging::Channel::Client);
 
     auto channel = std::make_unique<KcpChannel>(ioContext_, DEFAULT_CLIENT_PORT, DEFAULT_CONV);
@@ -16,8 +16,8 @@ GameClient::GameClient() {
     channel->sendReliable(serializeClientHello());
     channel_ = std::move(channel);
 
-    registerSystem(std::make_unique<InputSystem>());
-    registerSystem(std::make_unique<RenderSystem>());
+    registerSystem(std::make_unique<InputSystem>(renderContext_));
+    registerSystem(std::make_unique<RenderSystem>(renderContext_));
 }
 
 GameClient::~GameClient() = default;

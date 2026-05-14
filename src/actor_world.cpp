@@ -97,7 +97,7 @@ glm::ivec3 ActorWorld::positionToChunk(const glm::vec3& position) {
         static_cast<int>(std::floor(position.y)),
         static_cast<int>(std::floor(position.z)),
     };
-    return worldPos / Chunk::SIZE;
+    return Chunk::worldToChunk(worldPos);
 }
 
 void ActorWorld::addEntityToChunk(entt::entity entity, glm::ivec3 chunkPos) {

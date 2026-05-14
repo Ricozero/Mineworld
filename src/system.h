@@ -7,6 +7,7 @@
 #include "block.h"
 
 class ClientWorld;
+class RenderContext;
 class ServerWorld;
 
 class ClientSystem {
@@ -23,10 +24,12 @@ public:
 
 class InputSystem : public ClientSystem {
 public:
+    explicit InputSystem(RenderContext* renderContext = nullptr);
     void update(ClientWorld& world, float deltaTime) override;
 
 private:
     void updatePlayerInput(entt::registry& registry, float deltaTime);
+    RenderContext* renderContext_ = nullptr;
 };
 
 class PhysicsSystem : public ServerSystem {
@@ -40,9 +43,11 @@ private:
 
 class RenderSystem : public ClientSystem {
 public:
+    explicit RenderSystem(RenderContext* renderContext = nullptr);
     void update(ClientWorld& world, float deltaTime) override;
 
 private:
     void renderBlock(const glm::ivec3& pos, BlockType type);
     void renderEntity(const std::string& name, const glm::vec3& position, const glm::vec3& color);
+    RenderContext* renderContext_ = nullptr;
 };

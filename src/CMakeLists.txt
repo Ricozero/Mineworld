@@ -2,6 +2,30 @@ file(GLOB_RECURSE APPLICATION_SOURCE *.cpp)
 
 add_executable(mineworld ${APPLICATION_SOURCE})
 
+# 编译着色器
+set(MINEWORLD_SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+set(MINEWORLD_SHADER_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/bin/shaders)
+set(MINEWORLD_VARYING_DEF ${MINEWORLD_SHADER_SOURCE_DIR}/varying.def.sc)
+
+bgfx_compile_shaders(
+    TYPE VERTEX
+    SHADERS ${MINEWORLD_SHADER_SOURCE_DIR}/vs_color.sc
+    VARYING_DEF ${MINEWORLD_VARYING_DEF}
+    OUTPUT_DIR ${MINEWORLD_SHADER_OUTPUT_DIR}
+    OUT_FILES_VAR MINEWORLD_VERTEX_SHADERS
+)
+
+bgfx_compile_shaders(
+    TYPE FRAGMENT
+    SHADERS ${MINEWORLD_SHADER_SOURCE_DIR}/fs_color.sc
+    VARYING_DEF ${MINEWORLD_VARYING_DEF}
+    OUTPUT_DIR ${MINEWORLD_SHADER_OUTPUT_DIR}
+    OUT_FILES_VAR MINEWORLD_FRAGMENT_SHADERS
+)
+
+add_custom_target(mineworld_shaders DEPENDS ${MINEWORLD_VERTEX_SHADERS} ${MINEWORLD_FRAGMENT_SHADERS})
+add_dependencies(mineworld mineworld_shaders)
+
 # 协议生成
 set(MINEWORLD_FBS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/net_protocol.fbs)
 set(MINEWORLD_FBS_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -36,21 +60,27 @@ target_link_libraries(mineworld PRIVATE
     asio::asio
     kcp::kcp
     flatbuffers::flatbuffers
+    glfw
+    bgfx::bgfx
 )
 
 target_compile_definitions(mineworld PRIVATE
     GLM_ENABLE_EXPERIMENTAL
+    GLFW_EXPOSE_NATIVE_WIN32
 )
 
 if(WIN32)
     target_compile_definitions(mineworld PRIVATE
         _WIN32_WINNT=0x0A00
         WIN32_LEAN_AND_MEAN
+        NOMINMAX
     )
 endif()
 
 if(MSVC)
     target_compile_options(mineworld PRIVATE
         /utf-8
+        /Zc:__cplusplus
+        /Zc:preprocessor
     )
 endif()

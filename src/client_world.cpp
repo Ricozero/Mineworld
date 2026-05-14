@@ -17,7 +17,7 @@ bool ClientWorld::unloadChunk(glm::ivec3 chunkPos) {
 }
 
 void ClientWorld::applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData) {
-    const glm::ivec3 chunkPos = worldPos / Chunk::SIZE;
+    const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
     if (!voxelWorld_.isChunkLoaded(chunkPos)) {
         voxelWorld_.loadChunk(chunkPos);
     }

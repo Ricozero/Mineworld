@@ -1,14 +1,17 @@
 #include "system.h"
 
-#include <chrono>
-#include <thread>
-
 #include "client_world.h"
 #include "entity.h"
-#include "log.h"
+#include "render_context.h"
 #include "server_world.h"
 
+InputSystem::InputSystem(RenderContext* renderContext) : renderContext_(renderContext) {
+}
+
 void InputSystem::update(ClientWorld& world, float deltaTime) {
+    if (renderContext_) {
+        renderContext_->updateCamera(deltaTime);
+    }
     updatePlayerInput(world.getActorWorld().registry(), deltaTime);
 }
 
@@ -55,21 +58,13 @@ void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
     }
 }
 
-void RenderSystem::update(ClientWorld& world, float deltaTime) {
-    static float totalTime = 0.0f;
-    int oldTime = (int)totalTime;
-    totalTime += deltaTime;
-    std::this_thread::sleep_for(std::chrono::milliseconds((int)(deltaTime * 1000)));
-    if (oldTime == int(totalTime)) return;
-    logging::info("Rendering world at time {:.2f}s", totalTime);
+RenderSystem::RenderSystem(RenderContext* renderContext) : renderContext_(renderContext) {
+}
 
-    auto& registry = world.getActorWorld().registry();
-    auto playerView = registry.view<PlayerComponent, TransformComponent, NameComponent>();
-    for (auto entity : playerView) {
-        auto& player = registry.get<PlayerComponent>(entity);
-        auto& transform = registry.get<TransformComponent>(entity);
-        auto& name = registry.get<NameComponent>(entity);
-        logging::info("Player {} at ({:.2f}, {:.2f}, {:.2f})", name.name, transform.position.x, transform.position.y, transform.position.z);
+void RenderSystem::update(ClientWorld& world, float deltaTime) {
+    if (renderContext_) {
+        renderContext_->render(world);
+        return;
     }
 }
 

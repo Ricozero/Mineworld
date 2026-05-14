@@ -44,7 +44,7 @@ bool VoxelWorld::unloadChunk(glm::ivec3 chunkPos) {
 
 BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
-    auto it = chunks_.find(worldPos / Chunk::SIZE);
+    auto it = chunks_.find(Chunk::worldToChunk(worldPos));
     if (it == chunks_.end()) {
         logging::error("Attempted to get block at {}", glm::to_string(worldPos));
         return BlockData{BlockType::Air, BlockOrientation::North};
@@ -54,7 +54,7 @@ BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
 
 BlockData VoxelWorld::getBlockOrAir(glm::ivec3 worldPos) const {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
-    auto it = chunks_.find(worldPos / Chunk::SIZE);
+    auto it = chunks_.find(Chunk::worldToChunk(worldPos));
     if (it == chunks_.end()) {
         return BlockData{BlockType::Air, BlockOrientation::North};
     }
@@ -63,12 +63,12 @@ BlockData VoxelWorld::getBlockOrAir(glm::ivec3 worldPos) const {
 
 void VoxelWorld::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
-    auto& chunk = getChunk(worldPos / Chunk::SIZE);
+    auto& chunk = getChunk(Chunk::worldToChunk(worldPos));
     chunk.setBlock(localPos, blockData);
 }
 
 bool VoxelWorld::setBlockIfChunkLoaded(glm::ivec3 worldPos, BlockData blockData) {
-    glm::ivec3 chunkPos = worldPos / Chunk::SIZE;
+    glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
     auto it = chunks_.find(chunkPos);
     if (it == chunks_.end()) {
         return false;

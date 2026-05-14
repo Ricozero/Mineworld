@@ -18,8 +18,16 @@ bool Chunk::isValidLocalPosition(glm::ivec3 pos) {
     return pos.x >= 0 && pos.x < SIZE && pos.y >= 0 && pos.y < SIZE && pos.z >= 0 && pos.z < SIZE;
 }
 
+glm::ivec3 Chunk::worldToChunk(glm::ivec3 worldPos) {
+    auto floorDiv = [](int value) {
+        return value >= 0 ? value / SIZE : (value - SIZE + 1) / SIZE;
+    };
+    return glm::ivec3(floorDiv(worldPos.x), floorDiv(worldPos.y), floorDiv(worldPos.z));
+}
+
 glm::ivec3 Chunk::worldToLocal(glm::ivec3 worldPos) {
-    return worldPos - worldPos / SIZE * SIZE;
+    const glm::ivec3 chunkPos = worldToChunk(worldPos);
+    return worldPos - chunkPos * SIZE;
 }
 
 glm::ivec3 Chunk::localToWorld(glm::ivec3 localPos) const {

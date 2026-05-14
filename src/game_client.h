@@ -11,10 +11,11 @@
 #include "client_world.h"
 
 class ClientSystem;
+class RenderContext;
 
 class GameClient {
 public:
-    GameClient();
+    explicit GameClient(RenderContext* renderContext = nullptr);
     ~GameClient();
 
     ClientWorld& world() { return world_; }
@@ -39,4 +40,5 @@ private:
     std::unique_ptr<IPacketChannel> channel_;
     std::deque<NetSnapshot> snapshotBuffer_;
     uint32_t lastAppliedSnapshot_ = 0;
+    RenderContext* renderContext_ = nullptr;
 };

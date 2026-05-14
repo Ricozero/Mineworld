@@ -12,6 +12,7 @@ public:
     ~Chunk() = default;
 
     static bool isValidLocalPosition(glm::ivec3 pos);
+    static glm::ivec3 worldToChunk(glm::ivec3 worldPos);
     static glm::ivec3 worldToLocal(glm::ivec3 worldPos);
     glm::ivec3 localToWorld(glm::ivec3 localPos) const;
 
