@@ -3,14 +3,16 @@
 #include <string_view>
 #include <thread>
 
-#include "block.h"
 #include "entity.h"
 #include "game_client.h"
 #include "game_server.h"
 #include "log.h"
+#include "profiler.h"
 #include "render_context.h"
 
 namespace {
+
+constexpr const char* kSpectatorName = "Spectator";
 
 enum class RunMode {
     Combined,
@@ -38,36 +40,124 @@ RunMode parseRunMode(int argc, char* argv[]) {
     return RunMode::Combined;
 }
 
-void seedServerWorld(GameServer& server) {
-    logging::Scope logScope(logging::Channel::Server);
-    server.loadChunk(glm::ivec3(0, 0, 0));
-
-    for (int x = 0; x < 16; ++x) {
-        for (int z = 0; z < 16; ++z) {
-            server.setBlock(glm::ivec3(x, 0, z), BlockData{BlockType::Grass, BlockOrientation::Up});
-            if ((x + z) % 5 == 0) {
-                server.setBlock(glm::ivec3(x, 1, z), BlockData{BlockType::Dirt, BlockOrientation::North});
-            }
-        }
-    }
-
-    for (int y = 1; y < 5; ++y) {
-        server.setBlock(glm::ivec3(3, y, 3), BlockData{BlockType::Wood, BlockOrientation::Up});
-    }
-    server.setBlock(glm::ivec3(2, 5, 3), BlockData{BlockType::Leaves, BlockOrientation::North});
-    server.setBlock(glm::ivec3(3, 5, 3), BlockData{BlockType::Leaves, BlockOrientation::North});
-    server.setBlock(glm::ivec3(4, 5, 3), BlockData{BlockType::Leaves, BlockOrientation::North});
-    server.setBlock(glm::ivec3(3, 5, 2), BlockData{BlockType::Leaves, BlockOrientation::North});
-    server.setBlock(glm::ivec3(3, 5, 4), BlockData{BlockType::Leaves, BlockOrientation::North});
-    server.setBlock(glm::ivec3(10, 1, 10), BlockData{BlockType::Stone, BlockOrientation::North});
-    server.setBlock(glm::ivec3(11, 1, 10), BlockData{BlockType::Stone, BlockOrientation::North});
-    server.setBlock(glm::ivec3(10, 2, 10), BlockData{BlockType::Stone, BlockOrientation::North});
-
-    auto steve = server.world().createPlayer("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
-    auto alex = server.world().createPlayer("Alex", glm::vec3(12.0f, 1.0f, 12.0f));
-    auto& registry = server.world().getActorWorld().registry();
+std::unique_ptr<GameServer> createServer() {
+    auto server = std::make_unique<GameServer>();
+    auto steve = server->createPlayer("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
+    auto alex = server->createPlayer("Alex", glm::vec3(12.0f, 1.0f, 12.0f));
+    auto spectator = server->createSpectator(kSpectatorName, glm::vec3(8.0f, 6.0f, 24.0f));
+    auto& registry = server->world().getActorWorld().registry();
     registry.get<PhysicsComponent>(steve).useGravity = false;
     registry.get<PhysicsComponent>(alex).useGravity = false;
+    registry.get<PhysicsComponent>(spectator).useGravity = false;
+    return server;
+}
+
+bool initializeClient(std::unique_ptr<RenderContext>& renderContext,
+                      std::unique_ptr<GameClient>& client) {
+    renderContext = std::make_unique<RenderContext>();
+    if (!renderContext->initialize(1280, 720, "Mineworld")) {
+        return false;
+    }
+    client = std::make_unique<GameClient>(renderContext.get(), kSpectatorName);
+    return true;
+}
+
+void syncCameraToServer(GameServer& server, RenderContext& renderContext) {
+    // Directly update the server's spectator entity position from camera
+    glm::vec3 camPos = renderContext.getCameraPosition();
+    auto& registry = server.world().getActorWorld().registry();
+    auto view = registry.view<SpectatorComponent, TransformComponent>();
+    for (auto entity : view) {
+        auto& transform = registry.get<TransformComponent>(entity);
+        transform.position = camPos;
+        server.world().getActorWorld().updateEntityChunk(entity, camPos);
+    }
+}
+
+void updateServer(GameServer& server, float deltaTime) {
+    profiling::ScopedTimer timer("App.ServerUpdate");
+    server.update(deltaTime);
+}
+
+void updateClient(GameClient& client, float deltaTime) {
+    profiling::ScopedTimer timer("App.ClientUpdate");
+    client.update(deltaTime);
+}
+
+int runServerOnly() {
+    std::unique_ptr<GameServer> server = createServer();
+    auto previousTime = std::chrono::steady_clock::now();
+
+    logging::info("Dedicated server started");
+    for (;;) {
+        profiling::ScopedTimer frameTimer("Frame.Total");
+
+        const auto currentTime = std::chrono::steady_clock::now();
+        const std::chrono::duration<float> elapsed = currentTime - previousTime;
+        previousTime = currentTime;
+        updateServer(*server, elapsed.count());
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+}
+
+int runClientOnly() {
+    std::unique_ptr<GameClient> client;
+    std::unique_ptr<RenderContext> renderContext;
+    if (!initializeClient(renderContext, client)) {
+        return 1;
+    }
+
+    auto previousTime = std::chrono::steady_clock::now();
+    while (!renderContext->shouldClose()) {
+        profiling::ScopedTimer frameTimer("Frame.Total");
+
+        const auto currentTime = std::chrono::steady_clock::now();
+        const std::chrono::duration<float> elapsed = currentTime - previousTime;
+        previousTime = currentTime;
+        const float deltaTime = elapsed.count();
+
+        {
+            profiling::ScopedTimer timer("App.PollEvents");
+            renderContext->pollEvents();
+        }
+        updateClient(*client, deltaTime);
+    }
+
+    logging::info("Client stopped");
+    return 0;
+}
+
+int runCombined() {
+    std::unique_ptr<GameServer> server = createServer();
+    std::unique_ptr<GameClient> client;
+    std::unique_ptr<RenderContext> renderContext;
+    if (!initializeClient(renderContext, client)) {
+        return 1;
+    }
+
+    auto previousTime = std::chrono::steady_clock::now();
+    while (!renderContext->shouldClose()) {
+        profiling::ScopedTimer frameTimer("Frame.Total");
+
+        const auto currentTime = std::chrono::steady_clock::now();
+        const std::chrono::duration<float> elapsed = currentTime - previousTime;
+        previousTime = currentTime;
+        const float deltaTime = elapsed.count();
+
+        {
+            profiling::ScopedTimer timer("App.PollEvents");
+            renderContext->pollEvents();
+        }
+
+        syncCameraToServer(*server, *renderContext);
+
+        updateServer(*server, deltaTime);
+        updateClient(*client, deltaTime);
+    }
+
+    logging::info("Combined mode stopped");
+    return 0;
 }
 
 }  // namespace
@@ -77,53 +167,14 @@ int main(int argc, char* argv[]) {
 
     const RunMode runMode = parseRunMode(argc, argv);
 
-    std::unique_ptr<GameServer> server;
-    std::unique_ptr<GameClient> client;
-    std::unique_ptr<RenderContext> renderContext;
-
-    if (runMode == RunMode::Combined || runMode == RunMode::ServerOnly) {
-        server = std::make_unique<GameServer>();
-        seedServerWorld(*server);
+    switch (runMode) {
+        case RunMode::ClientOnly:
+            return runClientOnly();
+        case RunMode::ServerOnly:
+            return runServerOnly();
+        case RunMode::Combined:
+            return runCombined();
     }
 
-    if (runMode == RunMode::Combined || runMode == RunMode::ClientOnly) {
-        renderContext = std::make_unique<RenderContext>();
-        if (!renderContext->initialize(1280, 720, "Mineworld")) {
-            return 1;
-        }
-        client = std::make_unique<GameClient>(renderContext.get());
-    }
-
-    if (!renderContext) {
-        int fps = 60;
-        float deltaTime = 1.0f / fps;
-        int runSeconds = 3;
-        for (int frame = 0; frame < fps * runSeconds; ++frame) {
-            if (server) {
-                server->update(deltaTime);
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
-        }
-        logging::info("Simulation completed");
-        return 0;
-    }
-
-    auto previousTime = std::chrono::steady_clock::now();
-    while (!renderContext->shouldClose()) {
-        const auto currentTime = std::chrono::steady_clock::now();
-        const std::chrono::duration<float> elapsed = currentTime - previousTime;
-        previousTime = currentTime;
-        const float deltaTime = elapsed.count();
-
-        renderContext->pollEvents();
-        if (server) {
-            server->update(deltaTime);
-        }
-        if (client) {
-            client->update(deltaTime);
-        }
-    }
-
-    logging::info("Simulation completed");
     return 0;
 }

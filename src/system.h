@@ -24,12 +24,13 @@ public:
 
 class InputSystem : public ClientSystem {
 public:
-    explicit InputSystem(RenderContext* renderContext = nullptr);
+    explicit InputSystem(RenderContext* renderContext = nullptr, const std::string& spectatorName = "");
     void update(ClientWorld& world, float deltaTime) override;
 
 private:
     void updatePlayerInput(entt::registry& registry, float deltaTime);
     RenderContext* renderContext_ = nullptr;
+    std::string spectatorName_;
 };
 
 class PhysicsSystem : public ServerSystem {

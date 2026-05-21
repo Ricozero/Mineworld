@@ -81,7 +81,11 @@ void KcpChannel::pump() {
     ikcp_update(kcp_, nowMs());
 
     for (;;) {
-        std::vector<uint8_t> packet(8192);
+        const int packetSize = ikcp_peeksize(kcp_);
+        if (packetSize < 0) {
+            break;
+        }
+        std::vector<uint8_t> packet(static_cast<size_t>(packetSize));
         const int received = ikcp_recv(kcp_, reinterpret_cast<char*>(packet.data()), static_cast<int>(packet.size()));
         if (received < 0) {
             break;

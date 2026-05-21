@@ -9,7 +9,9 @@ set(MINEWORLD_VARYING_DEF ${MINEWORLD_SHADER_SOURCE_DIR}/varying.def.sc)
 
 bgfx_compile_shaders(
     TYPE VERTEX
-    SHADERS ${MINEWORLD_SHADER_SOURCE_DIR}/vs_color.sc
+    SHADERS
+        ${MINEWORLD_SHADER_SOURCE_DIR}/vs_color.sc
+        ${MINEWORLD_SHADER_SOURCE_DIR}/vs_imgui.sc
     VARYING_DEF ${MINEWORLD_VARYING_DEF}
     OUTPUT_DIR ${MINEWORLD_SHADER_OUTPUT_DIR}
     OUT_FILES_VAR MINEWORLD_VERTEX_SHADERS
@@ -17,7 +19,9 @@ bgfx_compile_shaders(
 
 bgfx_compile_shaders(
     TYPE FRAGMENT
-    SHADERS ${MINEWORLD_SHADER_SOURCE_DIR}/fs_color.sc
+    SHADERS
+        ${MINEWORLD_SHADER_SOURCE_DIR}/fs_color.sc
+        ${MINEWORLD_SHADER_SOURCE_DIR}/fs_imgui.sc
     VARYING_DEF ${MINEWORLD_VARYING_DEF}
     OUTPUT_DIR ${MINEWORLD_SHADER_OUTPUT_DIR}
     OUT_FILES_VAR MINEWORLD_FRAGMENT_SHADERS
@@ -62,6 +66,7 @@ target_link_libraries(mineworld PRIVATE
     flatbuffers::flatbuffers
     glfw
     bgfx::bgfx
+    imgui::imgui
 )
 
 target_compile_definitions(mineworld PRIVATE

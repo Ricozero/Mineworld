@@ -19,5 +19,6 @@ find_package(kcp CONFIG REQUIRED)
 find_package(flatbuffers CONFIG REQUIRED)
 find_package(glfw3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
+find_package(imgui CONFIG REQUIRED)
 
 add_subdirectory(src)

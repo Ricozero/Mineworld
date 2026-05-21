@@ -1,11 +1,12 @@
 #include "net_protocol.h"
 
-#include <cstring>
-
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/verifier.h>
 
+#include <cstring>
+
 #include "net_protocol_generated.h"
+
 
 namespace {
 
@@ -15,7 +16,6 @@ constexpr size_t kMaxBlocks = 65536;
 
 flatbuffers::DetachedBuffer finish(flatbuffers::FlatBufferBuilder& builder,
                                    flatbuffers::Offset<mineworld::net::NetMessage> message) {
-    // Generated helper includes the file identifier from the schema.
     mineworld::net::FinishNetMessageBuffer(builder, message);
     return builder.Release();
 }

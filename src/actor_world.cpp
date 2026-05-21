@@ -18,9 +18,26 @@ entt::entity ActorWorld::createPlayer(const std::string& name, glm::vec3 positio
     registry_.emplace<PhysicsComponent>(entity);
     registry_.emplace<BoxColliderComponent>(entity);
     registry_.emplace<PlayerComponent>(entity);
+    registry_.emplace<RandomMovementComponent>(entity);
     nameToEntityMap_[name] = entity;
     updateEntityChunk(entity, position);
     logging::info("Player '{}' created at ({}, {}, {})", name, position.x, position.y, position.z);
+    return entity;
+}
+
+entt::entity ActorWorld::createSpectator(const std::string& name, glm::vec3 position) {
+    if (getEntityByName(name) != entt::null) {
+        logging::error("Spectator '{}' already exists", name);
+        return entt::null;
+    }
+    auto entity = registry_.create();
+    registry_.emplace<NameComponent>(entity, name);
+    registry_.emplace<TransformComponent>(entity, position);
+    registry_.emplace<PhysicsComponent>(entity);
+    registry_.emplace<SpectatorComponent>(entity);
+    nameToEntityMap_[name] = entity;
+    updateEntityChunk(entity, position);
+    logging::info("Spectator '{}' created at ({}, {}, {})", name, position.x, position.y, position.z);
     return entity;
 }
 
@@ -86,6 +103,10 @@ bool ActorWorld::unloadEntitiesInChunk(glm::ivec3 chunkPos) {
 
     auto entities = it->second;
     for (auto entity : entities) {
+        // Don't destroy spectators when their chunk unloads
+        if (registry_.all_of<SpectatorComponent>(entity)) {
+            continue;
+        }
         destroyEntity(entity);
     }
     return true;

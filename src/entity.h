@@ -33,6 +33,16 @@ struct PlayerComponent {
     float jumpForce = 1.2f;
 };
 
+struct RandomMovementComponent {
+    float changeDirectionTimer = 0.0f;
+    float changeDirectionInterval = 2.0f;
+    glm::vec3 targetDirection{0.0f};
+};
+
+struct SpectatorComponent {
+    // Marker component for spectator camera entities
+};
+
 struct MeshComponent {
     glm::vec4 color{1.0f};
     bool isVisible = true;

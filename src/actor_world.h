@@ -13,6 +13,7 @@ public:
     const entt::registry& registry() const { return registry_; }
 
     entt::entity createPlayer(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createSpectator(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
     void destroyEntity(entt::entity entity);
     entt::entity getEntityByName(const std::string& name) const;
 

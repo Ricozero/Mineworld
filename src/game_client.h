@@ -4,22 +4,25 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <string>
 #include <vector>
 
+#include "client_world.h"
 #include "net_channel.h"
 #include "net_protocol.h"
-#include "client_world.h"
 
 class ClientSystem;
 class RenderContext;
 
 class GameClient {
 public:
-    explicit GameClient(RenderContext* renderContext = nullptr);
+    explicit GameClient(RenderContext* renderContext = nullptr, const std::string& spectatorName = "");
     ~GameClient();
 
     ClientWorld& world() { return world_; }
     const ClientWorld& world() const { return world_; }
+
+    const std::string& spectatorName() const { return spectatorName_; }
 
     void registerSystem(std::unique_ptr<ClientSystem> system);
     void update(float deltaTime);
@@ -35,6 +38,7 @@ private:
 
     ClientWorld world_;
     std::vector<std::unique_ptr<ClientSystem>> systems_;
+    std::string spectatorName_;
 
     asio::io_context ioContext_;
     std::unique_ptr<IPacketChannel> channel_;

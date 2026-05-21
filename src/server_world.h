@@ -25,14 +25,20 @@ public:
 
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
+    bool isChunkInBounds(glm::ivec3 chunkPos) const;
 
     std::vector<glm::ivec3> getLoadedChunks() const;
 
     entt::entity createPlayer(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createSpectator(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
     void destroyEntity(entt::entity entity);
     entt::entity getEntityByName(const std::string& name) const;
 
 private:
+    void generateChunk(Chunk& chunk) const;
+    BlockData generateBlock(glm::ivec3 worldPos) const;
+    bool isBlockInBounds(glm::ivec3 worldPos) const;
+
     VoxelWorld voxelWorld_;
     ActorWorld actorWorld_;
 };

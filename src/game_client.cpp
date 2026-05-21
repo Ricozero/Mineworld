@@ -3,9 +3,11 @@
 #include "entity.h"
 #include "log.h"
 #include "net_kcp.h"
+#include "profiler.h"
 #include "system.h"
 
-GameClient::GameClient(RenderContext* renderContext) : renderContext_(renderContext) {
+GameClient::GameClient(RenderContext* renderContext, const std::string& spectatorName)
+    : spectatorName_(spectatorName), renderContext_(renderContext) {
     logging::Scope logScope(logging::Channel::Client);
 
     auto channel = std::make_unique<KcpChannel>(ioContext_, DEFAULT_CLIENT_PORT, DEFAULT_CONV);
@@ -16,7 +18,7 @@ GameClient::GameClient(RenderContext* renderContext) : renderContext_(renderCont
     channel->sendReliable(serializeClientHello());
     channel_ = std::move(channel);
 
-    registerSystem(std::make_unique<InputSystem>(renderContext_));
+    registerSystem(std::make_unique<InputSystem>(renderContext_, spectatorName_));
     registerSystem(std::make_unique<RenderSystem>(renderContext_));
 }
 
@@ -28,12 +30,22 @@ void GameClient::registerSystem(std::unique_ptr<ClientSystem> system) {
 
 void GameClient::update(float deltaTime) {
     logging::Scope logScope(logging::Channel::Client);
+    profiling::ScopedTimer timer("Client.Update");
 
-    pumpNetwork();
-    replaySnapshots();
+    {
+        profiling::ScopedTimer stepTimer("Client.PumpNetwork");
+        pumpNetwork();
+    }
+    {
+        profiling::ScopedTimer stepTimer("Client.ReplaySnapshots");
+        replaySnapshots();
+    }
 
-    for (auto& system : systems_) {
-        system->update(world_, deltaTime);
+    {
+        profiling::ScopedTimer stepTimer("Client.Systems");
+        for (auto& system : systems_) {
+            system->update(world_, deltaTime);
+        }
     }
 }
 
@@ -70,6 +82,8 @@ void GameClient::replaySnapshots() {
 }
 
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
+    profiling::ScopedTimer timer("Client.ApplySnapshot");
+
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
             world_.loadChunk(chunk.chunkPos);
@@ -86,9 +100,18 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     for (const auto& actor : snapshot.actors) {
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {
-            entity = world_.createPlayer(actor.name, actor.position);
+            if (actor.name == spectatorName_) {
+                entity = world_.createSpectator(actor.name, actor.position);
+            } else {
+                entity = world_.createPlayer(actor.name, actor.position);
+            }
         }
         if (entity == entt::null) {
+            continue;
+        }
+        // Don't overwrite spectator position from server snapshot -
+        // the client controls it directly via camera
+        if (registry.all_of<SpectatorComponent>(entity)) {
             continue;
         }
         auto& transform = registry.get<TransformComponent>(entity);

@@ -28,6 +28,10 @@ entt::entity ClientWorld::createPlayer(const std::string& name, glm::vec3 positi
     return actorWorld_.createPlayer(name, position);
 }
 
+entt::entity ClientWorld::createSpectator(const std::string& name, glm::vec3 position) {
+    return actorWorld_.createSpectator(name, position);
+}
+
 void ClientWorld::destroyEntity(entt::entity entity) {
     actorWorld_.destroyEntity(entity);
 }

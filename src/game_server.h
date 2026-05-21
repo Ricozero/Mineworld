@@ -2,6 +2,7 @@
 
 #include <asio.hpp>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -22,12 +23,17 @@ public:
     void registerSystem(std::unique_ptr<ServerSystem> system);
     void update(float deltaTime);
 
+    entt::entity createPlayer(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createSpectator(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
 
 private:
     NetSnapshot buildSnapshot(bool forceFullChunkState);
+    void updateVisibleChunks();
+    void queueChunkBlockSnapshot(glm::ivec3 chunkPos);
+    void queueLoadedBlockSnapshots();
     void pumpNetwork();
     void onClientPacket(const std::vector<uint8_t>& packet);
 
@@ -43,5 +49,5 @@ private:
     float snapshotTimer_ = 0.0f;
     bool initialSnapshotSent_ = false;
     std::vector<NetChunkState> pendingChunkUpdates_;
-    std::vector<NetBlockState> pendingBlockUpdates_;
+    std::deque<NetBlockState> pendingBlockUpdates_;
 };
