@@ -19,7 +19,7 @@ void Profiler::record(std::string_view name, double elapsedMs) {
         it = entries_.end() - 1;
     } else {
         it->lastMs = elapsedMs;
-        it->averageMs = it->averageMs * 0.9 + elapsedMs * 0.1;
+        it->averageMs = it->averageMs * 0.95 + elapsedMs * 0.05;
     }
 
     if (name == "Frame.Total") {

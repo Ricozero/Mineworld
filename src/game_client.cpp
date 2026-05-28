@@ -4,18 +4,26 @@
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
+#include "render_context.h"
 #include "system.h"
+
+namespace {
+
+constexpr uint16_t kDefaultServerPort = 40000;
+constexpr const char* kDefaultServerAddress = "127.0.0.1";
+
+}  // namespace
 
 GameClient::GameClient(RenderContext* renderContext, const std::string& spectatorName)
     : spectatorName_(spectatorName), renderContext_(renderContext) {
     logging::Scope logScope(logging::Channel::Client);
 
-    auto channel = std::make_unique<KcpChannel>(ioContext_, DEFAULT_CLIENT_PORT, DEFAULT_CONV);
+    auto channel = std::make_unique<KcpChannel>(ioContext_, 0);
     const auto serverEndpoint = IPacketChannel::Endpoint(
-        asio::ip::make_address("127.0.0.1"),
-        DEFAULT_SERVER_PORT);
+        asio::ip::make_address(kDefaultServerAddress),
+        kDefaultServerPort);
     channel->setRemote(serverEndpoint);
-    channel->sendReliable(serializeClientHello());
+    channel->startHandshake();
     channel_ = std::move(channel);
 
     registerSystem(std::make_unique<InputSystem>(renderContext_, spectatorName_));
@@ -32,20 +40,10 @@ void GameClient::update(float deltaTime) {
     logging::Scope logScope(logging::Channel::Client);
     profiling::ScopedTimer timer("Client.Update");
 
-    {
-        profiling::ScopedTimer stepTimer("Client.PumpNetwork");
-        pumpNetwork();
-    }
-    {
-        profiling::ScopedTimer stepTimer("Client.ReplaySnapshots");
-        replaySnapshots();
-    }
-
-    {
-        profiling::ScopedTimer stepTimer("Client.Systems");
-        for (auto& system : systems_) {
-            system->update(world_, deltaTime);
-        }
+    pumpNetwork();
+    replaySnapshots();
+    for (auto& system : systems_) {
+        system->update(world_, deltaTime);
     }
 }
 
@@ -54,6 +52,13 @@ void GameClient::pumpNetwork() {
         return;
     }
     channel_->pump();
+
+    // Send ClientHello once handshake is complete
+    auto* kcpChannel = dynamic_cast<KcpChannel*>(channel_.get());
+    if (helloPending_ && kcpChannel && kcpChannel->isReady()) {
+        channel_->sendReliable(serializeClientHello());
+        helloPending_ = false;
+    }
 
     std::vector<uint8_t> packet;
     while (channel_->popPacket(packet)) {
@@ -66,6 +71,7 @@ void GameClient::pumpNetwork() {
     }
 }
 
+// ... replaySnapshots() and applySnapshot() unchanged ...
 void GameClient::replaySnapshots() {
     if (snapshotBuffer_.empty()) {
         return;
@@ -82,13 +88,17 @@ void GameClient::replaySnapshots() {
 }
 
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
-    profiling::ScopedTimer timer("Client.ApplySnapshot");
-
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
             world_.loadChunk(chunk.chunkPos);
+            if (renderContext_) {
+                renderContext_->invalidateChunkCache(chunk.chunkPos);
+            }
         } else {
             world_.unloadChunk(chunk.chunkPos);
+            if (renderContext_) {
+                renderContext_->invalidateChunkCache(chunk.chunkPos);
+            }
         }
     }
 

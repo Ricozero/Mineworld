@@ -1,24 +1,24 @@
 #include "log.h"
 
+#include <spdlog/sinks/stdout_color_sinks.h>
+
 #include <memory>
 #include <mutex>
-
-#include <spdlog/sinks/stdout_color_sinks.h>
 
 namespace logging {
 namespace {
 
-thread_local std::shared_ptr<spdlog::logger> currentLogger_;
+std::shared_ptr<spdlog::logger> currentLogger_;
 std::once_flag initFlag;
 
 const char* channelName(Channel channel) {
     switch (channel) {
-    case Channel::App:
-        return "App";
-    case Channel::Client:
-        return "Client";
-    case Channel::Server:
-        return "Server";
+        case Channel::App:
+            return "App";
+        case Channel::Client:
+            return "Client";
+        case Channel::Server:
+            return "Server";
     }
     return "App";
 }

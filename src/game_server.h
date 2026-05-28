@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "net_channel.h"
@@ -24,30 +25,37 @@ public:
     void update(float deltaTime);
 
     entt::entity createPlayer(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
-    entt::entity createSpectator(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position = glm::vec3(0.0f));
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
 
 private:
-    NetSnapshot buildSnapshot(bool forceFullChunkState);
-    void updateVisibleChunks();
-    void queueChunkBlockSnapshot(glm::ivec3 chunkPos);
-    void queueLoadedBlockSnapshots();
-    void pumpNetwork();
-    void onClientPacket(const std::vector<uint8_t>& packet);
+    struct Session {
+        uint32_t sessionId = 0;
+        uint32_t snapshotSequence = 0;
+        float snapshotTimer = 0.0f;
+        bool initialSnapshotSent = false;
+        std::vector<NetChunkState> pendingChunkUpdates;
+        std::deque<NetBlockState> pendingBlockUpdates;
+    };
 
-    static constexpr uint16_t DEFAULT_SERVER_PORT = 40000;
-    static constexpr uint32_t DEFAULT_CONV = 114514;
+    Session& getOrCreateSession(uint32_t sessionId);
+    NetSnapshot buildSnapshot(Session& session, bool forceFullChunkState);
+    void updateVisibleChunks();
+
+    void queueChunkBlockSnapshot(glm::ivec3 chunkPos, Session& session);
+    void queueLoadedBlockSnapshots(Session& session, const std::unordered_set<glm::ivec3>& visibleChunks = {});
+    void pumpNetwork();
+
+    void onSessionConnect(uint32_t sessionId);
+    void onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
 
     ServerWorld world_;
     std::vector<std::unique_ptr<ServerSystem>> systems_;
 
     asio::io_context ioContext_;
-    std::unique_ptr<IPacketChannel> channel_;
-    uint32_t snapshotSequence_ = 0;
-    float snapshotTimer_ = 0.0f;
-    bool initialSnapshotSent_ = false;
-    std::vector<NetChunkState> pendingChunkUpdates_;
-    std::deque<NetBlockState> pendingBlockUpdates_;
+
+    std::unique_ptr<IPacketServer> server_;
+    std::unordered_map<uint32_t, Session> sessions_;
 };

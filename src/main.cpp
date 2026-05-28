@@ -12,8 +12,6 @@
 
 namespace {
 
-constexpr const char* kSpectatorName = "Spectator";
-
 enum class RunMode {
     Combined,
     ClientOnly,
@@ -40,25 +38,22 @@ RunMode parseRunMode(int argc, char* argv[]) {
     return RunMode::Combined;
 }
 
-std::unique_ptr<GameServer> createServer() {
-    auto server = std::make_unique<GameServer>();
+bool initializeServer(std::unique_ptr<GameServer>& server) {
+    server = std::make_unique<GameServer>();
     auto steve = server->createPlayer("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
     auto alex = server->createPlayer("Alex", glm::vec3(12.0f, 1.0f, 12.0f));
-    auto spectator = server->createSpectator(kSpectatorName, glm::vec3(8.0f, 6.0f, 24.0f));
     auto& registry = server->world().getActorWorld().registry();
     registry.get<PhysicsComponent>(steve).useGravity = false;
     registry.get<PhysicsComponent>(alex).useGravity = false;
-    registry.get<PhysicsComponent>(spectator).useGravity = false;
-    return server;
+    return true;
 }
 
-bool initializeClient(std::unique_ptr<RenderContext>& renderContext,
-                      std::unique_ptr<GameClient>& client) {
+bool initializeClient(std::unique_ptr<GameClient>& client, std::unique_ptr<RenderContext>& renderContext) {
     renderContext = std::make_unique<RenderContext>();
     if (!renderContext->initialize(1280, 720, "Mineworld")) {
         return false;
     }
-    client = std::make_unique<GameClient>(renderContext.get(), kSpectatorName);
+    client = std::make_unique<GameClient>(renderContext.get(), "Spectator");
     return true;
 }
 
@@ -75,17 +70,18 @@ void syncCameraToServer(GameServer& server, RenderContext& renderContext) {
 }
 
 void updateServer(GameServer& server, float deltaTime) {
-    profiling::ScopedTimer timer("App.ServerUpdate");
     server.update(deltaTime);
 }
 
 void updateClient(GameClient& client, float deltaTime) {
-    profiling::ScopedTimer timer("App.ClientUpdate");
     client.update(deltaTime);
 }
 
 int runServerOnly() {
-    std::unique_ptr<GameServer> server = createServer();
+    std::unique_ptr<GameServer> server;
+    if (!initializeServer(server)) {
+        return 1;
+    }
     auto previousTime = std::chrono::steady_clock::now();
 
     logging::info("Dedicated server started");
@@ -104,7 +100,7 @@ int runServerOnly() {
 int runClientOnly() {
     std::unique_ptr<GameClient> client;
     std::unique_ptr<RenderContext> renderContext;
-    if (!initializeClient(renderContext, client)) {
+    if (!initializeClient(client, renderContext)) {
         return 1;
     }
 
@@ -117,10 +113,7 @@ int runClientOnly() {
         previousTime = currentTime;
         const float deltaTime = elapsed.count();
 
-        {
-            profiling::ScopedTimer timer("App.PollEvents");
-            renderContext->pollEvents();
-        }
+        renderContext->pollEvents();
         updateClient(*client, deltaTime);
     }
 
@@ -129,10 +122,14 @@ int runClientOnly() {
 }
 
 int runCombined() {
-    std::unique_ptr<GameServer> server = createServer();
+    std::unique_ptr<GameServer> server;
+    if (!initializeServer(server)) {
+        return 1;
+    }
+
     std::unique_ptr<GameClient> client;
     std::unique_ptr<RenderContext> renderContext;
-    if (!initializeClient(renderContext, client)) {
+    if (!initializeClient(client, renderContext)) {
         return 1;
     }
 
@@ -145,13 +142,8 @@ int runCombined() {
         previousTime = currentTime;
         const float deltaTime = elapsed.count();
 
-        {
-            profiling::ScopedTimer timer("App.PollEvents");
-            renderContext->pollEvents();
-        }
-
+        renderContext->pollEvents();
         syncCameraToServer(*server, *renderContext);
-
         updateServer(*server, deltaTime);
         updateClient(*client, deltaTime);
     }

@@ -5,7 +5,6 @@
 
 #include "client_world.h"
 #include "entity.h"
-#include "profiler.h"
 #include "render_context.h"
 #include "server_world.h"
 
@@ -15,7 +14,6 @@ InputSystem::InputSystem(RenderContext* renderContext, const std::string& specta
 
 void InputSystem::update(ClientWorld& world, float deltaTime) {
     if (renderContext_) {
-        profiling::ScopedTimer timer("Input.UpdateCamera");
         renderContext_->updateCamera(deltaTime);
 
         // Sync camera position to client spectator entity
@@ -42,8 +40,6 @@ void InputSystem::updatePlayerInput(entt::registry& registry, float deltaTime) {
 }
 
 void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
-    profiling::ScopedTimer timer("Physics.Update");
-
     auto& registry = world.getActorWorld().registry();
     applyGravity(registry, deltaTime);
     updateMovement(registry, deltaTime);

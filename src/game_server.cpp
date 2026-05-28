@@ -14,6 +14,8 @@
 
 namespace {
 
+constexpr uint16_t kDefaultServerPort = 40000;
+constexpr int kTicksPerSecond = 20;
 constexpr int kChunkViewRadius = 2;
 constexpr size_t kMaxBlocksPerSnapshot = 4096;
 
@@ -22,7 +24,15 @@ constexpr size_t kMaxBlocksPerSnapshot = 4096;
 GameServer::GameServer() {
     logging::Scope logScope(logging::Channel::Server);
 
-    channel_ = std::make_unique<KcpChannel>(ioContext_, DEFAULT_SERVER_PORT, DEFAULT_CONV);
+    auto kcpServer = std::make_unique<KcpServer>(ioContext_, kDefaultServerPort);
+    kcpServer->setOnConnect([this](uint32_t sessionId) {
+        onSessionConnect(sessionId);
+    });
+    kcpServer->setOnPacket([this](uint32_t sessionId, const std::vector<uint8_t>& packet) {
+        onSessionPacket(sessionId, packet);
+    });
+    server_ = std::move(kcpServer);
+
     registerSystem(std::make_unique<PhysicsSystem>());
 }
 
@@ -36,42 +46,27 @@ void GameServer::update(float deltaTime) {
     logging::Scope logScope(logging::Channel::Server);
     profiling::ScopedTimer timer("Server.Update");
 
-    {
-        profiling::ScopedTimer stepTimer("Server.PumpNetwork");
-        pumpNetwork();
+    pumpNetwork();
+    for (auto& system : systems_) {
+        system->update(world_, deltaTime);
     }
+    updateVisibleChunks();
 
-    {
-        profiling::ScopedTimer stepTimer("Server.Systems");
-        for (auto& system : systems_) {
-            system->update(world_, deltaTime);
+    constexpr float snapshotInterval = 1.0f / kTicksPerSecond;
+    for (auto& [sessionId, session] : sessions_) {
+        session.snapshotTimer += deltaTime;
+        if (session.snapshotTimer < snapshotInterval) {
+            continue;
         }
-    }
+        session.snapshotTimer -= snapshotInterval;
 
-    {
-        profiling::ScopedTimer stepTimer("Server.VisibleChunks");
-        updateVisibleChunks();
-    }
-
-    snapshotTimer_ += deltaTime;
-    constexpr float snapshotInterval = 1.0f / 20.0f;
-    if (channel_ && channel_->hasRemote() && snapshotTimer_ >= snapshotInterval) {
-        snapshotTimer_ -= snapshotInterval;
         NetSnapshot snapshot;
-        {
-            profiling::ScopedTimer stepTimer("Server.BuildSnapshot");
-            snapshot = buildSnapshot(!initialSnapshotSent_);
-        }
-        initialSnapshotSent_ = true;
+        snapshot = buildSnapshot(session, !session.initialSnapshotSent);
+        session.initialSnapshotSent = true;
+
         std::vector<uint8_t> payload;
-        {
-            profiling::ScopedTimer stepTimer("Server.SerializeSnapshot");
-            payload = serializeSnapshot(snapshot);
-        }
-        {
-            profiling::ScopedTimer stepTimer("Server.SendSnapshot");
-            channel_->sendReliable(payload);
-        }
+        payload = serializeSnapshot(snapshot);
+        server_->sendTo(sessionId, payload);
     }
 }
 
@@ -81,8 +76,11 @@ entt::entity GameServer::createPlayer(const std::string& name, glm::vec3 positio
     return entity;
 }
 
-entt::entity GameServer::createSpectator(const std::string& name, glm::vec3 position) {
+entt::entity GameServer::createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position) {
     entt::entity entity = world_.createSpectator(name, position);
+    auto& registry = world_.getActorWorld().registry();
+
+    registry.emplace<SessionComponent>(entity, sessionId);
     updateVisibleChunks();
     return entity;
 }
@@ -91,9 +89,13 @@ bool GameServer::loadChunk(glm::ivec3 chunkPos) {
     if (!world_.loadChunk(chunkPos)) {
         return false;
     }
-    if (initialSnapshotSent_ && channel_ && channel_->hasRemote()) {
-        pendingChunkUpdates_.push_back(NetChunkState{chunkPos, true});
-        queueChunkBlockSnapshot(chunkPos);
+
+    // Notify all sessions about the chunk load
+    for (auto& [sessionId, session] : sessions_) {
+        if (session.initialSnapshotSent) {
+            session.pendingChunkUpdates.push_back(NetChunkState{chunkPos, true});
+            queueChunkBlockSnapshot(chunkPos, session);
+        }
     }
     return true;
 }
@@ -102,22 +104,42 @@ bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
     if (!world_.unloadChunk(chunkPos)) {
         return false;
     }
-    if (initialSnapshotSent_ && channel_ && channel_->hasRemote()) {
-        pendingChunkUpdates_.push_back(NetChunkState{chunkPos, false});
+
+    // Notify all sessions about the chunk unload
+    for (auto& [sessionId, session] : sessions_) {
+        if (session.initialSnapshotSent) {
+            session.pendingChunkUpdates.push_back(NetChunkState{chunkPos, false});
+        }
     }
     return true;
 }
 
 void GameServer::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     world_.setBlock(worldPos, blockData);
-    if (initialSnapshotSent_ && channel_ && channel_->hasRemote()) {
-        pendingBlockUpdates_.push_back(NetBlockState{worldPos, blockData});
+
+    // Notify all sessions about the block change
+    for (auto& [sessionId, session] : sessions_) {
+        if (session.initialSnapshotSent) {
+            session.pendingBlockUpdates.push_back(NetBlockState{worldPos, blockData});
+        }
     }
 }
 
-NetSnapshot GameServer::buildSnapshot(bool forceFullChunkState) {
+GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
+    auto it = sessions_.find(sessionId);
+    if (it != sessions_.end()) {
+        return it->second;
+    }
+    Session session;
+    session.sessionId = sessionId;
+    auto [inserted, _] = sessions_.emplace(sessionId, std::move(session));
+    return inserted->second;
+}
+
+NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState) {
     NetSnapshot snapshot;
-    snapshot.sequence = ++snapshotSequence_;
+
+    snapshot.sequence = ++session.snapshotSequence;
 
     auto& registry = world_.getActorWorld().registry();
     auto view = registry.view<NameComponent, TransformComponent, PhysicsComponent>();
@@ -133,31 +155,83 @@ NetSnapshot GameServer::buildSnapshot(bool forceFullChunkState) {
         });
     }
 
-    if (forceFullChunkState) {
-        auto loadedChunks = world_.getLoadedChunks();
-        snapshot.chunks.reserve(loadedChunks.size());
-        for (const auto& chunkPos : loadedChunks) {
-            snapshot.chunks.push_back(NetChunkState{chunkPos, true});
+    // Filter chunks: only send chunks visible to spectators in this session.
+    std::unordered_set<glm::ivec3> visibleChunks;
+    auto spectatorView = registry.view<SpectatorComponent, TransformComponent, SessionComponent>();
+    for (auto entity : spectatorView) {
+        const auto& sessionComp = registry.get<SessionComponent>(entity);
+        if (sessionComp.sessionId != session.sessionId) {
+            continue;
         }
-    } else {
-        snapshot.chunks = pendingChunkUpdates_;
+        const auto& transform = registry.get<TransformComponent>(entity);
+        const glm::ivec3 playerChunk = Chunk::worldToChunk(glm::ivec3(
+            static_cast<int>(std::floor(transform.position.x)),
+            static_cast<int>(std::floor(transform.position.y)),
+            static_cast<int>(std::floor(transform.position.z))));
+
+        for (int dx = -kChunkViewRadius; dx <= kChunkViewRadius; ++dx) {
+            for (int dy = -kChunkViewRadius; dy <= kChunkViewRadius; ++dy) {
+                for (int dz = -kChunkViewRadius; dz <= kChunkViewRadius; ++dz) {
+                    const glm::ivec3 chunkPos = playerChunk + glm::ivec3(dx, dy, dz);
+                    if (world_.isChunkInBounds(chunkPos)) {
+                        visibleChunks.insert(chunkPos);
+                    }
+                }
+            }
+        }
     }
 
-    if (forceFullChunkState && pendingBlockUpdates_.empty()) {
-        queueLoadedBlockSnapshots();
+    if (forceFullChunkState) {
+        auto loadedChunks = world_.getLoadedChunks();
+        snapshot.chunks.reserve(visibleChunks.size());
+        for (const auto& chunkPos : loadedChunks) {
+            if (visibleChunks.count(chunkPos) > 0) {
+                snapshot.chunks.push_back(NetChunkState{chunkPos, true});
+            }
+        }
+    } else {
+        std::vector<NetChunkState> remainingChunks;
+
+        remainingChunks.reserve(session.pendingChunkUpdates.size());
+        for (const auto& chunkState : session.pendingChunkUpdates) {
+            if (visibleChunks.count(chunkState.chunkPos) > 0) {
+                snapshot.chunks.push_back(chunkState);
+            } else {
+                remainingChunks.push_back(chunkState);
+            }
+        }
+
+        session.pendingChunkUpdates = std::move(remainingChunks);
+    }
+
+    if (forceFullChunkState && session.pendingBlockUpdates.empty()) {
+        queueLoadedBlockSnapshots(session, visibleChunks);
     }
 
     snapshot.blocks.reserve(kMaxBlocksPerSnapshot);
-    while (!pendingBlockUpdates_.empty() && snapshot.blocks.size() < kMaxBlocksPerSnapshot) {
-        NetBlockState block = pendingBlockUpdates_.front();
-        pendingBlockUpdates_.pop_front();
-        if (!world_.getVoxelWorld().isChunkLoaded(Chunk::worldToChunk(block.worldPos))) {
+    std::deque<NetBlockState> remainingBlocks;
+
+    while (!session.pendingBlockUpdates.empty() && snapshot.blocks.size() < kMaxBlocksPerSnapshot) {
+        NetBlockState block = session.pendingBlockUpdates.front();
+        session.pendingBlockUpdates.pop_front();
+        const glm::ivec3 chunkPos = Chunk::worldToChunk(block.worldPos);
+        if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
             continue;
         }
-        snapshot.blocks.push_back(block);
+        if (visibleChunks.count(chunkPos) > 0) {
+            snapshot.blocks.push_back(block);
+        } else {
+            remainingBlocks.push_back(block);
+        }
     }
 
-    pendingChunkUpdates_.clear();
+    while (!session.pendingBlockUpdates.empty()) {
+        remainingBlocks.push_back(session.pendingBlockUpdates.front());
+        session.pendingBlockUpdates.pop_front();
+    }
+
+    session.pendingBlockUpdates = std::move(remainingBlocks);
+
     return snapshot;
 }
 
@@ -224,7 +298,7 @@ void GameServer::updateVisibleChunks() {
     }
 }
 
-void GameServer::queueChunkBlockSnapshot(glm::ivec3 chunkPos) {
+void GameServer::queueChunkBlockSnapshot(glm::ivec3 chunkPos, Session& session) {
     const Chunk& chunk = world_.getChunk(chunkPos);
     for (int x = 0; x < Chunk::SIZE; ++x) {
         for (int y = 0; y < Chunk::SIZE; ++y) {
@@ -234,34 +308,43 @@ void GameServer::queueChunkBlockSnapshot(glm::ivec3 chunkPos) {
                 if (block.type == BlockType::Air) {
                     continue;
                 }
-                pendingBlockUpdates_.push_back(NetBlockState{chunk.localToWorld(localPos), block});
+
+                session.pendingBlockUpdates.push_back(NetBlockState{chunk.localToWorld(localPos), block});
             }
         }
     }
 }
 
-void GameServer::queueLoadedBlockSnapshots() {
-    for (const glm::ivec3& chunkPos : world_.getLoadedChunks()) {
-        queueChunkBlockSnapshot(chunkPos);
+void GameServer::queueLoadedBlockSnapshots(Session& session, const std::unordered_set<glm::ivec3>& visibleChunks) {
+    if (visibleChunks.empty()) {
+        return;
+    }
+
+    for (const glm::ivec3& chunkPos : visibleChunks) {
+        if (world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
+            queueChunkBlockSnapshot(chunkPos, session);
+        }
     }
 }
 
 void GameServer::pumpNetwork() {
-    if (!channel_) {
+    if (!server_) {
         return;
     }
-    channel_->pump();
 
-    std::vector<uint8_t> packet;
-    while (channel_->popPacket(packet)) {
-        onClientPacket(packet);
-    }
+    server_->pump();
 }
 
-void GameServer::onClientPacket(const std::vector<uint8_t>& packet) {
+void GameServer::onSessionConnect(uint32_t sessionId) {
+    logging::info("Session {} connected", sessionId);
+    getOrCreateSession(sessionId);
+}
+
+void GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
     if (deserializeClientHello(packet)) {
-        logging::info("Client hello received, remote endpoint bound");
+        logging::info("Client hello received from session {}", sessionId);
         return;
     }
-    logging::warn("Ignored unknown client packet");
+
+    logging::warn("Ignored unknown client packet from session {}", sessionId);
 }

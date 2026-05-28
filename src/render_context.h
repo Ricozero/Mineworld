@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
@@ -25,7 +26,9 @@ public:
     bool shouldClose() const;
     void pollEvents();
     void updateCamera(float deltaTime);
+
     void render(const ClientWorld& world);
+    void invalidateChunkCache(glm::ivec3 chunkPos);
 
     GLFWwindow* window() const { return window_; }
     glm::vec3 getCameraPosition() const { return cameraPosition_; }
@@ -43,6 +46,8 @@ private:
     void destroyShaders();
     bool initializeImGui();
     void shutdownImGui();
+
+    void renderWorld(const ClientWorld& world);
     void renderProfilerOverlay(float deltaTime);
     void renderCursorOverlay(float deltaTime);
     void renderImGuiDrawData(ImDrawData* drawData);
@@ -59,7 +64,9 @@ private:
     bool hasMousePosition_ = false;
     bool bgfxInitialized_ = false;
     bool showProfiler_ = false;
-    enum class CursorMode { None, Cross, XYZ };
+    enum class CursorMode { None,
+                            Cross,
+                            XYZ };
     CursorMode cursorMode_ = CursorMode::None;
     bool showChunkBounds_ = false;
     bool prevF1Down_ = false;
@@ -70,6 +77,9 @@ private:
     unsigned short imguiFontTextureIndex_ = 0xffff;
     unsigned short imguiTextureUniformIndex_ = 0xffff;
     ImGuiContext* imguiContext_ = nullptr;
+
+    std::chrono::steady_clock::time_point lastRenderTime_{};
+    bool hasLastRenderTime_ = false;
 
     std::unordered_map<glm::ivec3, CachedChunkMesh> chunkMeshCache_;
     std::unordered_map<glm::ivec3, size_t> chunkBlockCounts_;

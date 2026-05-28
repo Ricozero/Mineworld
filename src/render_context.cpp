@@ -424,11 +424,21 @@ void RenderContext::updateCamera(float deltaTime) {
 }
 
 void RenderContext::render(const ClientWorld& world) {
-    profiling::ScopedTimer timer("Render.Total");
+    profiling::ScopedTimer timer("Client.Render");
 
     if (!window_ || !bgfxInitialized_) {
         return;
     }
+
+    // Compute deltaTime internally
+    const auto now = std::chrono::steady_clock::now();
+    float deltaTime = 1.0f / 60.0f;
+    if (hasLastRenderTime_) {
+        const std::chrono::duration<float> elapsed = now - lastRenderTime_;
+        deltaTime = std::clamp(elapsed.count(), 1.0f / 1000.0f, 0.1f);
+    }
+    lastRenderTime_ = now;
+    hasLastRenderTime_ = true;
 
     glfwGetFramebufferSize(window_, &width_, &height_);
     width_ = std::max(width_, 1);
@@ -454,122 +464,14 @@ void RenderContext::render(const ClientWorld& world) {
     bgfx::setViewTransform(kMainView, view, projection);
     bgfx::touch(kMainView);
 
-    {
-        profiling::ScopedTimer stepTimer("Render.BuildMesh");
-
-        const VoxelWorld& voxelWorld = world.getVoxelWorld();
-        const auto loadedChunks = voxelWorld.getLoadedChunks();
-
-        // Remove cached meshes for unloaded chunks
-        {
-            std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
-            for (auto it = chunkMeshCache_.begin(); it != chunkMeshCache_.end();) {
-                if (loadedSet.find(it->first) == loadedSet.end()) {
-                    chunkBlockCounts_.erase(it->first);
-                    it = chunkMeshCache_.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-
-        // Build/update cached meshes per chunk (only when dirty)
-        for (const glm::ivec3& chunkPos : loadedChunks) {
-            const Chunk& chunk = voxelWorld.getChunk(chunkPos);
-            const size_t blockCount = chunk.getBlockCount();
-
-            auto countIt = chunkBlockCounts_.find(chunkPos);
-            bool needsRebuild = (countIt == chunkBlockCounts_.end()) ||
-                                (countIt->second != blockCount) ||
-                                (chunkMeshCache_.find(chunkPos) == chunkMeshCache_.end());
-
-            if (needsRebuild) {
-                CachedChunkMesh cachedMesh;
-                buildChunkMesh(world, chunkPos, cachedMesh);
-                chunkBlockCounts_[chunkPos] = blockCount;
-                chunkMeshCache_[chunkPos] = std::move(cachedMesh);
-            }
-        }
-
-        // Submit chunk meshes in batches (to avoid 16-bit index overflow)
-        MeshBuilder currentBatch;
-        currentBatch.vertices.reserve(8192);
-        currentBatch.indices.reserve(12288);
-
-        for (const glm::ivec3& chunkPos : loadedChunks) {
-            const auto cacheIt = chunkMeshCache_.find(chunkPos);
-            if (cacheIt == chunkMeshCache_.end()) {
-                continue;
-            }
-            const auto& cached = cacheIt->second;
-            if (cached.vertexCount == 0 || cached.indices.empty()) {
-                continue;
-            }
-
-            // If adding this chunk would overflow, flush current batch
-            if (currentBatch.vertices.size() + cached.vertexCount > UINT16_MAX) {
-                submitMeshBatch(currentBatch, programIndex_);
-                currentBatch.vertices.clear();
-                currentBatch.indices.clear();
-            }
-
-            const auto baseVertex = static_cast<uint16_t>(currentBatch.vertices.size());
-            const size_t floatsPerVertex = 4;
-            for (size_t i = 0; i < cached.vertexCount; ++i) {
-                float x = cached.vertexData[i * floatsPerVertex + 0];
-                float y = cached.vertexData[i * floatsPerVertex + 1];
-                float z = cached.vertexData[i * floatsPerVertex + 2];
-                uint32_t abgr;
-                std::memcpy(&abgr, &cached.vertexData[i * floatsPerVertex + 3], sizeof(uint32_t));
-                currentBatch.vertices.push_back(PosColorVertex{x, y, z, abgr});
-            }
-            for (uint16_t idx : cached.indices) {
-                currentBatch.indices.push_back(baseVertex + idx);
-            }
-        }
-
-        // Add entities to current batch (skip spectators)
-        const auto& registry = world.getActorWorld().registry();
-        auto viewEntities = registry.view<TransformComponent, NameComponent>();
-        for (auto entity : viewEntities) {
-            // Don't render spectator entities
-            if (registry.all_of<SpectatorComponent>(entity)) {
-                continue;
-            }
-            if (currentBatch.vertices.size() + 24 > UINT16_MAX) {
-                submitMeshBatch(currentBatch, programIndex_);
-                currentBatch.vertices.clear();
-                currentBatch.indices.clear();
-            }
-            const auto& transform = registry.get<TransformComponent>(entity);
-            const auto& name = registry.get<NameComponent>(entity);
-            const glm::vec3 color = name.name == "Steve" ? glm::vec3(0.18f, 0.42f, 0.85f) : glm::vec3(0.85f, 0.32f, 0.20f);
-            const glm::vec3 min = transform.position + glm::vec3(-0.35f, 0.0f, -0.35f);
-            const glm::vec3 max = transform.position + glm::vec3(0.35f, 1.8f, 0.35f);
-            addBox(currentBatch, min, max, color);
-        }
-
-        // Flush remaining batch
-        submitMeshBatch(currentBatch, programIndex_);
-
-        if (showChunkBounds_) {
-            MeshBuilder lineBatch;
-            const glm::vec3 boundColor(1.0f, 0.92f, 0.25f);
-            for (const glm::ivec3& chunkPos : loadedChunks) {
-                const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(Chunk::SIZE);
-                const glm::vec3 max = min + glm::vec3(static_cast<float>(Chunk::SIZE));
-                addLineBox(lineBatch, min, max, boundColor);
-            }
-            submitLineBatch(lineBatch, programIndex_);
-        }
-    }
+    renderWorld(world);
 
     if (showProfiler_) {
-        renderProfilerOverlay(std::max(ImGui::GetIO().DeltaTime, 1.0f / 60.0f));
+        renderProfilerOverlay(deltaTime);
     }
 
     if (cursorMode_ != CursorMode::None) {
-        renderCursorOverlay(std::max(ImGui::GetIO().DeltaTime, 1.0f / 60.0f));
+        renderCursorOverlay(deltaTime);
     }
 
     bgfx::frame();
@@ -718,9 +620,140 @@ void RenderContext::shutdownImGui() {
     }
 }
 
-void RenderContext::renderProfilerOverlay(float deltaTime) {
-    profiling::ScopedTimer timer("Render.ImGui");
+void RenderContext::renderWorld(const ClientWorld& world) {
+    const VoxelWorld& voxelWorld = world.getVoxelWorld();
+    const auto loadedChunks = voxelWorld.getLoadedChunks();
 
+    // Remove cached meshes for unloaded chunks
+    std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
+    for (auto it = chunkMeshCache_.begin(); it != chunkMeshCache_.end();) {
+        if (loadedSet.find(it->first) == loadedSet.end()) {
+            chunkBlockCounts_.erase(it->first);
+            it = chunkMeshCache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Build/update cached meshes per chunk (only when dirty)
+    // Snapshot current block counts for loaded chunks so we can detect
+    // neighbor changes that should also force a rebuild.
+    std::unordered_map<glm::ivec3, size_t> currentCounts;
+    currentCounts.reserve(loadedChunks.size());
+    for (const glm::ivec3& chunkPos : loadedChunks) {
+        const Chunk& chunk = voxelWorld.getChunk(chunkPos);
+        currentCounts[chunkPos] = chunk.getBlockCount();
+    }
+
+    for (const glm::ivec3& chunkPos : loadedChunks) {
+        const size_t blockCount = currentCounts[chunkPos];
+
+        auto countIt = chunkBlockCounts_.find(chunkPos);
+        bool needsRebuild = (countIt == chunkBlockCounts_.end()) ||
+                            (countIt->second != blockCount) ||
+                            (chunkMeshCache_.find(chunkPos) == chunkMeshCache_.end());
+
+        // Also rebuild if any adjacent chunk changed block count since
+        // our last cached counts (exposed faces may have changed).
+        if (!needsRebuild) {
+            static const std::array<glm::ivec3, 6> kNeighborOffsets = {{glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0), glm::ivec3(0, 1, 0),
+                                                                        glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
+            for (const glm::ivec3& off : kNeighborOffsets) {
+                const glm::ivec3 neighbor = chunkPos + off;
+                auto prevNeighborIt = chunkBlockCounts_.find(neighbor);
+                auto currNeighborIt = currentCounts.find(neighbor);
+                if (prevNeighborIt != chunkBlockCounts_.end() && currNeighborIt != currentCounts.end()) {
+                    if (prevNeighborIt->second != currNeighborIt->second) {
+                        needsRebuild = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (needsRebuild) {
+            CachedChunkMesh cachedMesh;
+            buildChunkMesh(world, chunkPos, cachedMesh);
+            chunkBlockCounts_[chunkPos] = blockCount;
+            chunkMeshCache_[chunkPos] = std::move(cachedMesh);
+        }
+    }
+
+    // Submit chunk meshes in batches (to avoid 16-bit index overflow)
+    MeshBuilder currentBatch;
+    currentBatch.vertices.reserve(8192);
+    currentBatch.indices.reserve(12288);
+
+    for (const glm::ivec3& chunkPos : loadedChunks) {
+        const auto cacheIt = chunkMeshCache_.find(chunkPos);
+        if (cacheIt == chunkMeshCache_.end()) {
+            continue;
+        }
+        const auto& cached = cacheIt->second;
+        if (cached.vertexCount == 0 || cached.indices.empty()) {
+            continue;
+        }
+
+        // If adding this chunk would overflow, flush current batch
+        if (currentBatch.vertices.size() + cached.vertexCount > UINT16_MAX) {
+            submitMeshBatch(currentBatch, programIndex_);
+            currentBatch.vertices.clear();
+            currentBatch.indices.clear();
+        }
+
+        const auto baseVertex = static_cast<uint16_t>(currentBatch.vertices.size());
+        const size_t floatsPerVertex = 4;
+        for (size_t i = 0; i < cached.vertexCount; ++i) {
+            float x = cached.vertexData[i * floatsPerVertex + 0];
+            float y = cached.vertexData[i * floatsPerVertex + 1];
+            float z = cached.vertexData[i * floatsPerVertex + 2];
+            uint32_t abgr;
+            std::memcpy(&abgr, &cached.vertexData[i * floatsPerVertex + 3], sizeof(uint32_t));
+            currentBatch.vertices.push_back(PosColorVertex{x, y, z, abgr});
+        }
+        for (uint16_t idx : cached.indices) {
+            currentBatch.indices.push_back(baseVertex + idx);
+        }
+    }
+
+    // Add entities to current batch (skip spectators)
+    const auto& registry = world.getActorWorld().registry();
+    auto viewEntities = registry.view<TransformComponent, NameComponent>();
+    for (auto entity : viewEntities) {
+        // Don't render spectator entities
+        if (registry.all_of<SpectatorComponent>(entity)) {
+            continue;
+        }
+        if (currentBatch.vertices.size() + 24 > UINT16_MAX) {
+            submitMeshBatch(currentBatch, programIndex_);
+            currentBatch.vertices.clear();
+            currentBatch.indices.clear();
+        }
+        const auto& transform = registry.get<TransformComponent>(entity);
+        const auto& name = registry.get<NameComponent>(entity);
+        const glm::vec3 color = name.name == "Steve" ? glm::vec3(0.18f, 0.42f, 0.85f) : glm::vec3(0.85f, 0.32f, 0.20f);
+        // Slight vertical offset to reduce z-fighting with block faces.
+        const glm::vec3 min = transform.position + glm::vec3(-0.35f, 0.01f, -0.35f);
+        const glm::vec3 max = transform.position + glm::vec3(0.35f, 1.81f, 0.35f);
+        addBox(currentBatch, min, max, color);
+    }
+
+    // Flush remaining batch
+    submitMeshBatch(currentBatch, programIndex_);
+
+    if (showChunkBounds_) {
+        MeshBuilder lineBatch;
+        const glm::vec3 boundColor(1.0f, 0.92f, 0.25f);
+        for (const glm::ivec3& chunkPos : loadedChunks) {
+            const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(Chunk::SIZE);
+            const glm::vec3 max = min + glm::vec3(static_cast<float>(Chunk::SIZE));
+            addLineBox(lineBatch, min, max, boundColor);
+        }
+        submitLineBatch(lineBatch, programIndex_);
+    }
+}
+
+void RenderContext::renderProfilerOverlay(float deltaTime) {
     if (!imguiContext_) {
         return;
     }
@@ -735,7 +768,7 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
     const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot();
 
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.70f);
     constexpr ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration |
@@ -752,10 +785,10 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
         ImGui::Text("Chunk: %d, %d, %d", chunkCoord.x, chunkCoord.y, chunkCoord.z);
         ImGui::Separator();
 
-        ImGui::Text("FPS %.1f | Total %.3f ms", snapshot.fps, snapshot.frameMs);
+        ImGui::Text("FPS %6.1f | Total %6.1f ms", snapshot.fps, snapshot.frameMs);
         ImGui::Separator();
         ImGui::Columns(3, "ProfilerColumns", false);
-        ImGui::SetColumnWidth(0, 200.0f);
+        ImGui::SetColumnWidth(0, 160.0f);
         ImGui::SetColumnWidth(1, 80.0f);
         ImGui::SetColumnWidth(2, 80.0f);
         ImGui::TextUnformatted("Step");
@@ -768,9 +801,9 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
         for (const profiling::Entry& entry : snapshot.entries) {
             ImGui::TextUnformatted(entry.name.c_str());
             ImGui::NextColumn();
-            ImGui::Text("%.3f", entry.lastMs);
+            ImGui::Text("%6.1f", entry.lastMs);
             ImGui::NextColumn();
-            ImGui::Text("%.3f", entry.averageMs);
+            ImGui::Text("%6.1f", entry.averageMs);
             ImGui::NextColumn();
         }
         ImGui::Columns(1);
@@ -982,5 +1015,21 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
                 BGFX_STATE_MSAA);
             bgfx::submit(kImGuiView, program);
         }
+    }
+}
+
+void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
+    // Remove cache for the chunk and its direct neighbors so meshes rebuild
+    // immediately on next render. This prevents visible stale faces when
+    // chunks are loaded/unloaded by the client.
+    static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
+                                                                  glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
+    for (const auto& off : kInvalidateOffsets) {
+        const glm::ivec3 pos = chunkPos + off;
+        auto it = chunkMeshCache_.find(pos);
+        if (it != chunkMeshCache_.end()) {
+            chunkMeshCache_.erase(it);
+        }
+        chunkBlockCounts_.erase(pos);
     }
 }

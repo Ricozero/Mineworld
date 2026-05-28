@@ -40,10 +40,13 @@ struct RandomMovementComponent {
 };
 
 struct SpectatorComponent {
-    // Marker component for spectator camera entities
 };
 
 struct MeshComponent {
     glm::vec4 color{1.0f};
     bool isVisible = true;
+};
+
+struct SessionComponent {
+    uint32_t sessionId = 0;
 };
