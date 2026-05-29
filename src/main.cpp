@@ -1,7 +1,6 @@
 #include <chrono>
 #include <memory>
 #include <string_view>
-#include <thread>
 
 #include "entity.h"
 #include "game_client.h"
@@ -11,6 +10,8 @@
 #include "render_context.h"
 
 namespace {
+
+constexpr EntryMode kLocalEntryMode = EntryMode::Spectator;
 
 enum class RunMode {
     Combined,
@@ -39,42 +40,29 @@ RunMode parseRunMode(int argc, char* argv[]) {
 }
 
 bool initializeServer(std::unique_ptr<GameServer>& server) {
-    server = std::make_unique<GameServer>();
-    auto steve = server->createPlayer("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
-    auto alex = server->createPlayer("Alex", glm::vec3(12.0f, 1.0f, 12.0f));
+    logging::Scope logScope(logging::Channel::Server);
+    server = std::make_unique<GameServer>(kLocalEntryMode);
+
+    // Create robots (AI-controlled entities)
+    auto steve = server->createRobot("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
+    auto alice = server->createRobot("Alice", glm::vec3(12.0f, 1.0f, 12.0f));
+
+    // Disable gravity for robots so they stay on the surface
     auto& registry = server->world().getActorWorld().registry();
     registry.get<PhysicsComponent>(steve).useGravity = false;
-    registry.get<PhysicsComponent>(alex).useGravity = false;
+    registry.get<PhysicsComponent>(alice).useGravity = false;
+
     return true;
 }
 
 bool initializeClient(std::unique_ptr<GameClient>& client, std::unique_ptr<RenderContext>& renderContext) {
+    logging::Scope logScope(logging::Channel::Client);
     renderContext = std::make_unique<RenderContext>();
     if (!renderContext->initialize(1280, 720, "Mineworld")) {
         return false;
     }
-    client = std::make_unique<GameClient>(renderContext.get(), "Spectator");
+    client = std::make_unique<GameClient>(renderContext.get());
     return true;
-}
-
-void syncCameraToServer(GameServer& server, RenderContext& renderContext) {
-    // Directly update the server's spectator entity position from camera
-    glm::vec3 camPos = renderContext.getCameraPosition();
-    auto& registry = server.world().getActorWorld().registry();
-    auto view = registry.view<SpectatorComponent, TransformComponent>();
-    for (auto entity : view) {
-        auto& transform = registry.get<TransformComponent>(entity);
-        transform.position = camPos;
-        server.world().getActorWorld().updateEntityChunk(entity, camPos);
-    }
-}
-
-void updateServer(GameServer& server, float deltaTime) {
-    server.update(deltaTime);
-}
-
-void updateClient(GameClient& client, float deltaTime) {
-    client.update(deltaTime);
 }
 
 int runServerOnly() {
@@ -91,9 +79,7 @@ int runServerOnly() {
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
         previousTime = currentTime;
-        updateServer(*server, elapsed.count());
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        server->update(elapsed.count());
     }
 }
 
@@ -111,13 +97,10 @@ int runClientOnly() {
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
         previousTime = currentTime;
-        const float deltaTime = elapsed.count();
 
         renderContext->pollEvents();
-        updateClient(*client, deltaTime);
+        client->update(elapsed.count());
     }
-
-    logging::info("Client stopped");
     return 0;
 }
 
@@ -140,15 +123,11 @@ int runCombined() {
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
         previousTime = currentTime;
-        const float deltaTime = elapsed.count();
 
         renderContext->pollEvents();
-        syncCameraToServer(*server, *renderContext);
-        updateServer(*server, deltaTime);
-        updateClient(*client, deltaTime);
+        server->update(elapsed.count());
+        client->update(elapsed.count());
     }
-
-    logging::info("Combined mode stopped");
     return 0;
 }
 

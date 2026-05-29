@@ -30,7 +30,10 @@ struct BoxColliderComponent {
 
 struct PlayerComponent {
     float moveSpeed = 5.0f;
-    float jumpForce = 1.2f;
+};
+
+struct RobotComponent {
+    float moveSpeed = 3.0f;
 };
 
 struct RandomMovementComponent {
@@ -40,6 +43,7 @@ struct RandomMovementComponent {
 };
 
 struct SpectatorComponent {
+    float moveSpeed = 10.0f;
 };
 
 struct MeshComponent {

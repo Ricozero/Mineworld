@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "client_world.h"
@@ -13,28 +12,34 @@
 
 class ClientSystem;
 class RenderContext;
+class InputSystem;
 
 class GameClient {
 public:
-    explicit GameClient(RenderContext* renderContext = nullptr, const std::string& spectatorName = "");
+    explicit GameClient(RenderContext* renderContext = nullptr);
     ~GameClient();
 
     ClientWorld& world() { return world_; }
     const ClientWorld& world() const { return world_; }
 
-    const std::string& spectatorName() const { return spectatorName_; }
+    uint32_t localSessionId() const { return localSessionId_; }
+    bool isSessionReady() const { return sessionReady_; }
 
     void registerSystem(std::unique_ptr<ClientSystem> system);
     void update(float deltaTime);
 
 private:
     void pumpNetwork();
+    void handleServerHello(const NetServerHello& hello);
+    void sendInputToServer();
     void replaySnapshots();
     void applySnapshot(const NetSnapshot& snapshot);
 
     ClientWorld world_;
     std::vector<std::unique_ptr<ClientSystem>> systems_;
-    std::string spectatorName_;
+    InputSystem* inputSystem_ = nullptr;
+    uint32_t localSessionId_ = 0;
+    bool sessionReady_ = false;
 
     asio::io_context ioContext_;
     std::unique_ptr<IPacketChannel> channel_;

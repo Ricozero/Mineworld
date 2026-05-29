@@ -25,13 +25,14 @@ public:
 
     bool shouldClose() const;
     void pollEvents();
-    void updateCamera(float deltaTime);
+
+    void processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation);
+    void setCamera(const glm::vec3& position, float yaw, float pitch);
 
     void render(const ClientWorld& world);
     void invalidateChunkCache(glm::ivec3 chunkPos);
 
     GLFWwindow* window() const { return window_; }
-    glm::vec3 getCameraPosition() const { return cameraPosition_; }
 
 private:
     struct CachedChunkMesh {

@@ -7,7 +7,6 @@
 
 #include "net_protocol_generated.h"
 
-
 namespace {
 
 constexpr size_t kMaxActors = 2048;
@@ -72,6 +71,79 @@ bool deserializeClientHello(std::span<const uint8_t> bytes) {
     return msg->payload_type() == mineworld::net::NetMessagePayload::ClientHello;
 }
 
+std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto nameOffset = builder.CreateString(hello.actorName);
+    const mineworld::net::Vec3 position = toFbVec3(hello.position);
+    const auto helloOffset = mineworld::net::CreateServerHello(
+        builder,
+        hello.sessionId,
+        nameOffset,
+        &position,
+        hello.yaw,
+        hello.pitch);
+    const auto msg = mineworld::net::CreateNetMessage(
+        builder,
+        mineworld::net::NetMessagePayload::ServerHello,
+        helloOffset.Union());
+
+    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+}
+
+bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outHello) {
+    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
+    if (!msg || msg->payload_type() != mineworld::net::NetMessagePayload::ServerHello) {
+        return false;
+    }
+
+    const mineworld::net::ServerHello* fbHello = msg->payload_as_ServerHello();
+    if (!fbHello) {
+        return false;
+    }
+
+    outHello.sessionId = fbHello->session_id();
+    outHello.actorName = fbHello->actor_name() ? fbHello->actor_name()->str() : "";
+    outHello.position = fromFbVec3(fbHello->position());
+    outHello.yaw = fbHello->yaw();
+    outHello.pitch = fbHello->pitch();
+    return true;
+}
+
+std::vector<uint8_t> serializeClientInput(const NetClientInput& input) {
+    flatbuffers::FlatBufferBuilder builder;
+    const mineworld::net::Vec3 position = toFbVec3(input.position);
+    const auto inputOffset = mineworld::net::CreateClientInput(
+        builder,
+        &position,
+        input.yaw,
+        input.pitch);
+    const auto msg = mineworld::net::CreateNetMessage(
+        builder,
+        mineworld::net::NetMessagePayload::ClientInput,
+        inputOffset.Union());
+
+    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+}
+
+bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outInput) {
+    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
+    if (!msg || msg->payload_type() != mineworld::net::NetMessagePayload::ClientInput) {
+        return false;
+    }
+
+    const mineworld::net::ClientInput* fbInput = msg->payload_as_ClientInput();
+    if (!fbInput) {
+        return false;
+    }
+
+    outInput.position = fromFbVec3(fbInput->position());
+    outInput.yaw = fbInput->yaw();
+    outInput.pitch = fbInput->pitch();
+    return true;
+}
+
 std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot) {
     flatbuffers::FlatBufferBuilder builder;
 
@@ -85,7 +157,9 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot) {
             builder,
             name,
             &position,
-            &velocity));
+            &velocity,
+            actor.yaw,
+            actor.pitch));
     }
     const auto actorsVec = builder.CreateVector(actorOffsets);
 
@@ -155,6 +229,8 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
             outActor.name = actor->name()->str();
             outActor.position = fromFbVec3(actor->position());
             outActor.velocity = fromFbVec3(actor->velocity());
+            outActor.yaw = actor->yaw();
+            outActor.pitch = actor->pitch();
             snapshot.actors.push_back(std::move(outActor));
         }
     }

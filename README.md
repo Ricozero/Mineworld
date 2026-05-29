@@ -9,16 +9,15 @@
 
 ### BUG
 
-- 区块同步存在明显延迟
-- 即使不动，区块数量还是存在波动
-- 看不到区块
+- 区块生成/显示应从近到远
+- 站着不动，有的区块会长时间不显示
 - 修改isBlockInBounds范围
-- 不使用spectatorName，而是用专门的CameraComponent
 
 ### 架构
 
 - 多线程区块生成
 - 事件系统
+- 同步优化：输入序列号，其他actor插值缓冲
 - Lua和Sol2
 - Lua协程
 - Handle资源管理系统

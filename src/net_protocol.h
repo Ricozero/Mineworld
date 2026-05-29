@@ -12,6 +12,8 @@ struct NetActorState {
     std::string name;
     glm::vec3 position{0.0f};
     glm::vec3 velocity{0.0f};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
 };
 
 struct NetChunkState {
@@ -31,8 +33,28 @@ struct NetSnapshot {
     std::vector<NetBlockState> blocks;
 };
 
+struct NetClientInput {
+    glm::vec3 position{0.0f};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
+
+struct NetServerHello {
+    uint32_t sessionId = 0;
+    std::string actorName;
+    glm::vec3 position{0.0f};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
+
 std::vector<uint8_t> serializeClientHello();
 bool deserializeClientHello(std::span<const uint8_t> bytes);
+
+std::vector<uint8_t> serializeServerHello(const NetServerHello& hello);
+bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outHello);
+
+std::vector<uint8_t> serializeClientInput(const NetClientInput& input);
+bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outInput);
 
 std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot);
 bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapshot);

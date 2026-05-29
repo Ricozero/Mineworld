@@ -346,7 +346,7 @@ void RenderContext::pollEvents() {
     glfwPollEvents();
 }
 
-void RenderContext::updateCamera(float deltaTime) {
+void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation) {
     if (!window_) {
         return;
     }
@@ -368,9 +368,14 @@ void RenderContext::updateCamera(float deltaTime) {
     lastMouseX_ = mouseX;
     lastMouseY_ = mouseY;
 
-    cameraYaw_ += mouseDeltaX * mouseSensitivity;
-    cameraPitch_ -= mouseDeltaY * mouseSensitivity;
-    cameraPitch_ = std::clamp(cameraPitch_, -88.0f, 88.0f);
+    // Update rotation: rotation.x = pitch, rotation.y = yaw
+    rotation.y += mouseDeltaX * mouseSensitivity;
+    rotation.x -= mouseDeltaY * mouseSensitivity;
+    rotation.x = std::clamp(rotation.x, -88.0f, 88.0f);
+
+    // Also update internal camera state (used by forward()/right() helpers and render)
+    cameraYaw_ = rotation.y;
+    cameraPitch_ = rotation.x;
 
     constexpr float baseSpeed = 10.0f;
     constexpr float sprintMultiplier = 5.0f;
@@ -379,26 +384,29 @@ void RenderContext::updateCamera(float deltaTime) {
     const float moveStep = moveSpeed * deltaTime;
 
     if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS) {
-        cameraPosition_ += forward() * moveStep;
+        position += forward() * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS) {
-        cameraPosition_ -= forward() * moveStep;
+        position -= forward() * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) {
-        cameraPosition_ -= right() * moveStep;
+        position -= right() * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) {
-        cameraPosition_ += right() * moveStep;
+        position += right() * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        cameraPosition_.y += moveStep;
+        position.y += moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
-        cameraPosition_.y -= moveStep;
+        position.y -= moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         glfwSetWindowShouldClose(window_, GLFW_TRUE);
     }
+
+    // Update position in camera state for rendering
+    cameraPosition_ = position;
 
     const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
     if (f1Down && !prevF1Down_) {
@@ -421,6 +429,12 @@ void RenderContext::updateCamera(float deltaTime) {
         showChunkBounds_ = !showChunkBounds_;
     }
     prevF3Down_ = f3Down;
+}
+
+void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch) {
+    cameraPosition_ = position;
+    cameraYaw_ = yaw;
+    cameraPitch_ = pitch;
 }
 
 void RenderContext::render(const ClientWorld& world) {
@@ -636,8 +650,6 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     }
 
     // Build/update cached meshes per chunk (only when dirty)
-    // Snapshot current block counts for loaded chunks so we can detect
-    // neighbor changes that should also force a rebuild.
     std::unordered_map<glm::ivec3, size_t> currentCounts;
     currentCounts.reserve(loadedChunks.size());
     for (const glm::ivec3& chunkPos : loadedChunks) {
@@ -653,8 +665,6 @@ void RenderContext::renderWorld(const ClientWorld& world) {
                             (countIt->second != blockCount) ||
                             (chunkMeshCache_.find(chunkPos) == chunkMeshCache_.end());
 
-        // Also rebuild if any adjacent chunk changed block count since
-        // our last cached counts (exposed faces may have changed).
         if (!needsRebuild) {
             static const std::array<glm::ivec3, 6> kNeighborOffsets = {{glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0), glm::ivec3(0, 1, 0),
                                                                         glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
@@ -679,7 +689,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
         }
     }
 
-    // Submit chunk meshes in batches (to avoid 16-bit index overflow)
+    // Submit chunk meshes in batches
     MeshBuilder currentBatch;
     currentBatch.vertices.reserve(8192);
     currentBatch.indices.reserve(12288);
@@ -694,7 +704,6 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             continue;
         }
 
-        // If adding this chunk would overflow, flush current batch
         if (currentBatch.vertices.size() + cached.vertexCount > UINT16_MAX) {
             submitMeshBatch(currentBatch, programIndex_);
             currentBatch.vertices.clear();
@@ -716,23 +725,22 @@ void RenderContext::renderWorld(const ClientWorld& world) {
         }
     }
 
-    // Add entities to current batch (skip spectators)
+    // Render entities based on MeshComponent
     const auto& registry = world.getActorWorld().registry();
-    auto viewEntities = registry.view<TransformComponent, NameComponent>();
+    auto viewEntities = registry.view<TransformComponent, MeshComponent>();
     for (auto entity : viewEntities) {
-        // Don't render spectator entities
-        if (registry.all_of<SpectatorComponent>(entity)) {
+        const auto& meshComp = registry.get<MeshComponent>(entity);
+        if (!meshComp.isVisible) {
             continue;
         }
+
         if (currentBatch.vertices.size() + 24 > UINT16_MAX) {
             submitMeshBatch(currentBatch, programIndex_);
             currentBatch.vertices.clear();
             currentBatch.indices.clear();
         }
         const auto& transform = registry.get<TransformComponent>(entity);
-        const auto& name = registry.get<NameComponent>(entity);
-        const glm::vec3 color = name.name == "Steve" ? glm::vec3(0.18f, 0.42f, 0.85f) : glm::vec3(0.85f, 0.32f, 0.20f);
-        // Slight vertical offset to reduce z-fighting with block faces.
+        const glm::vec3 color(meshComp.color.r, meshComp.color.g, meshComp.color.b);
         const glm::vec3 min = transform.position + glm::vec3(-0.35f, 0.01f, -0.35f);
         const glm::vec3 max = transform.position + glm::vec3(0.35f, 1.81f, 0.35f);
         addBox(currentBatch, min, max, color);
@@ -909,7 +917,6 @@ void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos
     }
 done:
 
-    // Store as packed float data for cache
     outMesh.vertexCount = vertices.size();
     outMesh.vertexData.resize(vertices.size() * 4);
     for (size_t i = 0; i < vertices.size(); ++i) {
@@ -1019,9 +1026,6 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
 }
 
 void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
-    // Remove cache for the chunk and its direct neighbors so meshes rebuild
-    // immediately on next render. This prevents visible stale faces when
-    // chunks are loaded/unloaded by the client.
     static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
                                                                   glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
     for (const auto& off : kInvalidateOffsets) {

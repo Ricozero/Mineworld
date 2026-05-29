@@ -19,9 +19,13 @@ constexpr int kTicksPerSecond = 20;
 constexpr int kChunkViewRadius = 2;
 constexpr size_t kMaxBlocksPerSnapshot = 4096;
 
+glm::vec3 kDefaultSpawnPosition = glm::vec3(8.0f, 6.0f, 24.0f);
+float kDefaultSpawnYaw = -90.0f;
+float kDefaultSpawnPitch = -12.0f;
+
 }  // namespace
 
-GameServer::GameServer() {
+GameServer::GameServer(EntryMode entryMode) : entryMode_(entryMode) {
     logging::Scope logScope(logging::Channel::Server);
 
     auto kcpServer = std::make_unique<KcpServer>(ioContext_, kDefaultServerPort);
@@ -54,6 +58,9 @@ void GameServer::update(float deltaTime) {
 
     constexpr float snapshotInterval = 1.0f / kTicksPerSecond;
     for (auto& [sessionId, session] : sessions_) {
+        if (!session.helloReceived) {
+            continue;
+        }
         session.snapshotTimer += deltaTime;
         if (session.snapshotTimer < snapshotInterval) {
             continue;
@@ -70,17 +77,20 @@ void GameServer::update(float deltaTime) {
     }
 }
 
-entt::entity GameServer::createPlayer(const std::string& name, glm::vec3 position) {
-    entt::entity entity = world_.createPlayer(name, position);
+entt::entity GameServer::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position) {
+    entt::entity entity = world_.createPlayer(name, sessionId, position);
+    updateVisibleChunks();
+    return entity;
+}
+
+entt::entity GameServer::createRobot(const std::string& name, glm::vec3 position) {
+    entt::entity entity = world_.createRobot(name, position);
     updateVisibleChunks();
     return entity;
 }
 
 entt::entity GameServer::createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position) {
-    entt::entity entity = world_.createSpectator(name, position);
-    auto& registry = world_.getActorWorld().registry();
-
-    registry.emplace<SessionComponent>(entity, sessionId);
+    entt::entity entity = world_.createSpectator(name, sessionId, position);
     updateVisibleChunks();
     return entity;
 }
@@ -142,29 +152,34 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
     snapshot.sequence = ++session.snapshotSequence;
 
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<NameComponent, TransformComponent, PhysicsComponent>();
+    auto view = registry.view<NameComponent, TransformComponent>();
     snapshot.actors.reserve(view.size_hint());
     for (auto entity : view) {
         const auto& name = registry.get<NameComponent>(entity);
         const auto& transform = registry.get<TransformComponent>(entity);
-        const auto& physics = registry.get<PhysicsComponent>(entity);
+        glm::vec3 velocity{0.0f};
+        if (registry.all_of<PhysicsComponent>(entity)) {
+            velocity = registry.get<PhysicsComponent>(entity).velocity;
+        }
         snapshot.actors.push_back(NetActorState{
             name.name,
             transform.position,
-            physics.velocity,
+            velocity,
+            transform.rotation.y,
+            transform.rotation.x,
         });
     }
 
-    // Filter chunks: only send chunks visible to spectators in this session.
+    // Filter chunks: only send chunks visible to entities with sessions in this session.
     std::unordered_set<glm::ivec3> visibleChunks;
-    auto spectatorView = registry.view<SpectatorComponent, TransformComponent, SessionComponent>();
-    for (auto entity : spectatorView) {
+    auto sessionView = registry.view<SessionComponent, TransformComponent>();
+    for (auto entity : sessionView) {
         const auto& sessionComp = registry.get<SessionComponent>(entity);
         if (sessionComp.sessionId != session.sessionId) {
             continue;
         }
         const auto& transform = registry.get<TransformComponent>(entity);
-        const glm::ivec3 playerChunk = Chunk::worldToChunk(glm::ivec3(
+        const glm::ivec3 entityChunk = Chunk::worldToChunk(glm::ivec3(
             static_cast<int>(std::floor(transform.position.x)),
             static_cast<int>(std::floor(transform.position.y)),
             static_cast<int>(std::floor(transform.position.z))));
@@ -172,7 +187,7 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
         for (int dx = -kChunkViewRadius; dx <= kChunkViewRadius; ++dx) {
             for (int dy = -kChunkViewRadius; dy <= kChunkViewRadius; ++dy) {
                 for (int dz = -kChunkViewRadius; dz <= kChunkViewRadius; ++dz) {
-                    const glm::ivec3 chunkPos = playerChunk + glm::ivec3(dx, dy, dz);
+                    const glm::ivec3 chunkPos = entityChunk + glm::ivec3(dx, dy, dz);
                     if (world_.isChunkInBounds(chunkPos)) {
                         visibleChunks.insert(chunkPos);
                     }
@@ -240,9 +255,9 @@ void GameServer::updateVisibleChunks() {
 
     auto& registry = world_.getActorWorld().registry();
 
-    // Collect chunks around players
+    // Collect chunks around all entities with sessions (players and spectators)
     {
-        auto view = registry.view<PlayerComponent, TransformComponent>();
+        auto view = registry.view<SessionComponent, TransformComponent>();
         for (auto entity : view) {
             const auto& transform = registry.get<TransformComponent>(entity);
             const glm::ivec3 entityChunk = Chunk::worldToChunk(glm::ivec3(
@@ -263,9 +278,9 @@ void GameServer::updateVisibleChunks() {
         }
     }
 
-    // Collect chunks around spectators
+    // Also collect chunks around robots (they need loaded terrain for physics)
     {
-        auto view = registry.view<SpectatorComponent, TransformComponent>();
+        auto view = registry.view<RobotComponent, TransformComponent>();
         for (auto entity : view) {
             const auto& transform = registry.get<TransformComponent>(entity);
             const glm::ivec3 entityChunk = Chunk::worldToChunk(glm::ivec3(
@@ -342,9 +357,80 @@ void GameServer::onSessionConnect(uint32_t sessionId) {
 
 void GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
     if (deserializeClientHello(packet)) {
-        logging::info("Client hello received from session {}", sessionId);
+        onClientHello(sessionId);
+        return;
+    }
+
+    NetClientInput input;
+    if (deserializeClientInput(packet, input)) {
+        onClientInput(sessionId, input);
         return;
     }
 
     logging::warn("Ignored unknown client packet from session {}", sessionId);
+}
+
+void GameServer::onClientHello(uint32_t sessionId) {
+    auto& session = getOrCreateSession(sessionId);
+    if (session.helloReceived) {
+        logging::warn("Duplicate ClientHello from session {}, ignoring", sessionId);
+        return;
+    }
+    session.helloReceived = true;
+
+    // Generate a unique actor name for this session
+    std::string actorName = "Player" + std::to_string(nextPlayerIndex_++);
+    session.actorName = actorName;
+
+    glm::vec3 spawnPos = kDefaultSpawnPosition;
+    float spawnYaw = kDefaultSpawnYaw;
+    float spawnPitch = kDefaultSpawnPitch;
+
+    // Create the actor on the server
+    if (entryMode_ == EntryMode::Spectator) {
+        createSpectator(actorName, sessionId, spawnPos);
+    } else {
+        createPlayer(actorName, sessionId, spawnPos);
+    }
+
+    // Set initial rotation
+    auto& registry = world_.getActorWorld().registry();
+    auto view = registry.view<SessionComponent, TransformComponent>();
+    for (auto entity : view) {
+        const auto& sessionComp = registry.get<SessionComponent>(entity);
+        if (sessionComp.sessionId == sessionId) {
+            auto& transform = registry.get<TransformComponent>(entity);
+            transform.rotation.y = spawnYaw;
+            transform.rotation.x = spawnPitch;
+            break;
+        }
+    }
+
+    // Send ServerHello to the client
+    NetServerHello hello;
+    hello.sessionId = sessionId;
+    hello.actorName = actorName;
+    hello.position = spawnPos;
+    hello.yaw = spawnYaw;
+    hello.pitch = spawnPitch;
+    server_->sendTo(sessionId, serializeServerHello(hello));
+
+    logging::info("Client hello from session {}, assigned actor '{}'", sessionId, actorName);
+}
+
+void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) {
+    auto& registry = world_.getActorWorld().registry();
+    auto view = registry.view<SessionComponent, TransformComponent>();
+    for (auto entity : view) {
+        const auto& session = registry.get<SessionComponent>(entity);
+        if (session.sessionId != sessionId) {
+            continue;
+        }
+        auto& transform = registry.get<TransformComponent>(entity);
+        transform.position = input.position;
+        transform.rotation.x = input.pitch;
+        transform.rotation.y = input.yaw;
+        world_.getActorWorld().updateEntityChunk(entity, transform.position);
+        break;
+    }
 }

@@ -2,9 +2,6 @@
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <string>
-
-#include "block.h"
 
 class ClientWorld;
 class RenderContext;
@@ -24,13 +21,16 @@ public:
 
 class InputSystem : public ClientSystem {
 public:
-    explicit InputSystem(RenderContext* renderContext = nullptr, const std::string& spectatorName = "");
+    explicit InputSystem(RenderContext* renderContext = nullptr, uint32_t localSessionId = 0);
     void update(ClientWorld& world, float deltaTime) override;
 
+    bool hasInputChanged() const { return inputChanged_; }
+    void clearInputChanged() { inputChanged_ = false; }
+
 private:
-    void updatePlayerInput(entt::registry& registry, float deltaTime);
     RenderContext* renderContext_ = nullptr;
-    std::string spectatorName_;
+    uint32_t localSessionId_ = 0;
+    bool inputChanged_ = false;
 };
 
 class PhysicsSystem : public ServerSystem {
@@ -44,11 +44,10 @@ private:
 
 class RenderSystem : public ClientSystem {
 public:
-    explicit RenderSystem(RenderContext* renderContext = nullptr);
+    explicit RenderSystem(RenderContext* renderContext = nullptr, uint32_t localSessionId = 0);
     void update(ClientWorld& world, float deltaTime) override;
 
 private:
-    void renderBlock(const glm::ivec3& pos, BlockType type);
-    void renderEntity(const std::string& name, const glm::vec3& position, const glm::vec3& color);
     RenderContext* renderContext_ = nullptr;
+    uint32_t localSessionId_ = 0;
 };

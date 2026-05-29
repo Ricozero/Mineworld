@@ -18,10 +18,26 @@ struct IVec3 {
 table ClientHello {
 }
 
+table ServerHello {
+  session_id:uint;
+  actor_name:string;
+  position:Vec3;
+  yaw:float;
+  pitch:float;
+}
+
+table ClientInput {
+  position:Vec3;
+  yaw:float;
+  pitch:float;
+}
+
 table ActorState {
   name:string;
   position:Vec3;
   velocity:Vec3;
+  yaw:float;
+  pitch:float;
 }
 
 table ChunkState {
@@ -44,6 +60,8 @@ table Snapshot {
 
 union NetMessagePayload {
   ClientHello,
+  ServerHello,
+  ClientInput,
   Snapshot
 }
 

@@ -14,8 +14,8 @@ constexpr const char* kDefaultServerAddress = "127.0.0.1";
 
 }  // namespace
 
-GameClient::GameClient(RenderContext* renderContext, const std::string& spectatorName)
-    : spectatorName_(spectatorName), renderContext_(renderContext) {
+GameClient::GameClient(RenderContext* renderContext)
+    : renderContext_(renderContext) {
     logging::Scope logScope(logging::Channel::Client);
 
     auto channel = std::make_unique<KcpChannel>(ioContext_, 0);
@@ -25,9 +25,6 @@ GameClient::GameClient(RenderContext* renderContext, const std::string& spectato
     channel->setRemote(serverEndpoint);
     channel->startHandshake();
     channel_ = std::move(channel);
-
-    registerSystem(std::make_unique<InputSystem>(renderContext_, spectatorName_));
-    registerSystem(std::make_unique<RenderSystem>(renderContext_));
 }
 
 GameClient::~GameClient() = default;
@@ -41,10 +38,16 @@ void GameClient::update(float deltaTime) {
     profiling::ScopedTimer timer("Client.Update");
 
     pumpNetwork();
+
+    if (!sessionReady_) {
+        return;
+    }
+
     replaySnapshots();
     for (auto& system : systems_) {
         system->update(world_, deltaTime);
     }
+    sendInputToServer();
 }
 
 void GameClient::pumpNetwork() {
@@ -62,16 +65,77 @@ void GameClient::pumpNetwork() {
 
     std::vector<uint8_t> packet;
     while (channel_->popPacket(packet)) {
+        // Try ServerHello first
+        NetServerHello hello;
+        if (deserializeServerHello(packet, hello)) {
+            handleServerHello(hello);
+            continue;
+        }
+
+        // Try Snapshot
         NetSnapshot snapshot;
         if (deserializeSnapshot(packet, snapshot)) {
             snapshotBuffer_.push_back(std::move(snapshot));
-        } else {
-            logging::warn("Ignored unknown packet");
+            continue;
         }
+
+        logging::warn("Ignored unknown packet");
     }
 }
 
-// ... replaySnapshots() and applySnapshot() unchanged ...
+void GameClient::handleServerHello(const NetServerHello& hello) {
+    if (sessionReady_) {
+        logging::warn("Received duplicate ServerHello, ignoring");
+        return;
+    }
+
+    localSessionId_ = hello.sessionId;
+    logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
+
+    // Create the local entity based on server instructions
+    entt::entity entity = world_.createSpectator(hello.actorName, hello.sessionId, hello.position);
+    if (entity != entt::null) {
+        auto& transform = world_.getActorWorld().registry().get<TransformComponent>(entity);
+        transform.rotation.y = hello.yaw;
+        transform.rotation.x = hello.pitch;
+    }
+
+    // Now register input and render systems with the correct session ID
+    auto inputSystemPtr = std::make_unique<InputSystem>(renderContext_, localSessionId_);
+    inputSystem_ = inputSystemPtr.get();
+    registerSystem(std::move(inputSystemPtr));
+    registerSystem(std::make_unique<RenderSystem>(renderContext_, localSessionId_));
+
+    sessionReady_ = true;
+}
+
+void GameClient::sendInputToServer() {
+    if (!channel_ || helloPending_ || !sessionReady_) {
+        return;
+    }
+    if (!inputSystem_ || !inputSystem_->hasInputChanged()) {
+        return;
+    }
+
+    auto& registry = world_.getActorWorld().registry();
+    auto view = registry.view<SessionComponent, TransformComponent>();
+    for (auto entity : view) {
+        const auto& session = registry.get<SessionComponent>(entity);
+        if (session.sessionId != localSessionId_) {
+            continue;
+        }
+        const auto& transform = registry.get<TransformComponent>(entity);
+        NetClientInput input;
+        input.position = transform.position;
+        input.yaw = transform.rotation.y;
+        input.pitch = transform.rotation.x;
+        channel_->sendReliable(serializeClientInput(input));
+        break;
+    }
+
+    inputSystem_->clearInputChanged();
+}
+
 void GameClient::replaySnapshots() {
     if (snapshotBuffer_.empty()) {
         return;
@@ -110,23 +174,26 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     for (const auto& actor : snapshot.actors) {
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {
-            if (actor.name == spectatorName_) {
-                entity = world_.createSpectator(actor.name, actor.position);
-            } else {
-                entity = world_.createPlayer(actor.name, actor.position);
-            }
+            entity = world_.createRobot(actor.name, actor.position);
         }
         if (entity == entt::null) {
             continue;
         }
-        // Don't overwrite spectator position from server snapshot -
-        // the client controls it directly via camera
-        if (registry.all_of<SpectatorComponent>(entity)) {
-            continue;
+        // Don't overwrite position of local session entities -
+        // the client controls them directly via input
+        if (registry.all_of<SessionComponent>(entity)) {
+            const auto& session = registry.get<SessionComponent>(entity);
+            if (session.sessionId == localSessionId_) {
+                continue;
+            }
         }
         auto& transform = registry.get<TransformComponent>(entity);
-        auto& physics = registry.get<PhysicsComponent>(entity);
         transform.position = actor.position;
-        physics.velocity = actor.velocity;
+        transform.rotation.x = actor.pitch;
+        transform.rotation.y = actor.yaw;
+        if (registry.all_of<PhysicsComponent>(entity)) {
+            auto& physics = registry.get<PhysicsComponent>(entity);
+            physics.velocity = actor.velocity;
+        }
     }
 }

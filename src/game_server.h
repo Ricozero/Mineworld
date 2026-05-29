@@ -13,9 +13,14 @@
 
 class ServerSystem;
 
+enum class EntryMode {
+    Spectator,
+    Player,
+};
+
 class GameServer {
 public:
-    GameServer();
+    explicit GameServer(EntryMode entryMode = EntryMode::Spectator);
     ~GameServer();
 
     ServerWorld& world() { return world_; }
@@ -24,7 +29,8 @@ public:
     void registerSystem(std::unique_ptr<ServerSystem> system);
     void update(float deltaTime);
 
-    entt::entity createPlayer(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createRobot(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
     entt::entity createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position = glm::vec3(0.0f));
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
@@ -36,6 +42,8 @@ private:
         uint32_t snapshotSequence = 0;
         float snapshotTimer = 0.0f;
         bool initialSnapshotSent = false;
+        bool helloReceived = false;
+        std::string actorName;
         std::vector<NetChunkState> pendingChunkUpdates;
         std::deque<NetBlockState> pendingBlockUpdates;
     };
@@ -50,12 +58,16 @@ private:
 
     void onSessionConnect(uint32_t sessionId);
     void onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
+    void onClientHello(uint32_t sessionId);
+    void onClientInput(uint32_t sessionId, const NetClientInput& input);
 
     ServerWorld world_;
     std::vector<std::unique_ptr<ServerSystem>> systems_;
+    EntryMode entryMode_ = EntryMode::Spectator;
 
     asio::io_context ioContext_;
 
     std::unique_ptr<IPacketServer> server_;
     std::unordered_map<uint32_t, Session> sessions_;
+    uint32_t nextPlayerIndex_ = 0;
 };

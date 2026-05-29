@@ -8,34 +8,30 @@
 #include "render_context.h"
 #include "server_world.h"
 
-InputSystem::InputSystem(RenderContext* renderContext, const std::string& spectatorName)
-    : renderContext_(renderContext), spectatorName_(spectatorName) {
+InputSystem::InputSystem(RenderContext* renderContext, uint32_t localSessionId)
+    : renderContext_(renderContext), localSessionId_(localSessionId) {
 }
 
 void InputSystem::update(ClientWorld& world, float deltaTime) {
-    if (renderContext_) {
-        renderContext_->updateCamera(deltaTime);
-
-        // Sync camera position to client spectator entity
-        if (!spectatorName_.empty()) {
-            entt::entity spectator = world.getEntityByName(spectatorName_);
-            if (spectator != entt::null) {
-                auto& registry = world.getActorWorld().registry();
-                if (registry.all_of<SpectatorComponent, TransformComponent>(spectator)) {
-                    auto& transform = registry.get<TransformComponent>(spectator);
-                    transform.position = renderContext_->getCameraPosition();
-                }
-            }
-        }
+    if (!renderContext_) {
+        return;
     }
-    updatePlayerInput(world.getActorWorld().registry(), deltaTime);
-}
 
-void InputSystem::updatePlayerInput(entt::registry& registry, float deltaTime) {
-    auto view = registry.view<PlayerComponent, TransformComponent, PhysicsComponent>();
-
+    auto& registry = world.getActorWorld().registry();
+    auto view = registry.view<SessionComponent, TransformComponent>();
     for (auto entity : view) {
-        (void)entity;
+        const auto& session = registry.get<SessionComponent>(entity);
+        if (session.sessionId != localSessionId_) {
+            continue;
+        }
+
+        auto& transform = registry.get<TransformComponent>(entity);
+        // Pass current transform to RenderContext for input processing
+        // RenderContext will update position and rotation based on keyboard/mouse
+        renderContext_->processInput(deltaTime, transform.position, transform.rotation);
+        world.getActorWorld().updateEntityChunk(entity, transform.position);
+        inputChanged_ = true;
+        break;
     }
 }
 
@@ -65,20 +61,19 @@ void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
 }
 
 void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
-    // Update random movement for players
+    // Update random movement for robots
     {
-        auto playerView = registry.view<PlayerComponent, RandomMovementComponent, PhysicsComponent>();
-        for (auto entity : playerView) {
+        auto robotView = registry.view<RobotComponent, RandomMovementComponent, PhysicsComponent>();
+        for (auto entity : robotView) {
             auto& random = registry.get<RandomMovementComponent>(entity);
             auto& physics = registry.get<PhysicsComponent>(entity);
-            const auto& player = registry.get<PlayerComponent>(entity);
+            const auto& robot = registry.get<RobotComponent>(entity);
 
             random.changeDirectionTimer -= deltaTime;
             if (random.changeDirectionTimer <= 0.0f) {
                 random.changeDirectionTimer = random.changeDirectionInterval;
-                // Generate random direction in XZ plane (no vertical movement)
                 const float angle = (static_cast<float>(rand()) / RAND_MAX) * 2.0f * 3.14159265f;
-                const float speed = (static_cast<float>(rand()) / RAND_MAX) * player.moveSpeed;
+                const float speed = (static_cast<float>(rand()) / RAND_MAX) * robot.moveSpeed;
                 random.targetDirection = glm::vec3(std::cos(angle) * speed, 0.0f, std::sin(angle) * speed);
             }
 
@@ -87,7 +82,7 @@ void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
         }
     }
 
-    // Apply physics to all entities
+    // Apply physics to all entities with physics
     auto view = registry.view<TransformComponent, PhysicsComponent>();
     for (auto entity : view) {
         auto& transform = registry.get<TransformComponent>(entity);
@@ -97,18 +92,27 @@ void PhysicsSystem::updateMovement(entt::registry& registry, float deltaTime) {
     }
 }
 
-RenderSystem::RenderSystem(RenderContext* renderContext) : renderContext_(renderContext) {
+RenderSystem::RenderSystem(RenderContext* renderContext, uint32_t localSessionId)
+    : renderContext_(renderContext), localSessionId_(localSessionId) {
 }
 
 void RenderSystem::update(ClientWorld& world, float deltaTime) {
-    if (renderContext_) {
-        renderContext_->render(world);
+    if (!renderContext_) {
         return;
     }
-}
 
-void RenderSystem::renderBlock(const glm::ivec3& pos, BlockType type) {
-}
+    // Set the camera from the local actor's transform before rendering
+    auto& registry = world.getActorWorld().registry();
+    auto view = registry.view<SessionComponent, TransformComponent>();
+    for (auto entity : view) {
+        const auto& session = registry.get<SessionComponent>(entity);
+        if (session.sessionId != localSessionId_) {
+            continue;
+        }
+        const auto& transform = registry.get<TransformComponent>(entity);
+        renderContext_->setCamera(transform.position, transform.rotation.y, transform.rotation.x);
+        break;
+    }
 
-void RenderSystem::renderEntity(const std::string& name, const glm::vec3& position, const glm::vec3& color) {
+    renderContext_->render(world);
 }
