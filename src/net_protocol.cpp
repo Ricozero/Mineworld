@@ -49,6 +49,14 @@ glm::ivec3 fromFbIVec3(const mineworld::net::IVec3* value) {
     return glm::ivec3(value->x(), value->y(), value->z());
 }
 
+uint8_t toWirePlayerMode(PlayerMode mode) {
+    return static_cast<uint8_t>(mode);
+}
+
+PlayerMode fromWirePlayerMode(uint8_t mode) {
+    return mode == static_cast<uint8_t>(PlayerMode::Spectator) ? PlayerMode::Spectator : PlayerMode::Survival;
+}
+
 }  // namespace
 
 std::vector<uint8_t> serializeClientHello() {
@@ -81,7 +89,8 @@ std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
         nameOffset,
         &position,
         hello.yaw,
-        hello.pitch);
+        hello.pitch,
+        toWirePlayerMode(hello.playerMode));
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
         mineworld::net::NetMessagePayload::ServerHello,
@@ -107,6 +116,7 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
     outHello.position = fromFbVec3(fbHello->position());
     outHello.yaw = fbHello->yaw();
     outHello.pitch = fbHello->pitch();
+    outHello.playerMode = fromWirePlayerMode(fbHello->player_mode());
     return true;
 }
 
@@ -117,7 +127,8 @@ std::vector<uint8_t> serializeClientInput(const NetClientInput& input) {
         builder,
         &position,
         input.yaw,
-        input.pitch);
+        input.pitch,
+        toWirePlayerMode(input.playerMode));
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
         mineworld::net::NetMessagePayload::ClientInput,
@@ -141,6 +152,7 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
     outInput.position = fromFbVec3(fbInput->position());
     outInput.yaw = fbInput->yaw();
     outInput.pitch = fbInput->pitch();
+    outInput.playerMode = fromWirePlayerMode(fbInput->player_mode());
     return true;
 }
 
@@ -159,7 +171,9 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot) {
             &position,
             &velocity,
             actor.yaw,
-            actor.pitch));
+            actor.pitch,
+            actor.isPlayer,
+            toWirePlayerMode(actor.playerMode)));
     }
     const auto actorsVec = builder.CreateVector(actorOffsets);
 
@@ -231,6 +245,8 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
             outActor.velocity = fromFbVec3(actor->velocity());
             outActor.yaw = actor->yaw();
             outActor.pitch = actor->pitch();
+            outActor.isPlayer = actor->is_player();
+            outActor.playerMode = fromWirePlayerMode(actor->player_mode());
             snapshot.actors.push_back(std::move(outActor));
         }
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
 
@@ -28,8 +29,15 @@ struct BoxColliderComponent {
     glm::vec3 size{1.0f};
 };
 
+enum class PlayerMode : uint8_t {
+    Survival = 0,
+    Spectator = 1,
+};
+
 struct PlayerComponent {
-    float moveSpeed = 5.0f;
+    PlayerMode mode = PlayerMode::Survival;
+    float survivalMoveSpeed = 5.0f;
+    float spectatorMoveSpeed = 10.0f;
 };
 
 struct RobotComponent {
@@ -40,10 +48,6 @@ struct RandomMovementComponent {
     float changeDirectionTimer = 0.0f;
     float changeDirectionInterval = 2.0f;
     glm::vec3 targetDirection{0.0f};
-};
-
-struct SpectatorComponent {
-    float moveSpeed = 10.0f;
 };
 
 struct MeshComponent {

@@ -47,16 +47,12 @@ std::vector<glm::ivec3> ServerWorld::getLoadedChunks() const {
     return voxelWorld_.getLoadedChunks();
 }
 
-entt::entity ServerWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position) {
-    return actorWorld_.createPlayer(name, sessionId, position);
+entt::entity ServerWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+    return actorWorld_.createPlayer(name, sessionId, position, mode);
 }
 
 entt::entity ServerWorld::createRobot(const std::string& name, glm::vec3 position) {
     return actorWorld_.createRobot(name, position);
-}
-
-entt::entity ServerWorld::createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position) {
-    return actorWorld_.createSpectator(name, sessionId, position);
 }
 
 void ServerWorld::destroyEntity(entt::entity entity) {

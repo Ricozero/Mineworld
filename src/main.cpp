@@ -11,7 +11,7 @@
 
 namespace {
 
-constexpr EntryMode kLocalEntryMode = EntryMode::Spectator;
+constexpr PlayerMode kLocalEntryMode = PlayerMode::Spectator;
 
 enum class RunMode {
     Combined,

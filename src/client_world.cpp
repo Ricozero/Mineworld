@@ -24,16 +24,16 @@ void ClientWorld::applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData) {
     voxelWorld_.setBlockIfChunkLoaded(worldPos, blockData);
 }
 
-entt::entity ClientWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position) {
-    return actorWorld_.createPlayer(name, sessionId, position);
+entt::entity ClientWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+    return actorWorld_.createPlayer(name, sessionId, position, mode);
+}
+
+entt::entity ClientWorld::createRemotePlayer(const std::string& name, glm::vec3 position, PlayerMode mode) {
+    return actorWorld_.createRemotePlayer(name, position, mode);
 }
 
 entt::entity ClientWorld::createRobot(const std::string& name, glm::vec3 position) {
     return actorWorld_.createRobot(name, position);
-}
-
-entt::entity ClientWorld::createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position) {
-    return actorWorld_.createSpectator(name, sessionId, position);
 }
 
 void ClientWorld::destroyEntity(entt::entity entity) {

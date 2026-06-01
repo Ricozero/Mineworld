@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "block.h"
+#include "entity.h"
 
 struct NetActorState {
     std::string name;
@@ -14,6 +15,8 @@ struct NetActorState {
     glm::vec3 velocity{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
+    bool isPlayer = false;
+    PlayerMode playerMode = PlayerMode::Survival;
 };
 
 struct NetChunkState {
@@ -37,6 +40,7 @@ struct NetClientInput {
     glm::vec3 position{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
+    PlayerMode playerMode = PlayerMode::Survival;
 };
 
 struct NetServerHello {
@@ -45,6 +49,7 @@ struct NetServerHello {
     glm::vec3 position{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
+    PlayerMode playerMode = PlayerMode::Survival;
 };
 
 std::vector<uint8_t> serializeClientHello();

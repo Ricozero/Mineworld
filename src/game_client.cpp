@@ -92,8 +92,8 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
     localSessionId_ = hello.sessionId;
     logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
 
-    // Create the local entity based on server instructions
-    entt::entity entity = world_.createSpectator(hello.actorName, hello.sessionId, hello.position);
+    // Create the local player based on server instructions. Spectator is a player mode.
+    entt::entity entity = world_.createPlayer(hello.actorName, hello.sessionId, hello.position, hello.playerMode);
     if (entity != entt::null) {
         auto& transform = world_.getActorWorld().registry().get<TransformComponent>(entity);
         transform.rotation.y = hello.yaw;
@@ -129,6 +129,9 @@ void GameClient::sendInputToServer() {
         input.position = transform.position;
         input.yaw = transform.rotation.y;
         input.pitch = transform.rotation.x;
+        if (registry.all_of<PlayerComponent>(entity)) {
+            input.playerMode = registry.get<PlayerComponent>(entity).mode;
+        }
         channel_->sendReliable(serializeClientInput(input));
         break;
     }
@@ -174,7 +177,9 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     for (const auto& actor : snapshot.actors) {
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {
-            entity = world_.createRobot(actor.name, actor.position);
+            entity = actor.isPlayer
+                         ? world_.createRemotePlayer(actor.name, actor.position, actor.playerMode)
+                         : world_.createRobot(actor.name, actor.position);
         }
         if (entity == entt::null) {
             continue;
@@ -184,8 +189,19 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
         if (registry.all_of<SessionComponent>(entity)) {
             const auto& session = registry.get<SessionComponent>(entity);
             if (session.sessionId == localSessionId_) {
+                if (registry.all_of<PlayerComponent>(entity) &&
+                    registry.get<PlayerComponent>(entity).mode == PlayerMode::Survival) {
+                    auto& transform = registry.get<TransformComponent>(entity);
+                    transform.position.y = actor.position.y;
+                    if (registry.all_of<PhysicsComponent>(entity)) {
+                        registry.get<PhysicsComponent>(entity).velocity = actor.velocity;
+                    }
+                }
                 continue;
             }
+        }
+        if (actor.isPlayer) {
+            world_.getActorWorld().setPlayerMode(entity, actor.playerMode);
         }
         auto& transform = registry.get<TransformComponent>(entity);
         transform.position = actor.position;

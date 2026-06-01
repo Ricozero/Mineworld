@@ -24,12 +24,14 @@ table ServerHello {
   position:Vec3;
   yaw:float;
   pitch:float;
+  player_mode:ubyte = 0;
 }
 
 table ClientInput {
   position:Vec3;
   yaw:float;
   pitch:float;
+  player_mode:ubyte = 0;
 }
 
 table ActorState {
@@ -38,6 +40,8 @@ table ActorState {
   velocity:Vec3;
   yaw:float;
   pitch:float;
+  is_player:bool = false;
+  player_mode:ubyte = 0;
 }
 
 table ChunkState {

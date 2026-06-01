@@ -7,6 +7,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "entity.h"
+
 class ClientWorld;
 struct ImDrawData;
 struct ImGuiContext;
@@ -26,7 +28,7 @@ public:
     bool shouldClose() const;
     void pollEvents();
 
-    void processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation);
+    void processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation, PlayerComponent& player);
     void setCamera(const glm::vec3& position, float yaw, float pitch);
 
     void render(const ClientWorld& world);
@@ -73,6 +75,7 @@ private:
     bool prevF1Down_ = false;
     bool prevF2Down_ = false;
     bool prevF3Down_ = false;
+    bool prevF4Down_ = false;
     unsigned short programIndex_ = 0xffff;
     unsigned short imguiProgramIndex_ = 0xffff;
     unsigned short imguiFontTextureIndex_ = 0xffff;

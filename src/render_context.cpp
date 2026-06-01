@@ -346,7 +346,7 @@ void RenderContext::pollEvents() {
     glfwPollEvents();
 }
 
-void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation) {
+void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation, PlayerComponent& player) {
     if (!window_) {
         return;
     }
@@ -377,28 +377,48 @@ void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3
     cameraYaw_ = rotation.y;
     cameraPitch_ = rotation.x;
 
-    constexpr float baseSpeed = 10.0f;
-    constexpr float sprintMultiplier = 5.0f;
+    const bool f4Down = glfwGetKey(window_, GLFW_KEY_F4) == GLFW_PRESS;
+    if (f4Down && !prevF4Down_) {
+        player.mode = player.mode == PlayerMode::Spectator ? PlayerMode::Survival : PlayerMode::Spectator;
+        logging::info("Switched player mode to {}", player.mode == PlayerMode::Spectator ? "spectator" : "survival");
+    }
+    prevF4Down_ = f4Down;
+
+    const bool spectatorMode = player.mode == PlayerMode::Spectator;
+    const float baseSpeed = spectatorMode ? player.spectatorMoveSpeed : player.survivalMoveSpeed;
+    const float sprintMultiplier = spectatorMode ? 5.0f : 1.6f;
     const bool sprinting = glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
     const float moveSpeed = sprinting ? baseSpeed * sprintMultiplier : baseSpeed;
     const float moveStep = moveSpeed * deltaTime;
+    glm::vec3 moveForward = forward();
+    glm::vec3 moveRight = right();
+    if (!spectatorMode) {
+        moveForward.y = 0.0f;
+        moveRight.y = 0.0f;
+        if (glm::dot(moveForward, moveForward) > 0.0001f) {
+            moveForward = glm::normalize(moveForward);
+        }
+        if (glm::dot(moveRight, moveRight) > 0.0001f) {
+            moveRight = glm::normalize(moveRight);
+        }
+    }
 
     if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS) {
-        position += forward() * moveStep;
+        position += moveForward * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS) {
-        position -= forward() * moveStep;
+        position -= moveForward * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) {
-        position -= right() * moveStep;
+        position -= moveRight * moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) {
-        position += right() * moveStep;
+        position += moveRight * moveStep;
     }
-    if (glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS) {
+    if (spectatorMode && glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS) {
         position.y += moveStep;
     }
-    if (glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
+    if (spectatorMode && glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
         position.y -= moveStep;
     }
     if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {

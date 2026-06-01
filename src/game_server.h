@@ -13,14 +13,9 @@
 
 class ServerSystem;
 
-enum class EntryMode {
-    Spectator,
-    Player,
-};
-
 class GameServer {
 public:
-    explicit GameServer(EntryMode entryMode = EntryMode::Spectator);
+    explicit GameServer(PlayerMode entryMode = PlayerMode::Spectator);
     ~GameServer();
 
     ServerWorld& world() { return world_; }
@@ -29,9 +24,12 @@ public:
     void registerSystem(std::unique_ptr<ServerSystem> system);
     void update(float deltaTime);
 
-    entt::entity createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createPlayer(
+        const std::string& name,
+        uint32_t sessionId,
+        glm::vec3 position = glm::vec3(0.0f),
+        PlayerMode mode = PlayerMode::Survival);
     entt::entity createRobot(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
-    entt::entity createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position = glm::vec3(0.0f));
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
@@ -63,7 +61,7 @@ private:
 
     ServerWorld world_;
     std::vector<std::unique_ptr<ServerSystem>> systems_;
-    EntryMode entryMode_ = EntryMode::Spectator;
+    PlayerMode entryMode_ = PlayerMode::Spectator;
 
     asio::io_context ioContext_;
 

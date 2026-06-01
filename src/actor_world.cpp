@@ -7,7 +7,30 @@
 #include "entity.h"
 #include "log.h"
 
-entt::entity ActorWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position) {
+namespace {
+
+BoxColliderComponent createPlayerCollider() {
+    BoxColliderComponent collider;
+    collider.offset = glm::vec3(0.0f, 0.9f, 0.0f);
+    collider.size = glm::vec3(0.7f, 1.8f, 0.7f);
+    return collider;
+}
+
+}  // namespace
+
+entt::entity ActorWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+    return createPlayerEntity(name, sessionId, position, mode);
+}
+
+entt::entity ActorWorld::createRemotePlayer(const std::string& name, glm::vec3 position, PlayerMode mode) {
+    return createPlayerEntity(name, std::nullopt, position, mode);
+}
+
+entt::entity ActorWorld::createPlayerEntity(
+    const std::string& name,
+    std::optional<uint32_t> sessionId,
+    glm::vec3 position,
+    PlayerMode mode) {
     if (getEntityByName(name) != entt::null) {
         logging::error("Player '{}' already exists", name);
         return entt::null;
@@ -15,14 +38,32 @@ entt::entity ActorWorld::createPlayer(const std::string& name, uint32_t sessionI
     auto entity = registry_.create();
     registry_.emplace<NameComponent>(entity, name);
     registry_.emplace<TransformComponent>(entity, position);
-    registry_.emplace<PhysicsComponent>(entity);
-    registry_.emplace<BoxColliderComponent>(entity);
-    registry_.emplace<PlayerComponent>(entity);
-    registry_.emplace<MeshComponent>(entity, glm::vec4(0.18f, 0.42f, 0.85f, 1.0f), true);
-    registry_.emplace<SessionComponent>(entity, sessionId);
+    PlayerComponent player;
+    player.mode = mode;
+    registry_.emplace<PlayerComponent>(entity, player);
+    registry_.emplace<MeshComponent>(entity, glm::vec4(0.18f, 0.42f, 0.85f, 1.0f), mode == PlayerMode::Survival);
+    if (sessionId.has_value()) {
+        registry_.emplace<SessionComponent>(entity, *sessionId);
+    }
+    applyPlayerModeComponents(entity);
     nameToEntityMap_[name] = entity;
     updateEntityChunk(entity, position);
-    logging::info("Player '{}' created at ({}, {}, {}) session={}", name, position.x, position.y, position.z, sessionId);
+    if (sessionId.has_value()) {
+        logging::info("Player '{}' created at ({}, {}, {}) session={} mode={}",
+                      name,
+                      position.x,
+                      position.y,
+                      position.z,
+                      *sessionId,
+                      mode == PlayerMode::Spectator ? "spectator" : "survival");
+    } else {
+        logging::info("Remote player '{}' created at ({}, {}, {}) mode={}",
+                      name,
+                      position.x,
+                      position.y,
+                      position.z,
+                      mode == PlayerMode::Spectator ? "spectator" : "survival");
+    }
     return entity;
 }
 
@@ -45,22 +86,6 @@ entt::entity ActorWorld::createRobot(const std::string& name, glm::vec3 position
     return entity;
 }
 
-entt::entity ActorWorld::createSpectator(const std::string& name, uint32_t sessionId, glm::vec3 position) {
-    if (getEntityByName(name) != entt::null) {
-        logging::error("Spectator '{}' already exists", name);
-        return entt::null;
-    }
-    auto entity = registry_.create();
-    registry_.emplace<NameComponent>(entity, name);
-    registry_.emplace<TransformComponent>(entity, position);
-    registry_.emplace<SpectatorComponent>(entity);
-    registry_.emplace<SessionComponent>(entity, sessionId);
-    nameToEntityMap_[name] = entity;
-    updateEntityChunk(entity, position);
-    logging::info("Spectator '{}' created at ({}, {}, {}) session={}", name, position.x, position.y, position.z, sessionId);
-    return entity;
-}
-
 void ActorWorld::destroyEntity(entt::entity entity) {
     if (registry_.all_of<NameComponent>(entity)) {
         auto& nameComp = registry_.get<NameComponent>(entity);
@@ -79,6 +104,53 @@ void ActorWorld::destroyEntity(entt::entity entity) {
 entt::entity ActorWorld::getEntityByName(const std::string& name) const {
     auto it = nameToEntityMap_.find(name);
     return (it != nameToEntityMap_.end()) ? it->second : entt::null;
+}
+
+void ActorWorld::setPlayerMode(entt::entity entity, PlayerMode mode) {
+    if (!registry_.valid(entity) || !registry_.all_of<PlayerComponent>(entity)) {
+        return;
+    }
+
+    auto& player = registry_.get<PlayerComponent>(entity);
+    if (player.mode == mode) {
+        return;
+    }
+
+    player.mode = mode;
+    applyPlayerModeComponents(entity);
+}
+
+void ActorWorld::applyPlayerModeComponents(entt::entity entity) {
+    if (!registry_.valid(entity) || !registry_.all_of<PlayerComponent>(entity)) {
+        return;
+    }
+
+    const auto& player = registry_.get<PlayerComponent>(entity);
+    if (player.mode == PlayerMode::Spectator) {
+        if (registry_.all_of<PhysicsComponent>(entity)) {
+            registry_.remove<PhysicsComponent>(entity);
+        }
+        if (registry_.all_of<BoxColliderComponent>(entity)) {
+            registry_.remove<BoxColliderComponent>(entity);
+        }
+        if (registry_.all_of<MeshComponent>(entity)) {
+            registry_.get<MeshComponent>(entity).isVisible = false;
+        }
+        return;
+    }
+
+    if (!registry_.all_of<PhysicsComponent>(entity)) {
+        registry_.emplace<PhysicsComponent>(entity);
+    } else {
+        auto& physics = registry_.get<PhysicsComponent>(entity);
+        physics.velocity = glm::vec3(0.0f);
+        physics.acceleration = glm::vec3(0.0f);
+        physics.isGrounded = false;
+    }
+    registry_.emplace_or_replace<BoxColliderComponent>(entity, createPlayerCollider());
+    if (registry_.all_of<MeshComponent>(entity)) {
+        registry_.get<MeshComponent>(entity).isVisible = true;
+    }
 }
 
 void ActorWorld::updateEntityChunk(entt::entity entity, const glm::vec3& position) {
@@ -123,7 +195,7 @@ bool ActorWorld::unloadEntitiesInChunk(glm::ivec3 chunkPos) {
 
     auto entities = it->second;
     for (auto entity : entities) {
-        // Don't destroy entities with sessions (players/spectators) when their chunk unloads
+        // Don't destroy session-owned players when their chunk unloads.
         if (registry_.all_of<SessionComponent>(entity)) {
             continue;
         }
