@@ -1,5 +1,7 @@
 #pragma once
 
+#include <flatbuffers/flatbuffers.h>
+
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
@@ -61,5 +63,5 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
 std::vector<uint8_t> serializeClientInput(const NetClientInput& input);
 bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outInput);
 
-std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot);
+std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder);
 bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapshot);

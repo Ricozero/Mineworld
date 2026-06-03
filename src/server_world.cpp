@@ -2,6 +2,13 @@
 
 #include "profiler.h"
 
+namespace {
+
+constexpr glm::ivec3 kWorldMin{-1024, -256, -1024};
+constexpr glm::ivec3 kWorldMax{1024, 256, 1024};
+
+}  // namespace
+
 Chunk& ServerWorld::getChunk(glm::ivec3 chunkPos) {
     return voxelWorld_.getChunk(chunkPos);
 }
@@ -36,11 +43,11 @@ bool ServerWorld::unloadChunk(glm::ivec3 chunkPos) {
 }
 
 bool ServerWorld::isChunkInBounds(glm::ivec3 chunkPos) const {
-    const glm::ivec3 minChunk = Chunk::worldToChunk(glm::ivec3(-1024, -256, -1024));
-    const glm::ivec3 maxChunk = Chunk::worldToChunk(glm::ivec3(1023, 255, 1023));
-    return chunkPos.x >= minChunk.x && chunkPos.x <= maxChunk.x &&
-           chunkPos.y >= minChunk.y && chunkPos.y <= maxChunk.y &&
-           chunkPos.z >= minChunk.z && chunkPos.z <= maxChunk.z;
+    const glm::ivec3 minChunk = Chunk::worldToChunk(kWorldMin);
+    const glm::ivec3 maxChunk = Chunk::worldToChunk(kWorldMax);
+    return chunkPos.x >= minChunk.x && chunkPos.x < maxChunk.x &&
+           chunkPos.y >= minChunk.y && chunkPos.y < maxChunk.y &&
+           chunkPos.z >= minChunk.z && chunkPos.z < maxChunk.z;
 }
 
 std::vector<glm::ivec3> ServerWorld::getLoadedChunks() const {
@@ -91,7 +98,7 @@ BlockData ServerWorld::generateBlock(glm::ivec3 worldPos) const {
 }
 
 bool ServerWorld::isBlockInBounds(glm::ivec3 worldPos) const {
-    return worldPos.x >= -1024 && worldPos.x <= 1023 &&
-           worldPos.y >= -256 && worldPos.y <= 255 &&
-           worldPos.z >= -1024 && worldPos.z <= 1023;
+    return worldPos.x >= kWorldMin.x && worldPos.x < kWorldMax.x &&
+           worldPos.y >= kWorldMin.y && worldPos.y < kWorldMax.y &&
+           worldPos.z >= kWorldMin.z && worldPos.z < kWorldMax.z;
 }

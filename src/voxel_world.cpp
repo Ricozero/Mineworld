@@ -3,7 +3,6 @@
 #include <glm/gtx/string_cast.hpp>
 
 #include "helper.h"
-#include "log.h"
 
 Chunk& VoxelWorld::getChunk(glm::ivec3 chunkPos) {
     auto it = chunks_.find(chunkPos);
@@ -46,7 +45,6 @@ BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
     auto it = chunks_.find(Chunk::worldToChunk(worldPos));
     if (it == chunks_.end()) {
-        logging::error("Attempted to get block at {}", glm::to_string(worldPos));
         return BlockData{BlockType::Air, BlockOrientation::North};
     }
     return it->second->getBlock(localPos);

@@ -156,8 +156,8 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
     return true;
 }
 
-std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot) {
-    flatbuffers::FlatBufferBuilder builder;
+std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder) {
+    builder.Reset();
 
     std::vector<flatbuffers::Offset<mineworld::net::ActorState>> actorOffsets;
     actorOffsets.reserve(snapshot.actors.size());
@@ -212,8 +212,10 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot) {
         mineworld::net::NetMessagePayload::Snapshot,
         snapshotOffset.Union());
 
-    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
-    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+    mineworld::net::FinishNetMessageBuffer(builder, msg);
+    const uint8_t* bufPtr = builder.GetBufferPointer();
+    const size_t bufSize = builder.GetSize();
+    return std::vector<uint8_t>(bufPtr, bufPtr + bufSize);
 }
 
 bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapshot) {

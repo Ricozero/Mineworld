@@ -25,6 +25,13 @@ public:
 
     std::vector<glm::ivec3> getLoadedChunks() const;
 
+    template <typename Func>
+    void forEachLoadedChunk(Func&& func) const {
+        for (const auto& [chunkPos, _] : chunks_) {
+            func(chunkPos);
+        }
+    }
+
 private:
     std::unordered_map<glm::ivec3, std::unique_ptr<Chunk>> chunks_;
 };

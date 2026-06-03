@@ -11,8 +11,6 @@
 
 namespace {
 
-constexpr PlayerMode kLocalEntryMode = PlayerMode::Spectator;
-
 enum class RunMode {
     Combined,
     ClientOnly,
@@ -41,7 +39,7 @@ RunMode parseRunMode(int argc, char* argv[]) {
 
 bool initializeServer(std::unique_ptr<GameServer>& server) {
     logging::Scope logScope(logging::Channel::Server);
-    server = std::make_unique<GameServer>(kLocalEntryMode);
+    server = std::make_unique<GameServer>();
 
     // Create robots (AI-controlled entities)
     auto steve = server->createRobot("Steve", glm::vec3(8.0f, 1.0f, 8.0f));

@@ -40,7 +40,6 @@ BlockData Chunk::getBlock(glm::ivec3 localPos) const {
     if (isValidLocalPosition(localPos)) {
         return blocks_[localPos.x][localPos.y][localPos.z];
     } else {
-        logging::error("Attempted to get block at {}", glm::to_string(localToWorld(localPos)));
         return BlockData{BlockType::Air, BlockOrientation::North};
     }
 }

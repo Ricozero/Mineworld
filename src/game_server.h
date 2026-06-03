@@ -1,10 +1,15 @@
 #pragma once
 
+#include <flatbuffers/flatbuffers.h>
+
 #include <asio.hpp>
 #include <cstdint>
 #include <deque>
+#include <glm/glm.hpp>
+#include <glm/gtx/hash.hpp>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "net_channel.h"
@@ -15,7 +20,7 @@ class ServerSystem;
 
 class GameServer {
 public:
-    explicit GameServer(PlayerMode entryMode = PlayerMode::Spectator);
+    GameServer();
     ~GameServer();
 
     ServerWorld& world() { return world_; }
@@ -42,16 +47,23 @@ private:
         bool initialSnapshotSent = false;
         bool helloReceived = false;
         std::string actorName;
+
+        glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
+        std::unordered_set<glm::ivec3> cachedVisibleChunks;
+
+        std::vector<glm::ivec3> pendingDirtyChunks;
         std::vector<NetChunkState> pendingChunkUpdates;
         std::deque<NetBlockState> pendingBlockUpdates;
+
+        flatbuffers::FlatBufferBuilder snapshotBuilder{8192};
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
     NetSnapshot buildSnapshot(Session& session, bool forceFullChunkState);
     void updateVisibleChunks();
+    void updateSessionVisibleChunks(Session& session);
 
     void queueChunkBlockSnapshot(glm::ivec3 chunkPos, Session& session);
-    void queueLoadedBlockSnapshots(Session& session, const std::unordered_set<glm::ivec3>& visibleChunks = {});
     void pumpNetwork();
 
     void onSessionConnect(uint32_t sessionId);
@@ -61,7 +73,6 @@ private:
 
     ServerWorld world_;
     std::vector<std::unique_ptr<ServerSystem>> systems_;
-    PlayerMode entryMode_ = PlayerMode::Spectator;
 
     asio::io_context ioContext_;
 
