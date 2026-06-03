@@ -7,11 +7,15 @@
 
 ## 计划
 
-### BUG
+### BUG/优先
 
 - 区块生成/显示应从近到远
 - 站着不动，有的区块会长时间不显示
 - 修改isBlockInBounds范围
+- profiler列宽一直动，各部分不一致，列表太长
+- F5切换视角
+- 入口改成Server/Client，从Client选择连接或者内建Server
+- Actor增量化同步
 
 ### 架构
 

@@ -35,7 +35,7 @@ void GameClient::registerSystem(std::unique_ptr<ClientSystem> system) {
 
 void GameClient::update(float deltaTime) {
     logging::Scope logScope(logging::Channel::Client);
-    profiling::ScopedTimer timer("Client.Update");
+    MW_PROFILE_SCOPE("Client.Update");
 
     pumpNetwork();
 
@@ -51,6 +51,8 @@ void GameClient::update(float deltaTime) {
 }
 
 void GameClient::pumpNetwork() {
+    MW_PROFILE_SCOPE("Client.PumpNetwork");
+
     if (!channel_) {
         return;
     }
@@ -65,6 +67,9 @@ void GameClient::pumpNetwork() {
 
     std::vector<uint8_t> packet;
     while (channel_->popPacket(packet)) {
+        MW_PROFILE_COUNTER("Net.ClientPacketsIn", 1);
+        MW_PROFILE_COUNTER("Net.ClientBytesIn", static_cast<int64_t>(packet.size()));
+
         // Try ServerHello first
         NetServerHello hello;
         if (deserializeServerHello(packet, hello)) {
@@ -140,6 +145,8 @@ void GameClient::sendInputToServer() {
 }
 
 void GameClient::replaySnapshots() {
+    MW_PROFILE_SCOPE("Client.ReplaySnapshots");
+
     if (snapshotBuffer_.empty()) {
         return;
     }
@@ -155,6 +162,11 @@ void GameClient::replaySnapshots() {
 }
 
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
+    MW_PROFILE_SCOPE("Client.ApplySnapshot");
+    MW_PROFILE_COUNTER("Net.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
+    MW_PROFILE_COUNTER("Net.SnapshotBlocks", static_cast<int64_t>(snapshot.blocks.size()));
+    MW_PROFILE_COUNTER("Net.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
+
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
             world_.loadChunk(chunk.chunkPos);

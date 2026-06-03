@@ -7,6 +7,7 @@
 
 #include "client_world.h"
 #include "entity.h"
+#include "profiler.h"
 #include "render_context.h"
 #include "server_world.h"
 
@@ -79,6 +80,8 @@ InputSystem::InputSystem(RenderContext* renderContext, uint32_t localSessionId)
 }
 
 void InputSystem::update(ClientWorld& world, float deltaTime) {
+    MW_PROFILE_SCOPE("System.Input");
+
     if (!renderContext_) {
         return;
     }
@@ -104,6 +107,8 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
 }
 
 void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
+    MW_PROFILE_SCOPE("System.Physics");
+
     auto& registry = world.getActorWorld().registry();
     applyGravity(registry, deltaTime);
     updateMovement(world, deltaTime);
@@ -116,6 +121,8 @@ void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
 }
 
 void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
+    MW_PROFILE_SCOPE("System.Physics.Gravity");
+
     auto view = registry.view<PhysicsComponent, TransformComponent>();
 
     for (auto entity : view) {
@@ -130,6 +137,8 @@ void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
 }
 
 void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
+    MW_PROFILE_SCOPE("System.Physics.Movement");
+
     auto& registry = world.getActorWorld().registry();
 
     // Update random movement for robots
@@ -172,6 +181,8 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
 }
 
 void PhysicsSystem::moveWithCollision(ServerWorld& world, entt::entity entity, float deltaTime) {
+    MW_PROFILE_SCOPE("System.Physics.Collision");
+
     auto& registry = world.getActorWorld().registry();
     auto& transform = registry.get<TransformComponent>(entity);
     auto& physics = registry.get<PhysicsComponent>(entity);
@@ -217,6 +228,8 @@ RenderSystem::RenderSystem(RenderContext* renderContext, uint32_t localSessionId
 }
 
 void RenderSystem::update(ClientWorld& world, float deltaTime) {
+    MW_PROFILE_SCOPE("System.Render");
+
     if (!renderContext_) {
         return;
     }

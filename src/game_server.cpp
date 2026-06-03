@@ -83,7 +83,7 @@ void GameServer::registerSystem(std::unique_ptr<ServerSystem> system) {
 
 void GameServer::update(float deltaTime) {
     logging::Scope logScope(logging::Channel::Server);
-    profiling::ScopedTimer timer("Server.Update");
+    MW_PROFILE_SCOPE("Server.Update");
 
     pumpNetwork();
     for (auto& system : systems_) {
@@ -108,6 +108,8 @@ void GameServer::update(float deltaTime) {
 
         std::vector<uint8_t> payload;
         payload = serializeSnapshot(snapshot);
+        MW_PROFILE_COUNTER("Net.ServerSnapshotsOut", 1);
+        MW_PROFILE_COUNTER("Net.ServerBytesOut", static_cast<int64_t>(payload.size()));
         server_->sendTo(sessionId, payload);
     }
 }
@@ -176,6 +178,8 @@ GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
 }
 
 NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState) {
+    MW_PROFILE_SCOPE("Server.BuildSnapshot");
+
     NetSnapshot snapshot;
 
     snapshot.sequence = ++session.snapshotSequence;
@@ -284,6 +288,8 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
 }
 
 void GameServer::updateVisibleChunks() {
+    MW_PROFILE_SCOPE("Server.UpdateVisibleChunks");
+
     std::unordered_set<glm::ivec3> desiredChunks;
 
     auto& registry = world_.getActorWorld().registry();
@@ -347,6 +353,8 @@ void GameServer::updateVisibleChunks() {
 }
 
 void GameServer::queueChunkBlockSnapshot(glm::ivec3 chunkPos, Session& session) {
+    MW_PROFILE_SCOPE("Server.QueueChunkBlocks");
+
     const Chunk& chunk = world_.getChunk(chunkPos);
     for (int x = 0; x < Chunk::SIZE; ++x) {
         for (int y = 0; y < Chunk::SIZE; ++y) {
@@ -376,6 +384,8 @@ void GameServer::queueLoadedBlockSnapshots(Session& session, const std::unordere
 }
 
 void GameServer::pumpNetwork() {
+    MW_PROFILE_SCOPE("Server.PumpNetwork");
+
     if (!server_) {
         return;
     }
@@ -389,6 +399,9 @@ void GameServer::onSessionConnect(uint32_t sessionId) {
 }
 
 void GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
+    MW_PROFILE_COUNTER("Net.ServerPacketsIn", 1);
+    MW_PROFILE_COUNTER("Net.ServerBytesIn", static_cast<int64_t>(packet.size()));
+
     if (deserializeClientHello(packet)) {
         onClientHello(sessionId);
         return;

@@ -66,6 +66,8 @@ bool initializeClient(std::unique_ptr<GameClient>& client, std::unique_ptr<Rende
 }
 
 int runServerOnly() {
+    profiling::Profiler::instance().setThreadName("ServerMain");
+
     std::unique_ptr<GameServer> server;
     if (!initializeServer(server)) {
         return 1;
@@ -74,7 +76,7 @@ int runServerOnly() {
 
     logging::info("Dedicated server started");
     for (;;) {
-        profiling::ScopedTimer frameTimer("Frame.Total");
+        MW_PROFILE_SCOPE("Frame.Total");
 
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
@@ -84,6 +86,8 @@ int runServerOnly() {
 }
 
 int runClientOnly() {
+    profiling::Profiler::instance().setThreadName("ClientMain");
+
     std::unique_ptr<GameClient> client;
     std::unique_ptr<RenderContext> renderContext;
     if (!initializeClient(client, renderContext)) {
@@ -92,7 +96,7 @@ int runClientOnly() {
 
     auto previousTime = std::chrono::steady_clock::now();
     while (!renderContext->shouldClose()) {
-        profiling::ScopedTimer frameTimer("Frame.Total");
+        MW_PROFILE_SCOPE("Frame.Total");
 
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
@@ -105,6 +109,8 @@ int runClientOnly() {
 }
 
 int runCombined() {
+    profiling::Profiler::instance().setThreadName("Main");
+
     std::unique_ptr<GameServer> server;
     if (!initializeServer(server)) {
         return 1;
@@ -118,7 +124,7 @@ int runCombined() {
 
     auto previousTime = std::chrono::steady_clock::now();
     while (!renderContext->shouldClose()) {
-        profiling::ScopedTimer frameTimer("Frame.Total");
+        MW_PROFILE_SCOPE("Frame.Total");
 
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;

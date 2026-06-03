@@ -57,14 +57,19 @@ private:
     void buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, CachedChunkMesh& outMesh);
 
     GLFWwindow* window_ = nullptr;
-    int width_ = 1280;
-    int height_ = 720;
+    int framebufferWidth_ = 1280;
+    int framebufferHeight_ = 720;
+    int windowWidth_ = 1280;
+    int windowHeight_ = 720;
+    float framebufferScaleX_ = 1.0f;
+    float framebufferScaleY_ = 1.0f;
     glm::vec3 cameraPosition_{8.0f, 6.0f, 24.0f};
     float cameraYaw_ = -90.0f;
     float cameraPitch_ = -12.0f;
     double lastMouseX_ = 0.0;
     double lastMouseY_ = 0.0;
     bool hasMousePosition_ = false;
+    bool mouseCaptured_ = true;
     bool bgfxInitialized_ = false;
     bool showProfiler_ = false;
     enum class CursorMode { None,

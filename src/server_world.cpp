@@ -64,7 +64,8 @@ entt::entity ServerWorld::getEntityByName(const std::string& name) const {
 }
 
 void ServerWorld::generateChunk(Chunk& chunk) const {
-    profiling::ScopedTimer timer("Server.GenerateChunk");
+    MW_PROFILE_SCOPE("Server.GenerateChunk");
+    MW_PROFILE_COUNTER("World.ChunksGenerated", 1);
 
     for (int x = 0; x < Chunk::SIZE; ++x) {
         for (int y = 0; y < Chunk::SIZE; ++y) {

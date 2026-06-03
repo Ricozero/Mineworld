@@ -27,6 +27,7 @@ namespace {
 
 constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
+constexpr uint32_t kResetFlags = BGFX_RESET_VSYNC;
 
 struct PosColorVertex {
     float x;
@@ -175,6 +176,8 @@ void addLineBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color
 }
 
 void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
+    MW_PROFILE_SCOPE("Render.SubmitLineBatch");
+
     if (mesh.vertices.empty() || mesh.indices.empty()) {
         return;
     }
@@ -196,6 +199,9 @@ void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
         bgfx::setIndexBuffer(&indexBuffer);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_PT_LINES);
         bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex});
+        MW_PROFILE_COUNTER("Render.LineSubmits", 1);
+        MW_PROFILE_COUNTER("Render.LineVertices", static_cast<int64_t>(vertexCount));
+        MW_PROFILE_COUNTER("Render.LineIndices", static_cast<int64_t>(indexCount));
     }
 }
 
@@ -232,7 +238,39 @@ const char* shaderDirectoryForRenderer(bgfx::RendererType::Enum renderer) {
     }
 }
 
+double timestampRangeMs(int64_t begin, int64_t end, int64_t frequency) {
+    if (frequency <= 0 || end <= begin) {
+        return 0.0;
+    }
+    return static_cast<double>(end - begin) * 1000.0 / static_cast<double>(frequency);
+}
+
+double timestampMs(int64_t value, int64_t frequency) {
+    if (frequency <= 0 || value <= 0) {
+        return 0.0;
+    }
+    return static_cast<double>(value) * 1000.0 / static_cast<double>(frequency);
+}
+
+void recordBgfxStats(const bgfx::Stats* stats) {
+    if (!stats) {
+        return;
+    }
+
+    profiling::Profiler& profiler = profiling::Profiler::instance();
+    profiler.setGauge("BGFX.CPUFrameMs", timestampMs(stats->cpuTimeFrame, stats->cpuTimerFreq));
+    profiler.setGauge("BGFX.CPUSubmitMs", timestampRangeMs(stats->cpuTimeBegin, stats->cpuTimeEnd, stats->cpuTimerFreq));
+    profiler.setGauge("BGFX.GPUFrameMs", timestampRangeMs(stats->gpuTimeBegin, stats->gpuTimeEnd, stats->gpuTimerFreq));
+    profiler.setGauge("BGFX.WaitRenderMs", timestampMs(stats->waitRender, stats->cpuTimerFreq));
+    profiler.setGauge("BGFX.WaitSubmitMs", timestampMs(stats->waitSubmit, stats->cpuTimerFreq));
+    profiler.setGauge("BGFX.DrawCalls", static_cast<double>(stats->numDraw));
+    profiler.setGauge("BGFX.TransientVB", static_cast<double>(stats->transientVbUsed));
+    profiler.setGauge("BGFX.TransientIB", static_cast<double>(stats->transientIbUsed));
+}
+
 void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
+    MW_PROFILE_SCOPE("Render.SubmitMeshBatch");
+
     if (mesh.vertices.empty() || mesh.indices.empty()) {
         return;
     }
@@ -254,6 +292,9 @@ void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
         bgfx::setIndexBuffer(&indexBuffer);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
         bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex});
+        MW_PROFILE_COUNTER("Render.MeshSubmits", 1);
+        MW_PROFILE_COUNTER("Render.MeshVertices", static_cast<int64_t>(vertexCount));
+        MW_PROFILE_COUNTER("Render.MeshIndices", static_cast<int64_t>(indexCount));
     }
 }
 
@@ -264,8 +305,10 @@ RenderContext::~RenderContext() {
 }
 
 bool RenderContext::initialize(int width, int height, const char* title) {
-    width_ = width;
-    height_ = height;
+    framebufferWidth_ = width;
+    framebufferHeight_ = height;
+    windowWidth_ = width;
+    windowHeight_ = height;
 
     if (!glfwInit()) {
         logging::error("Failed to initialize GLFW");
@@ -273,7 +316,7 @@ bool RenderContext::initialize(int width, int height, const char* title) {
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    window_ = glfwCreateWindow(width_, height_, title, nullptr, nullptr);
+    window_ = glfwCreateWindow(windowWidth_, windowHeight_, title, nullptr, nullptr);
     if (!window_) {
         logging::error("Failed to create GLFW window");
         glfwTerminate();
@@ -283,9 +326,9 @@ bool RenderContext::initialize(int width, int height, const char* title) {
     bgfx::Init init;
     init.type = bgfx::RendererType::Direct3D11;
     init.platformData.nwh = glfwGetWin32Window(window_);
-    init.resolution.width = static_cast<uint32_t>(width_);
-    init.resolution.height = static_cast<uint32_t>(height_);
-    init.resolution.reset = BGFX_RESET_VSYNC;
+    init.resolution.width = static_cast<uint32_t>(framebufferWidth_);
+    init.resolution.height = static_cast<uint32_t>(framebufferHeight_);
+    init.resolution.reset = kResetFlags;
     if (!bgfx::init(init)) {
         logging::error("Failed to initialize bgfx");
         glfwDestroyWindow(window_);
@@ -343,15 +386,65 @@ bool RenderContext::shouldClose() const {
 }
 
 void RenderContext::pollEvents() {
+    MW_PROFILE_SCOPE("Client.PollEvents");
+
     glfwPollEvents();
 }
 
 void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation, PlayerComponent& player) {
+    MW_PROFILE_SCOPE("Client.ProcessInput");
+
     if (!window_) {
         return;
     }
 
     deltaTime = std::clamp(deltaTime, 0.0f, 0.05f);
+
+    // Hold Alt to release mouse, release Alt to recapture
+    const bool altHeld = glfwGetKey(window_, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
+                         glfwGetKey(window_, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+
+    if (altHeld && mouseCaptured_) {
+        // Release mouse
+        mouseCaptured_ = false;
+        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    } else if (!altHeld && !mouseCaptured_) {
+        // Recapture mouse
+        mouseCaptured_ = true;
+        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        hasMousePosition_ = false;  // prevent camera jump on recapture
+    }
+
+    // While mouse is released, only handle Escape and function keys
+    if (!mouseCaptured_) {
+        if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+        }
+
+        const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
+        if (f1Down && !prevF1Down_) {
+            showProfiler_ = !showProfiler_;
+        }
+        prevF1Down_ = f1Down;
+
+        const bool f2Down = glfwGetKey(window_, GLFW_KEY_F2) == GLFW_PRESS;
+        if (f2Down && !prevF2Down_) {
+            cursorMode_ = (cursorMode_ == CursorMode::None)
+                              ? CursorMode::Cross
+                          : (cursorMode_ == CursorMode::Cross)
+                              ? CursorMode::XYZ
+                              : CursorMode::None;
+        }
+        prevF2Down_ = f2Down;
+
+        const bool f3Down = glfwGetKey(window_, GLFW_KEY_F3) == GLFW_PRESS;
+        if (f3Down && !prevF3Down_) {
+            showChunkBounds_ = !showChunkBounds_;
+        }
+        prevF3Down_ = f3Down;
+
+        return;
+    }
 
     double mouseX = 0.0;
     double mouseY = 0.0;
@@ -458,7 +551,7 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch)
 }
 
 void RenderContext::render(const ClientWorld& world) {
-    profiling::ScopedTimer timer("Client.Render");
+    MW_PROFILE_SCOPE("Client.Render");
 
     if (!window_ || !bgfxInitialized_) {
         return;
@@ -474,11 +567,30 @@ void RenderContext::render(const ClientWorld& world) {
     lastRenderTime_ = now;
     hasLastRenderTime_ = true;
 
-    glfwGetFramebufferSize(window_, &width_, &height_);
-    width_ = std::max(width_, 1);
-    height_ = std::max(height_, 1);
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 
-    bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(width_), static_cast<uint16_t>(height_));
+    windowWidth = std::max(windowWidth, 1);
+    windowHeight = std::max(windowHeight, 1);
+    framebufferWidth = std::max(framebufferWidth, 1);
+    framebufferHeight = std::max(framebufferHeight, 1);
+
+    if (framebufferWidth != framebufferWidth_ || framebufferHeight != framebufferHeight_) {
+        bgfx::reset(static_cast<uint32_t>(framebufferWidth), static_cast<uint32_t>(framebufferHeight), kResetFlags);
+    }
+
+    framebufferWidth_ = framebufferWidth;
+    framebufferHeight_ = framebufferHeight;
+    windowWidth_ = windowWidth;
+    windowHeight_ = windowHeight;
+    framebufferScaleX_ = static_cast<float>(framebufferWidth) / static_cast<float>(windowWidth);
+    framebufferScaleY_ = static_cast<float>(framebufferHeight) / static_cast<float>(windowHeight);
+
+    bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x87bdf2ff, 1.0f, 0);
 
     const glm::vec3 target = cameraPosition_ + forward();
@@ -490,7 +602,7 @@ void RenderContext::render(const ClientWorld& world) {
     bx::mtxProj(
         projection,
         70.0f,
-        static_cast<float>(width_) / height_,
+        static_cast<float>(framebufferWidth_) / framebufferHeight_,
         0.1f,
         500.0f,
         bgfx::getCaps()->homogeneousDepth,
@@ -499,6 +611,8 @@ void RenderContext::render(const ClientWorld& world) {
     bgfx::touch(kMainView);
 
     renderWorld(world);
+
+    recordBgfxStats(bgfx::getStats());
 
     if (showProfiler_) {
         renderProfilerOverlay(deltaTime);
@@ -655,18 +769,24 @@ void RenderContext::shutdownImGui() {
 }
 
 void RenderContext::renderWorld(const ClientWorld& world) {
+    MW_PROFILE_SCOPE("Render.World");
+
     const VoxelWorld& voxelWorld = world.getVoxelWorld();
     const auto loadedChunks = voxelWorld.getLoadedChunks();
+    MW_PROFILE_GAUGE("World.LoadedChunks", static_cast<double>(loadedChunks.size()));
 
     // Remove cached meshes for unloaded chunks
     std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
-    for (auto it = chunkMeshCache_.begin(); it != chunkMeshCache_.end();) {
-        if (loadedSet.find(it->first) == loadedSet.end()) {
-            chunkBlockCounts_.erase(it->first);
-            it = chunkMeshCache_.erase(it);
-        } else {
-            ++it;
+    std::vector<glm::ivec3> staleChunks;
+    staleChunks.reserve(chunkMeshCache_.size());
+    for (const auto& [chunkPos, _] : chunkMeshCache_) {
+        if (loadedSet.find(chunkPos) == loadedSet.end()) {
+            staleChunks.push_back(chunkPos);
         }
+    }
+    for (const glm::ivec3& chunkPos : staleChunks) {
+        chunkBlockCounts_.erase(chunkPos);
+        chunkMeshCache_.erase(chunkPos);
     }
 
     // Build/update cached meshes per chunk (only when dirty)
@@ -704,10 +824,14 @@ void RenderContext::renderWorld(const ClientWorld& world) {
         if (needsRebuild) {
             CachedChunkMesh cachedMesh;
             buildChunkMesh(world, chunkPos, cachedMesh);
+            MW_PROFILE_COUNTER("Chunk.MeshRebuilds", 1);
+            MW_PROFILE_COUNTER("Chunk.MeshBuildVertices", static_cast<int64_t>(cachedMesh.vertexCount));
+            MW_PROFILE_COUNTER("Chunk.MeshBuildIndices", static_cast<int64_t>(cachedMesh.indices.size()));
             chunkBlockCounts_[chunkPos] = blockCount;
             chunkMeshCache_[chunkPos] = std::move(cachedMesh);
         }
     }
+    MW_PROFILE_GAUGE("Chunk.MeshCacheSize", static_cast<double>(chunkMeshCache_.size()));
 
     // Submit chunk meshes in batches
     MeshBuilder currentBatch;
@@ -748,6 +872,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     // Render entities based on MeshComponent
     const auto& registry = world.getActorWorld().registry();
     auto viewEntities = registry.view<TransformComponent, MeshComponent>();
+    MW_PROFILE_GAUGE("World.VisibleEntities", static_cast<double>(viewEntities.size_hint()));
     for (auto entity : viewEntities) {
         const auto& meshComp = registry.get<MeshComponent>(entity);
         if (!meshComp.isVisible) {
@@ -782,22 +907,30 @@ void RenderContext::renderWorld(const ClientWorld& world) {
 }
 
 void RenderContext::renderProfilerOverlay(float deltaTime) {
+    MW_PROFILE_SCOPE("Overlay.Profiler");
+
     if (!imguiContext_) {
         return;
     }
 
     ImGui::SetCurrentContext(imguiContext_);
     ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(static_cast<float>(width_), static_cast<float>(height_));
-    io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+    io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
+    io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
     io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
 
     ImGui::NewFrame();
     const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot();
+    const bgfx::Stats* stats = bgfx::getStats();
+    const double bgfxCpuFrameMs = stats ? timestampMs(stats->cpuTimeFrame, stats->cpuTimerFreq) : 0.0;
+    const double bgfxCpuSubmitMs = stats ? timestampRangeMs(stats->cpuTimeBegin, stats->cpuTimeEnd, stats->cpuTimerFreq) : 0.0;
+    const double bgfxGpuFrameMs = stats ? timestampRangeMs(stats->gpuTimeBegin, stats->gpuTimeEnd, stats->gpuTimerFreq) : 0.0;
+    const double waitRenderMs = stats ? timestampMs(stats->waitRender, stats->cpuTimerFreq) : 0.0;
+    const double waitSubmitMs = stats ? timestampMs(stats->waitSubmit, stats->cpuTimerFreq) : 0.0;
 
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.70f);
+    ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.82f);
     constexpr ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_NoSavedSettings |
@@ -805,36 +938,119 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
         ImGuiWindowFlags_NoNav;
 
     if (ImGui::Begin("ProfilerOverlay", nullptr, flags)) {
-        ImGui::Text("Pos: %.2f, %.2f, %.2f", cameraPosition_.x, cameraPosition_.y, cameraPosition_.z);
         glm::ivec3 chunkCoord = Chunk::worldToChunk(glm::ivec3(
             static_cast<int>(std::floor(cameraPosition_.x)),
             static_cast<int>(std::floor(cameraPosition_.y)),
             static_cast<int>(std::floor(cameraPosition_.z))));
-        ImGui::Text("Chunk: %d, %d, %d", chunkCoord.x, chunkCoord.y, chunkCoord.z);
+        ImGui::Text("Pos: %.2f, %.2f, %.2f | Chunk %d, %d, %d",
+                    cameraPosition_.x, cameraPosition_.y, cameraPosition_.z, chunkCoord.x, chunkCoord.y, chunkCoord.z);
+        ImGui::Text("Frame %llu | FPS %5.1f | CPU %6.2f ms | Renderer %s",
+                    static_cast<unsigned long long>(snapshot.frameIndex), snapshot.fps, snapshot.frameMs, bgfx::getRendererName(bgfx::getRendererType()));
         ImGui::Separator();
 
-        ImGui::Text("FPS %6.1f | Total %6.1f ms", snapshot.fps, snapshot.frameMs);
-        ImGui::Separator();
-        ImGui::Columns(3, "ProfilerColumns", false);
-        ImGui::SetColumnWidth(0, 160.0f);
-        ImGui::SetColumnWidth(1, 80.0f);
-        ImGui::SetColumnWidth(2, 80.0f);
-        ImGui::TextUnformatted("Step");
-        ImGui::NextColumn();
-        ImGui::TextUnformatted("Last");
-        ImGui::NextColumn();
-        ImGui::TextUnformatted("Avg");
-        ImGui::NextColumn();
-        ImGui::Separator();
-        for (const profiling::Entry& entry : snapshot.entries) {
-            ImGui::TextUnformatted(entry.name.c_str());
-            ImGui::NextColumn();
-            ImGui::Text("%6.1f", entry.lastMs);
-            ImGui::NextColumn();
-            ImGui::Text("%6.1f", entry.averageMs);
-            ImGui::NextColumn();
+        if (ImGui::BeginTable("BgfxStats", 5, ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("CPU frame");
+            ImGui::TableSetupColumn("CPU submit");
+            ImGui::TableSetupColumn("GPU frame");
+            ImGui::TableSetupColumn("Draws");
+            ImGui::TableSetupColumn("Wait");
+            ImGui::TableHeadersRow();
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%6.2f ms", bgfxCpuFrameMs);
+            ImGui::TableNextColumn();
+            ImGui::Text("%6.2f ms", bgfxCpuSubmitMs);
+            ImGui::TableNextColumn();
+            ImGui::Text("%6.2f ms", bgfxGpuFrameMs);
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", stats ? stats->numDraw : 0);
+            ImGui::TableNextColumn();
+            ImGui::Text("R %.2f / S %.2f", waitRenderMs, waitSubmitMs);
+            ImGui::EndTable();
         }
-        ImGui::Columns(1);
+
+        ImGui::SeparatorText("Top CPU Scopes");
+        if (ImGui::BeginTable("ProfilerScopes", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Scope");
+            ImGui::TableSetupColumn("Frame");
+            ImGui::TableSetupColumn("Avg");
+            ImGui::TableSetupColumn("Calls");
+            ImGui::TableSetupColumn("Max");
+            ImGui::TableHeadersRow();
+
+            int rows = 0;
+            for (const profiling::ScopeEntry& entry : snapshot.scopes) {
+                if (entry.name == "Frame.Total" || entry.lastFrameMs <= 0.0) {
+                    continue;
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(entry.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%6.2f", entry.lastFrameMs);
+                ImGui::TableNextColumn();
+                ImGui::Text("%6.2f", entry.averageFrameMs);
+                ImGui::TableNextColumn();
+                ImGui::Text("%llu", static_cast<unsigned long long>(entry.lastFrameCalls));
+                ImGui::TableNextColumn();
+                ImGui::Text("%6.2f", entry.maxMs);
+                if (++rows >= 8) {
+                    break;
+                }
+            }
+            ImGui::EndTable();
+        }
+
+        ImGui::SeparatorText("Counters");
+        if (ImGui::BeginTable("ProfilerCounters", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Counter");
+            ImGui::TableSetupColumn("Frame");
+            ImGui::TableSetupColumn("Avg");
+            ImGui::TableSetupColumn("Total");
+            ImGui::TableHeadersRow();
+
+            int rows = 0;
+            for (const profiling::CounterEntry& entry : snapshot.counters) {
+                if (entry.lastFrameValue == 0 && entry.totalValue == 0) {
+                    continue;
+                }
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(entry.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%lld", static_cast<long long>(entry.lastFrameValue));
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f", entry.averageFrameValue);
+                ImGui::TableNextColumn();
+                ImGui::Text("%lld", static_cast<long long>(entry.totalValue));
+                if (++rows >= 8) {
+                    break;
+                }
+            }
+            ImGui::EndTable();
+        }
+
+        ImGui::SeparatorText("Gauges");
+        if (ImGui::BeginTable("ProfilerGauges", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Gauge");
+            ImGui::TableSetupColumn("Now");
+            ImGui::TableSetupColumn("Avg");
+            ImGui::TableSetupColumn("Peak");
+            ImGui::TableHeadersRow();
+
+            for (const profiling::GaugeEntry& entry : snapshot.gauges) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(entry.name.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%.2f", entry.value);
+                ImGui::TableNextColumn();
+                ImGui::Text("%.2f", entry.averageValue);
+                ImGui::TableNextColumn();
+                ImGui::Text("%.2f", entry.peakValue);
+            }
+            ImGui::EndTable();
+        }
     }
     ImGui::End();
 
@@ -843,19 +1059,21 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
 }
 
 void RenderContext::renderCursorOverlay(float deltaTime) {
+    MW_PROFILE_SCOPE("Overlay.Cursor");
+
     if (!imguiContext_) {
         return;
     }
 
     ImGui::SetCurrentContext(imguiContext_);
     ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(static_cast<float>(width_), static_cast<float>(height_));
-    io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+    io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
+    io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
     io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
 
     ImGui::NewFrame();
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
-    const ImVec2 center(static_cast<float>(width_) * 0.5f, static_cast<float>(height_) * 0.5f);
+    const ImVec2 center(static_cast<float>(windowWidth_) * 0.5f, static_cast<float>(windowHeight_) * 0.5f);
 
     if (cursorMode_ == CursorMode::Cross) {
         drawList->AddLine(ImVec2(center.x - 12.0f, center.y), ImVec2(center.x + 12.0f, center.y), IM_COL32(255, 255, 255, 255), 2.0f);
@@ -891,6 +1109,8 @@ void RenderContext::renderCursorOverlay(float deltaTime) {
 }
 
 void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, CachedChunkMesh& outMesh) {
+    MW_PROFILE_SCOPE("Chunk.BuildMesh");
+
     const VoxelWorld& voxelWorld = world.getVoxelWorld();
     const Chunk& chunk = voxelWorld.getChunk(chunkPos);
 
@@ -951,6 +1171,8 @@ done:
 }
 
 void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
+    MW_PROFILE_SCOPE("Render.ImGuiDrawData");
+
     if (!drawData || drawData->CmdListsCount == 0) {
         return;
     }
@@ -1046,6 +1268,8 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
 }
 
 void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
+    MW_PROFILE_COUNTER("Chunk.CacheInvalidations", 1);
+
     static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
                                                                   glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
     for (const auto& off : kInvalidateOffsets) {

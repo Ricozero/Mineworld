@@ -67,6 +67,7 @@ target_link_libraries(mineworld PRIVATE
     glfw
     bgfx::bgfx
     imgui::imgui
+    Tracy::TracyClient
 )
 
 target_compile_definitions(mineworld PRIVATE
