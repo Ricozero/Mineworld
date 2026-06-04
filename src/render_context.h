@@ -49,6 +49,8 @@ private:
     void destroyShaders();
     bool initializeImGui();
     void shutdownImGui();
+    void updateImGuiInput();
+    static void handleScroll(GLFWwindow* window, double xOffset, double yOffset);
 
     void renderWorld(const ClientWorld& world);
     void renderProfilerOverlay(float deltaTime);
@@ -68,6 +70,7 @@ private:
     float cameraPitch_ = -12.0f;
     double lastMouseX_ = 0.0;
     double lastMouseY_ = 0.0;
+    double imguiScrollY_ = 0.0;
     bool hasMousePosition_ = false;
     bool mouseCaptured_ = true;
     bool bgfxInitialized_ = false;

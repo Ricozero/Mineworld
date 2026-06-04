@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -257,15 +258,14 @@ void recordBgfxStats(const bgfx::Stats* stats) {
         return;
     }
 
-    profiling::Profiler& profiler = profiling::Profiler::instance();
-    profiler.setGauge("BGFX.CPUFrameMs", timestampMs(stats->cpuTimeFrame, stats->cpuTimerFreq));
-    profiler.setGauge("BGFX.CPUSubmitMs", timestampRangeMs(stats->cpuTimeBegin, stats->cpuTimeEnd, stats->cpuTimerFreq));
-    profiler.setGauge("BGFX.GPUFrameMs", timestampRangeMs(stats->gpuTimeBegin, stats->gpuTimeEnd, stats->gpuTimerFreq));
-    profiler.setGauge("BGFX.WaitRenderMs", timestampMs(stats->waitRender, stats->cpuTimerFreq));
-    profiler.setGauge("BGFX.WaitSubmitMs", timestampMs(stats->waitSubmit, stats->cpuTimerFreq));
-    profiler.setGauge("BGFX.DrawCalls", static_cast<double>(stats->numDraw));
-    profiler.setGauge("BGFX.TransientVB", static_cast<double>(stats->transientVbUsed));
-    profiler.setGauge("BGFX.TransientIB", static_cast<double>(stats->transientIbUsed));
+    MW_PROFILE_GAUGE("BGFX.CPUFrameMs", timestampMs(stats->cpuTimeFrame, stats->cpuTimerFreq));
+    MW_PROFILE_GAUGE("BGFX.CPUSubmitMs", timestampRangeMs(stats->cpuTimeBegin, stats->cpuTimeEnd, stats->cpuTimerFreq));
+    MW_PROFILE_GAUGE("BGFX.GPUFrameMs", timestampRangeMs(stats->gpuTimeBegin, stats->gpuTimeEnd, stats->gpuTimerFreq));
+    MW_PROFILE_GAUGE("BGFX.WaitRenderMs", timestampMs(stats->waitRender, stats->cpuTimerFreq));
+    MW_PROFILE_GAUGE("BGFX.WaitSubmitMs", timestampMs(stats->waitSubmit, stats->cpuTimerFreq));
+    MW_PROFILE_GAUGE("BGFX.DrawCalls", static_cast<double>(stats->numDraw));
+    MW_PROFILE_GAUGE("BGFX.TransientVB", static_cast<double>(stats->transientVbUsed));
+    MW_PROFILE_GAUGE("BGFX.TransientIB", static_cast<double>(stats->transientIbUsed));
 }
 
 void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
@@ -359,6 +359,8 @@ bool RenderContext::initialize(int width, int height, const char* title) {
         return false;
     }
 
+    glfwSetWindowUserPointer(window_, this);
+    glfwSetScrollCallback(window_, RenderContext::handleScroll);
     glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     logging::info("Renderer initialized with GLFW/bgfx ({})", bgfx::getRendererName(bgfx::getRendererType()));
@@ -684,7 +686,7 @@ bool RenderContext::initializeImGui() {
     ImGui::SetCurrentContext(imguiContext_);
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.ConfigFlags |= ImGuiConfigFlags_NoMouse | ImGuiConfigFlags_NoKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     ImGui::StyleColorsDark();
 
@@ -766,6 +768,42 @@ void RenderContext::shutdownImGui() {
         ImGui::DestroyContext(imguiContext_);
         imguiContext_ = nullptr;
     }
+}
+
+void RenderContext::updateImGuiInput() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+    io.MouseWheel = 0.0f;
+
+    if (!window_ || mouseCaptured_) {
+        imguiScrollY_ = 0.0;
+        io.MouseDown[0] = false;
+        io.MouseDown[1] = false;
+        io.MouseDown[2] = false;
+        return;
+    }
+
+    double mouseX = 0.0;
+    double mouseY = 0.0;
+    glfwGetCursorPos(window_, &mouseX, &mouseY);
+    io.MousePos = ImVec2(static_cast<float>(mouseX), static_cast<float>(mouseY));
+    io.MouseDown[0] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    io.MouseDown[1] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    io.MouseDown[2] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+
+    if (imguiScrollY_ != 0.0) {
+        io.MouseWheel = static_cast<float>(imguiScrollY_);
+        imguiScrollY_ = 0.0;
+    }
+}
+
+void RenderContext::handleScroll(GLFWwindow* window, double, double yOffset) {
+    auto* renderContext = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
+    if (!renderContext || renderContext->mouseCaptured_) {
+        return;
+    }
+
+    renderContext->imguiScrollY_ += yOffset;
 }
 
 void RenderContext::renderWorld(const ClientWorld& world) {
@@ -919,14 +957,9 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
     io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
     io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
 
+    updateImGuiInput();
     ImGui::NewFrame();
     const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot();
-    const bgfx::Stats* stats = bgfx::getStats();
-    const double bgfxCpuFrameMs = stats ? timestampMs(stats->cpuTimeFrame, stats->cpuTimerFreq) : 0.0;
-    const double bgfxCpuSubmitMs = stats ? timestampRangeMs(stats->cpuTimeBegin, stats->cpuTimeEnd, stats->cpuTimerFreq) : 0.0;
-    const double bgfxGpuFrameMs = stats ? timestampRangeMs(stats->gpuTimeBegin, stats->gpuTimeEnd, stats->gpuTimerFreq) : 0.0;
-    const double waitRenderMs = stats ? timestampMs(stats->waitRender, stats->cpuTimerFreq) : 0.0;
-    const double waitSubmitMs = stats ? timestampMs(stats->waitSubmit, stats->cpuTimerFreq) : 0.0;
 
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Always);
@@ -938,7 +971,11 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
         ImGuiWindowFlags_NoNav;
 
     constexpr float kColName = 220.0f;
-    constexpr float kColValue = 70.0f;
+    constexpr float kVisibleTableRows = 8.0f;
+    constexpr ImGuiTableFlags kProfilerTableFlags = ImGuiTableFlags_SizingStretchSame |
+                                                    ImGuiTableFlags_BordersInnerV |
+                                                    ImGuiTableFlags_ScrollY;
+    const float tableHeight = ImGui::GetTextLineHeightWithSpacing() * (kVisibleTableRows + 1.0f);
 
     auto rightAlignedText = [](const char* fmt, auto&&... args) {
         char text[128];
@@ -963,8 +1000,7 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
             ImGui::TableHeadersRow();
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            std::snprintf(buffer, sizeof(buffer), "%.1f, %.1f, %.1f",
-                          cameraPosition_.x, cameraPosition_.y, cameraPosition_.z);
+            std::snprintf(buffer, sizeof(buffer), "%.1f, %.1f, %.1f", cameraPosition_.x, cameraPosition_.y, cameraPosition_.z);
             rightAlignedText("%s", buffer);
             ImGui::TableNextColumn();
             std::snprintf(buffer, sizeof(buffer), "%d, %d, %d", chunkCoord.x, chunkCoord.y, chunkCoord.z);
@@ -986,98 +1022,66 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
             ImGui::TableNextColumn();
             rightAlignedText("%.1f ms", snapshot.frameMs);
             ImGui::TableNextColumn();
-            ImGui::TextUnformatted(bgfx::getRendererName(bgfx::getRendererType()));
+            rightAlignedText("%s", bgfx::getRendererName(bgfx::getRendererType()));
             ImGui::EndTable();
         }
 
-        if (ImGui::BeginTable("BgfxStats", 5, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
-            ImGui::TableSetupColumn("CPU frame", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("CPU submit", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("GPU frame", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-            ImGui::TableSetupColumn("Draws", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("Wait", ImGuiTableColumnFlags_WidthFixed, 160.0f);
-            ImGui::TableHeadersRow();
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            rightAlignedText("%.1f ms", bgfxCpuFrameMs);
-            ImGui::TableNextColumn();
-            rightAlignedText("%.1f ms", bgfxCpuSubmitMs);
-            ImGui::TableNextColumn();
-            rightAlignedText("%.1f ms", bgfxGpuFrameMs);
-            ImGui::TableNextColumn();
-            rightAlignedText("%u", stats ? stats->numDraw : 0);
-            ImGui::TableNextColumn();
-            rightAlignedText("R %.1f / S %.1f", waitRenderMs, waitSubmitMs);
-            ImGui::EndTable();
-        }
-
-        ImGui::SeparatorText("Top CPU Scopes");
-        if (ImGui::BeginTable("ProfilerScopes", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
-            ImGui::TableSetupColumn("Scope", 0, kColName);
-            ImGui::TableSetupColumn("Frame", 0, kColValue);
-            ImGui::TableSetupColumn("Avg", 0, kColValue);
-            ImGui::TableSetupColumn("Max", 0, kColValue);
-            ImGui::TableSetupColumn("Calls", 0, kColValue);
+        if (ImGui::BeginTable("ProfilerScopes", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
+            ImGui::TableSetupColumn("Scope", ImGuiTableColumnFlags_WidthFixed, kColName);
+            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Calls", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
 
-            int rows = 0;
             for (const profiling::ScopeEntry& entry : snapshot.scopes) {
-                if (entry.name == "Frame.Total" || entry.lastFrameMs <= 0.0) {
+                if (entry.name == "Frame.Total") {
                     continue;
                 }
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(entry.name.c_str());
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.lastFrameMs);
+                rightAlignedText("%.1f", entry.lastMs);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.averageFrameMs);
+                rightAlignedText("%.1f", entry.avgMs);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.maxMs);
-                ImGui::TableNextColumn();
-                rightAlignedText("%llu", static_cast<unsigned long long>(entry.lastFrameCalls));
-                if (++rows >= 8) {
-                    break;
-                }
+                rightAlignedText("%llu", static_cast<unsigned long long>(entry.lastCalls));
             }
             ImGui::EndTable();
         }
 
-        ImGui::SeparatorText("Counters");
-        if (ImGui::BeginTable("ProfilerCounters", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
-            ImGui::TableSetupColumn("Counter", 0, kColName);
-            ImGui::TableSetupColumn("Frame", 0, kColValue);
-            ImGui::TableSetupColumn("Avg", 0, kColValue);
-            ImGui::TableSetupColumn("Total", 0, kColValue);
+        if (ImGui::BeginTable("ProfilerCounters", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
+            ImGui::TableSetupColumn("Counter", ImGuiTableColumnFlags_WidthFixed, kColName);
+            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
 
-            int rows = 0;
             for (const profiling::CounterEntry& entry : snapshot.counters) {
-                if (entry.lastFrameValue == 0 && entry.totalValue == 0) {
+                if (entry.lastValue == 0 && entry.totalValue == 0) {
                     continue;
                 }
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(entry.name.c_str());
                 ImGui::TableNextColumn();
-                rightAlignedText("%lld", static_cast<long long>(entry.lastFrameValue));
+                rightAlignedText("%lld", static_cast<long long>(entry.lastValue));
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.averageFrameValue);
+                rightAlignedText("%.1f", entry.avgValue);
                 ImGui::TableNextColumn();
-                rightAlignedText("%lld", static_cast<long long>(entry.totalValue));
-                if (++rows >= 8) {
-                    break;
-                }
+                rightAlignedText("%lld", static_cast<long long>(entry.maxValue));
             }
             ImGui::EndTable();
         }
 
-        ImGui::SeparatorText("Gauges");
-        if (ImGui::BeginTable("ProfilerGauges", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_BordersInnerV)) {
-            ImGui::TableSetupColumn("Gauge", 0, kColName);
-            ImGui::TableSetupColumn("Now", 0, kColValue);
-            ImGui::TableSetupColumn("Avg", 0, kColValue);
-            ImGui::TableSetupColumn("Peak", 0, kColValue);
+        if (ImGui::BeginTable("ProfilerGauges", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
+            ImGui::TableSetupColumn("Gauge", ImGuiTableColumnFlags_WidthFixed, kColName);
+            ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
 
             for (const profiling::GaugeEntry& entry : snapshot.gauges) {
@@ -1087,9 +1091,9 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
                 ImGui::TableNextColumn();
                 rightAlignedText("%.1f", entry.value);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.averageValue);
+                rightAlignedText("%.1f", entry.avgValue);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.peakValue);
+                rightAlignedText("%.1f", entry.maxValue);
             }
             ImGui::EndTable();
         }

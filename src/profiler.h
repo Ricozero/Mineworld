@@ -22,28 +22,29 @@ namespace profiling {
 struct ScopeEntry {
     std::string name;
     double lastMs = 0.0;
-    double lastFrameMs = 0.0;
-    double averageFrameMs = 0.0;
+    double curMs = 0.0;
+    double avgMs = 0.0;
     double maxMs = 0.0;
-    uint64_t lastFrameCalls = 0;
-    uint64_t totalCalls = 0;
-    double currentFrameMs = 0.0;
-    uint64_t currentFrameCalls = 0;
+    int64_t lastCalls = 0;
+    int64_t curCalls = 0;
+    double avgCalls = 0;
+    int64_t maxCalls = 0;
 };
 
 struct CounterEntry {
     std::string name;
-    int64_t lastFrameValue = 0;
+    int64_t lastValue = 0;
+    int64_t curValue = 0;
+    double avgValue = 0.0;
+    int64_t maxValue = 0;
     int64_t totalValue = 0;
-    double averageFrameValue = 0.0;
-    int64_t currentFrameValue = 0;
 };
 
 struct GaugeEntry {
     std::string name;
     double value = 0.0;
-    double averageValue = 0.0;
-    double peakValue = 0.0;
+    double avgValue = 0.0;
+    double maxValue = 0.0;
 };
 
 struct Snapshot {
@@ -52,7 +53,7 @@ struct Snapshot {
     std::vector<GaugeEntry> gauges;
     double frameMs = 0.0;
     double fps = 0.0;
-    uint64_t frameIndex = 0;
+    int64_t frameIndex = 0;
 };
 
 class Profiler {
@@ -73,12 +74,11 @@ private:
     std::vector<GaugeEntry> gauges_;
     double frameMs_ = 0.0;
     double fps_ = 0.0;
-    uint64_t frameIndex_ = 0;
+    int64_t frameIndex_ = 0;
 };
 
 class ScopedTimer {
 public:
-    explicit ScopedTimer(std::string_view name);
     ScopedTimer(std::string_view name, const char* file, uint32_t line, const char* function);
     ~ScopedTimer();
 

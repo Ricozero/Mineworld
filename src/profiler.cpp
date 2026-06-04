@@ -25,6 +25,17 @@ Entry& findOrAdd(std::vector<Entry>& entries, std::string_view name) {
     return *it;
 }
 
+template <typename Entry>
+Entry& findOrAddSorted(std::vector<Entry>& entries, std::string_view name) {
+    auto it = std::lower_bound(entries.begin(), entries.end(), name, [](const Entry& entry, std::string_view n) {
+        return entry.name < n;
+    });
+    if (it == entries.end() || it->name != name) {
+        it = entries.insert(it, Entry{std::string(name)});
+    }
+    return *it;
+}
+
 double smooth(double current, double sample, double alpha) {
     return current == 0.0 ? sample : current * (1.0 - alpha) + sample * alpha;
 }
@@ -94,12 +105,9 @@ Profiler& Profiler::instance() {
 void Profiler::recordScope(std::string_view name, double elapsedMs) {
     std::lock_guard lock(profilerMutex());
 
-    ScopeEntry& entry = findOrAdd(scopes_, name);
-    entry.lastMs = elapsedMs;
-    entry.currentFrameMs += elapsedMs;
-    entry.currentFrameCalls += 1;
-    entry.totalCalls += 1;
-    entry.maxMs = std::max(entry.maxMs, elapsedMs);
+    ScopeEntry& entry = findOrAddSorted(scopes_, name);
+    entry.curMs += elapsedMs;
+    entry.curCalls += 1;
 
     if (name == "Frame.Total") {
         finishFrameLocked(elapsedMs);
@@ -108,17 +116,17 @@ void Profiler::recordScope(std::string_view name, double elapsedMs) {
 
 void Profiler::addCounter(std::string_view name, int64_t amount) {
     std::lock_guard lock(profilerMutex());
-    CounterEntry& entry = findOrAdd(counters_, name);
-    entry.currentFrameValue += amount;
+    CounterEntry& entry = findOrAddSorted(counters_, name);
+    entry.curValue += amount;
     entry.totalValue += amount;
 }
 
 void Profiler::setGauge(std::string_view name, double value) {
     std::lock_guard lock(profilerMutex());
-    GaugeEntry& entry = findOrAdd(gauges_, name);
+    GaugeEntry& entry = findOrAddSorted(gauges_, name);
     entry.value = value;
-    entry.averageValue = smooth(entry.averageValue, value, 0.08);
-    entry.peakValue = std::max(entry.peakValue, value);
+    entry.avgValue = smooth(entry.avgValue, value, 0.08);
+    entry.maxValue = std::max(entry.maxValue, value);
 }
 
 Snapshot Profiler::snapshot() const {
@@ -131,16 +139,6 @@ Snapshot Profiler::snapshot() const {
     out.frameMs = frameMs_;
     out.fps = fps_;
     out.frameIndex = frameIndex_;
-
-    std::sort(out.scopes.begin(), out.scopes.end(), [](const ScopeEntry& lhs, const ScopeEntry& rhs) {
-        return lhs.lastFrameMs > rhs.lastFrameMs;
-    });
-    std::sort(out.counters.begin(), out.counters.end(), [](const CounterEntry& lhs, const CounterEntry& rhs) {
-        return lhs.lastFrameValue > rhs.lastFrameValue;
-    });
-    std::sort(out.gauges.begin(), out.gauges.end(), [](const GaugeEntry& lhs, const GaugeEntry& rhs) {
-        return lhs.name < rhs.name;
-    });
 
     return out;
 }
@@ -159,13 +157,17 @@ void Profiler::finishFrameLocked(double frameMs) {
     ++frameIndex_;
 
     for (ScopeEntry& entry : scopes_) {
-        entry.lastFrameMs = entry.currentFrameMs;
-        entry.lastFrameCalls = entry.currentFrameCalls;
-        entry.averageFrameMs = smooth(entry.averageFrameMs, entry.lastFrameMs, 0.08);
+        entry.lastMs = entry.curMs;
+        entry.avgMs = smooth(entry.avgMs, entry.lastMs, 0.08);
+        entry.maxMs = std::max(entry.maxMs, entry.lastMs);
+        entry.lastCalls = entry.curCalls;
+        entry.avgCalls = smooth(entry.avgCalls, static_cast<double>(entry.lastCalls), 0.08);
+        entry.maxCalls = std::max(entry.maxCalls, entry.lastCalls);
     }
     for (CounterEntry& entry : counters_) {
-        entry.lastFrameValue = entry.currentFrameValue;
-        entry.averageFrameValue = smooth(entry.averageFrameValue, static_cast<double>(entry.lastFrameValue), 0.08);
+        entry.lastValue = entry.curValue;
+        entry.avgValue = smooth(entry.avgValue, static_cast<double>(entry.lastValue), 0.08);
+        entry.maxValue = std::max(entry.maxValue, entry.lastValue);
     }
 
 #if defined(TRACY_ENABLE)
@@ -175,16 +177,12 @@ void Profiler::finishFrameLocked(double frameMs) {
 #endif
 
     for (ScopeEntry& entry : scopes_) {
-        entry.currentFrameMs = 0.0;
-        entry.currentFrameCalls = 0;
+        entry.curMs = 0.0;
+        entry.curCalls = 0;
     }
     for (CounterEntry& entry : counters_) {
-        entry.currentFrameValue = 0;
+        entry.curValue = 0;
     }
-}
-
-ScopedTimer::ScopedTimer(std::string_view name)
-    : ScopedTimer(name, nullptr, 0, nullptr) {
 }
 
 ScopedTimer::ScopedTimer(std::string_view name, const char* file, uint32_t line, const char* function)
