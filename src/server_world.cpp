@@ -1,11 +1,37 @@
 #include "server_world.h"
 
+#include <cstdint>
+#include <cstdlib>
+
 #include "profiler.h"
+
 
 namespace {
 
 constexpr glm::ivec3 kWorldMin{-1024, -256, -1024};
 constexpr glm::ivec3 kWorldMax{1024, 256, 1024};
+constexpr int kTreeSurfaceY = 0;
+constexpr int kTreeMinHeight = 4;
+constexpr int kTreeHeightRange = 3;
+constexpr uint32_t kTreeChanceMask = 0x7f;
+constexpr uint32_t kTreeChanceValue = 0;
+
+uint32_t hash2D(int x, int z) {
+    uint32_t h = static_cast<uint32_t>(x) * 0x8da6b343u;
+    h ^= static_cast<uint32_t>(z) * 0xd8163841u;
+    h ^= h >> 13;
+    h *= 0xcb1ab31fu;
+    h ^= h >> 16;
+    return h;
+}
+
+bool shouldPlaceTree(glm::ivec3 worldPos) {
+    return (hash2D(worldPos.x, worldPos.z) & kTreeChanceMask) == kTreeChanceValue;
+}
+
+int treeHeight(glm::ivec3 worldPos) {
+    return kTreeMinHeight + static_cast<int>((hash2D(worldPos.x + 17, worldPos.z - 31) >> 8) % kTreeHeightRange);
+}
 
 }  // namespace
 
@@ -54,8 +80,8 @@ std::vector<glm::ivec3> ServerWorld::getLoadedChunks() const {
     return voxelWorld_.getLoadedChunks();
 }
 
-entt::entity ServerWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
-    return actorWorld_.createPlayer(name, sessionId, position, mode);
+entt::entity ServerWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+    return actorWorld_.createLocalPlayer(name, sessionId, position, mode);
 }
 
 entt::entity ServerWorld::createRobot(const std::string& name, glm::vec3 position) {
@@ -79,6 +105,48 @@ void ServerWorld::generateChunk(Chunk& chunk) const {
             for (int z = 0; z < Chunk::SIZE; ++z) {
                 const glm::ivec3 localPos(x, y, z);
                 chunk.setBlock(localPos, generateBlock(chunk.localToWorld(localPos)));
+            }
+        }
+    }
+
+    const glm::ivec3 chunkPos = chunk.getPosition();
+    for (int x = 1; x < Chunk::SIZE - 1; ++x) {
+        for (int z = 1; z < Chunk::SIZE - 1; ++z) {
+            const glm::ivec3 surfaceLocalPos(x, kTreeSurfaceY - chunkPos.y * Chunk::SIZE, z);
+            if (!Chunk::isValidLocalPosition(surfaceLocalPos)) {
+                continue;
+            }
+
+            const glm::ivec3 surfaceWorldPos = chunk.localToWorld(surfaceLocalPos);
+            if (!shouldPlaceTree(surfaceWorldPos)) {
+                continue;
+            }
+
+            const int height = treeHeight(surfaceWorldPos);
+            for (int i = 1; i <= height; ++i) {
+                const glm::ivec3 localPos = surfaceLocalPos + glm::ivec3(0, i, 0);
+                if (Chunk::isValidLocalPosition(localPos)) {
+                    chunk.setBlock(localPos, BlockData{BlockType::Wood, BlockOrientation::Up});
+                }
+            }
+
+            const glm::ivec3 leafCenter = surfaceLocalPos + glm::ivec3(0, height + 1, 0);
+            for (int dx = -2; dx <= 2; ++dx) {
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dz = -2; dz <= 2; ++dz) {
+                        const int distance = std::abs(dx) + std::abs(dy) + std::abs(dz);
+                        if (distance > 3) {
+                            continue;
+                        }
+                        if (dx == 0 && dz == 0 && dy <= 0) {
+                            continue;
+                        }
+                        const glm::ivec3 localPos = leafCenter + glm::ivec3(dx, dy, dz);
+                        if (Chunk::isValidLocalPosition(localPos)) {
+                            chunk.setBlock(localPos, BlockData{BlockType::Leaves, BlockOrientation::North});
+                        }
+                    }
+                }
             }
         }
     }

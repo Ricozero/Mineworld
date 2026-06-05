@@ -15,7 +15,7 @@ public:
     entt::registry& registry() { return registry_; }
     const entt::registry& registry() const { return registry_; }
 
-    entt::entity createPlayer(
+    entt::entity createLocalPlayer(
         const std::string& name,
         uint32_t sessionId,
         glm::vec3 position = glm::vec3(0.0f),

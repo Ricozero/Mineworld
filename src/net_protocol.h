@@ -19,6 +19,7 @@ struct NetActorState {
     float pitch = 0.0f;
     bool isPlayer = false;
     PlayerMode playerMode = PlayerMode::Survival;
+    uint32_t lastInputSequence = 0;
 };
 
 struct NetChunkState {
@@ -39,10 +40,13 @@ struct NetSnapshot {
 };
 
 struct NetClientInput {
-    glm::vec3 position{0.0f};
+    glm::vec3 move{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
     PlayerMode playerMode = PlayerMode::Survival;
+    bool jump = false;
+    bool sprint = false;
+    uint32_t sequence = 0;
 };
 
 struct NetServerHello {
@@ -56,6 +60,9 @@ struct NetServerHello {
 
 std::vector<uint8_t> serializeClientHello();
 bool deserializeClientHello(std::span<const uint8_t> bytes);
+
+std::vector<uint8_t> serializeClientDisconnect();
+bool deserializeClientDisconnect(std::span<const uint8_t> bytes);
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello);
 bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outHello);

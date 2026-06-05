@@ -3,6 +3,7 @@
 #include <asio.hpp>
 #include <cstdint>
 #include <deque>
+#include <entt/entt.hpp>
 #include <memory>
 #include <vector>
 
@@ -27,6 +28,7 @@ public:
 
     void registerSystem(std::unique_ptr<ClientSystem> system);
     void update(float deltaTime);
+    void disconnect();
 
 private:
     void pumpNetwork();
@@ -34,6 +36,9 @@ private:
     void sendInputToServer();
     void replaySnapshots();
     void applySnapshot(const NetSnapshot& snapshot);
+    void reconcileLocalActor(entt::registry& registry, entt::entity entity, const NetActorState& actor);
+    void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
+    void updateRemoteInterpolation(float deltaTime);
 
     ClientWorld world_;
     std::vector<std::unique_ptr<ClientSystem>> systems_;
@@ -47,4 +52,6 @@ private:
     uint32_t lastAppliedSnapshot_ = 0;
     RenderContext* renderContext_ = nullptr;
     bool helloPending_ = true;
+    bool disconnectSent_ = false;
+    double snapshotClock_ = 0.0;
 };

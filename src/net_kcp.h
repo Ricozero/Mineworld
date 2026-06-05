@@ -21,6 +21,7 @@ public:
     bool hasRemote() const override { return remote_.has_value(); }
 
     void sendReliable(const std::vector<uint8_t>& payload) override;
+    void flush() override;
     void pump() override;
     bool popPacket(std::vector<uint8_t>& outPacket) override;
 
@@ -59,6 +60,7 @@ public:
 
     void setOnConnect(SessionConnectCallback callback) override;
     void setOnPacket(SessionPacketCallback callback) override;
+    void setOnDisconnect(SessionDisconnectCallback callback) override;
     void sendTo(uint32_t sessionId, const std::vector<uint8_t>& payload) override;
     void pump() override;
     bool hasSession(uint32_t sessionId) const override;
@@ -70,6 +72,8 @@ private:
         Endpoint remote;
         ikcpcb* kcp = nullptr;
         std::vector<std::vector<uint8_t>> recvPackets;
+        uint32_t lastReceiveMs = 0;
+        bool pendingDisconnect = false;
     };
 
     SessionState* findSessionByConv(uint32_t conv);
@@ -77,6 +81,8 @@ private:
     SessionState& createSession(const Endpoint& endpoint);
     void processReceivedPackets(SessionState& session);
     void handleHandshake(const Endpoint& sender);
+    void destroySession(uint32_t sessionId, bool notify);
+    void removeTimedOutSessions(uint32_t now);
 
     static int kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user);
     int sendRawTo(const char* data, size_t size, const Endpoint& endpoint);
@@ -97,4 +103,5 @@ private:
 
     SessionConnectCallback onConnect_;
     SessionPacketCallback onPacket_;
+    SessionDisconnectCallback onDisconnect_;
 };

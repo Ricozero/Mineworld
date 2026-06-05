@@ -6,6 +6,10 @@
 class ClientWorld;
 class RenderContext;
 class ServerWorld;
+struct PredictedInput;
+
+void simulateClientActor(ClientWorld& world, entt::registry& registry, entt::entity entity, float deltaTime);
+void applyClientPredictedInput(ClientWorld& world, entt::registry& registry, entt::entity entity, const PredictedInput& predictedInput);
 
 class ClientSystem {
 public:
@@ -26,11 +30,14 @@ public:
 
     bool hasInputChanged() const { return inputChanged_; }
     void clearInputChanged() { inputChanged_ = false; }
+    bool hasPendingInput() const { return pendingInput_; }
+    void clearPendingInput() { pendingInput_ = false; }
 
 private:
     RenderContext* renderContext_ = nullptr;
     uint32_t localSessionId_ = 0;
     bool inputChanged_ = false;
+    bool pendingInput_ = false;
 };
 
 class PhysicsSystem : public ServerSystem {

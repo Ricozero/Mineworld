@@ -29,7 +29,7 @@ public:
 
     std::vector<glm::ivec3> getLoadedChunks() const;
 
-    entt::entity createPlayer(
+    entt::entity createLocalPlayer(
         const std::string& name,
         uint32_t sessionId,
         glm::vec3 position = glm::vec3(0.0f),

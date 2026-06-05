@@ -29,6 +29,12 @@ namespace {
 constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
 constexpr uint32_t kResetFlags = BGFX_RESET_VSYNC;
+constexpr size_t kBoxVertexCount = 24;
+constexpr size_t kBoxIndexCount = 36;
+constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
+constexpr size_t kPlayerModelIndexCount = kBoxIndexCount * 2;
+constexpr size_t kMaxBatchVertices = UINT16_MAX;
+constexpr size_t kMaxBatchIndices = UINT16_MAX;
 
 struct PosColorVertex {
     float x;
@@ -98,7 +104,7 @@ uint32_t packColor(glm::vec3 color) {
 }
 
 void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::vec3 color) {
-    if (mesh.vertices.size() > UINT16_MAX - 4) {
+    if (mesh.vertices.size() > kMaxBatchVertices - 4) {
         return;
     }
 
@@ -116,17 +122,38 @@ void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::ve
     mesh.indices.push_back(start + 3);
 }
 
-void addBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color) {
-    const std::array<glm::vec3, 8> v = {{
-        {min.x, min.y, min.z},
-        {max.x, min.y, min.z},
-        {max.x, max.y, min.z},
-        {min.x, max.y, min.z},
-        {min.x, min.y, max.z},
-        {max.x, min.y, max.z},
-        {max.x, max.y, max.z},
-        {min.x, max.y, max.z},
+glm::vec3 rotateYaw(glm::vec3 point, float yawDegrees) {
+    const float yaw = glm::radians(yawDegrees);
+    const float c = std::cos(yaw);
+    const float s = std::sin(yaw);
+    return glm::vec3(point.x * c - point.z * s, point.y, point.x * s + point.z * c);
+}
+
+glm::vec3 rotatePitchThenYaw(glm::vec3 point, float yawDegrees, float pitchDegrees) {
+    const float pitch = glm::radians(pitchDegrees);
+    const float c = std::cos(pitch);
+    const float s = std::sin(pitch);
+    const glm::vec3 pitched(point.x * c - point.y * s, point.x * s + point.y * c, point.z);
+    return rotateYaw(pitched, yawDegrees);
+}
+
+void addOrientedBox(MeshBuilder& mesh, glm::vec3 center, glm::vec3 halfSize, float yawDegrees, glm::vec3 color) {
+    const std::array<glm::vec3, 8> local = {{
+        {-halfSize.x, -halfSize.y, -halfSize.z},
+        {halfSize.x, -halfSize.y, -halfSize.z},
+        {halfSize.x, halfSize.y, -halfSize.z},
+        {-halfSize.x, halfSize.y, -halfSize.z},
+        {-halfSize.x, -halfSize.y, halfSize.z},
+        {halfSize.x, -halfSize.y, halfSize.z},
+        {halfSize.x, halfSize.y, halfSize.z},
+        {-halfSize.x, halfSize.y, halfSize.z},
     }};
+
+    std::array<glm::vec3, 8> v{};
+    for (size_t i = 0; i < local.size(); ++i) {
+        v[i] = center + rotateYaw(local[i], yawDegrees);
+    }
+
     addQuad(mesh, {{v[0], v[3], v[2], v[1]}}, color * 0.65f);
     addQuad(mesh, {{v[4], v[5], v[6], v[7]}}, color * 0.90f);
     addQuad(mesh, {{v[0], v[1], v[5], v[4]}}, color * 0.55f);
@@ -135,8 +162,45 @@ void addBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color) {
     addQuad(mesh, {{v[0], v[4], v[7], v[3]}}, color * 0.72f);
 }
 
+void addHeadBox(MeshBuilder& mesh, glm::vec3 neckPosition, glm::vec3 localCenter, glm::vec3 halfSize, float yawDegrees, float pitchDegrees, glm::vec3 color) {
+    const std::array<glm::vec3, 8> local = {{
+        localCenter + glm::vec3(-halfSize.x, -halfSize.y, -halfSize.z),
+        localCenter + glm::vec3(halfSize.x, -halfSize.y, -halfSize.z),
+        localCenter + glm::vec3(halfSize.x, halfSize.y, -halfSize.z),
+        localCenter + glm::vec3(-halfSize.x, halfSize.y, -halfSize.z),
+        localCenter + glm::vec3(-halfSize.x, -halfSize.y, halfSize.z),
+        localCenter + glm::vec3(halfSize.x, -halfSize.y, halfSize.z),
+        localCenter + glm::vec3(halfSize.x, halfSize.y, halfSize.z),
+        localCenter + glm::vec3(-halfSize.x, halfSize.y, halfSize.z),
+    }};
+
+    std::array<glm::vec3, 8> v{};
+    for (size_t i = 0; i < local.size(); ++i) {
+        v[i] = neckPosition + rotatePitchThenYaw(local[i], yawDegrees, pitchDegrees);
+    }
+
+    const glm::vec3 faceColor(0.95f, 0.12f, 0.10f);
+    addQuad(mesh, {{v[0], v[3], v[2], v[1]}}, color * 0.65f);
+    addQuad(mesh, {{v[4], v[5], v[6], v[7]}}, color * 0.90f);
+    addQuad(mesh, {{v[0], v[1], v[5], v[4]}}, color * 0.55f);
+    addQuad(mesh, {{v[3], v[7], v[6], v[2]}}, color);
+    addQuad(mesh, {{v[1], v[2], v[6], v[5]}}, faceColor);
+    addQuad(mesh, {{v[0], v[4], v[7], v[3]}}, color * 0.72f);
+}
+
+void addPlayerModel(MeshBuilder& mesh, const TransformComponent& transform, glm::vec3 color) {
+    const float yaw = transform.rotation.y;
+    const float pitch = std::clamp(transform.rotation.x, -60.0f, 60.0f);
+
+    const glm::vec3 bodyCenter = transform.position + glm::vec3(0.0f, 0.65f, 0.0f);
+    addOrientedBox(mesh, bodyCenter, glm::vec3(0.30f, 0.62f, 0.22f), yaw, color);
+
+    const glm::vec3 neckPosition = transform.position + glm::vec3(0.0f, 1.25f, 0.0f);
+    addHeadBox(mesh, neckPosition, glm::vec3(0.0f, 0.30f, 0.0f), glm::vec3(0.28f), yaw, pitch, color * 1.12f);
+}
+
 void addLineBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color) {
-    if (mesh.vertices.size() > UINT16_MAX - 8) {
+    if (mesh.vertices.size() > kMaxBatchVertices - 8) {
         return;
     }
 
@@ -184,6 +248,9 @@ void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
     }
     const uint32_t vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     const uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
+    if (vertexCount > kMaxBatchVertices || indexCount > kMaxBatchIndices) {
+        return;
+    }
     if (bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout) >= vertexCount &&
         bgfx::getAvailTransientIndexBuffer(indexCount) >= indexCount) {
         bgfx::TransientVertexBuffer vertexBuffer;
@@ -276,6 +343,9 @@ void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
     }
     const uint32_t vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     const uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
+    if (vertexCount > kMaxBatchVertices || indexCount > kMaxBatchIndices) {
+        return;
+    }
     if (bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout) >= vertexCount &&
         bgfx::getAvailTransientIndexBuffer(indexCount) >= indexCount) {
         bgfx::TransientVertexBuffer vertexBuffer;
@@ -393,7 +463,7 @@ void RenderContext::pollEvents() {
     glfwPollEvents();
 }
 
-void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation, PlayerComponent& player) {
+void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input) {
     MW_PROFILE_SCOPE("Client.ProcessInput");
 
     if (!window_) {
@@ -445,6 +515,16 @@ void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3
         }
         prevF3Down_ = f3Down;
 
+        const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
+        if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
+            cameraViewMode_ = cameraViewMode_ == CameraViewMode::FirstPerson
+                                  ? CameraViewMode::ThirdPersonFront
+                              : cameraViewMode_ == CameraViewMode::ThirdPersonFront
+                                  ? CameraViewMode::ThirdPersonBack
+                                  : CameraViewMode::FirstPerson;
+        }
+        prevF5Down_ = f5Down;
+
         return;
     }
 
@@ -479,49 +559,54 @@ void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3
     }
     prevF4Down_ = f4Down;
 
-    const bool spectatorMode = player.mode == PlayerMode::Spectator;
-    const float baseSpeed = spectatorMode ? player.spectatorMoveSpeed : player.survivalMoveSpeed;
-    const float sprintMultiplier = spectatorMode ? 5.0f : 1.6f;
-    const bool sprinting = glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
-    const float moveSpeed = sprinting ? baseSpeed * sprintMultiplier : baseSpeed;
-    const float moveStep = moveSpeed * deltaTime;
-    glm::vec3 moveForward = forward();
-    glm::vec3 moveRight = right();
-    if (!spectatorMode) {
-        moveForward.y = 0.0f;
-        moveRight.y = 0.0f;
-        if (glm::dot(moveForward, moveForward) > 0.0001f) {
-            moveForward = glm::normalize(moveForward);
-        }
-        if (glm::dot(moveRight, moveRight) > 0.0001f) {
-            moveRight = glm::normalize(moveRight);
-        }
+    const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
+    if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
+        cameraViewMode_ = cameraViewMode_ == CameraViewMode::FirstPerson
+                              ? CameraViewMode::ThirdPersonFront
+                          : cameraViewMode_ == CameraViewMode::ThirdPersonFront
+                              ? CameraViewMode::ThirdPersonBack
+                              : CameraViewMode::FirstPerson;
+        logging::info("Switched camera view to {}",
+                      cameraViewMode_ == CameraViewMode::FirstPerson        ? "first-person"
+                      : cameraViewMode_ == CameraViewMode::ThirdPersonFront ? "third-person-front"
+                                                                            : "third-person-back");
     }
+    prevF5Down_ = f5Down;
+
+    const bool spectatorMode = player.mode == PlayerMode::Spectator;
+    input.move = glm::vec3(0.0f);
+    input.jump = false;
+    input.sprint = glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
 
     if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS) {
-        position += moveForward * moveStep;
+        input.move.z += 1.0f;
     }
     if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS) {
-        position -= moveForward * moveStep;
+        input.move.z -= 1.0f;
     }
     if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) {
-        position -= moveRight * moveStep;
+        input.move.x -= 1.0f;
     }
     if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) {
-        position += moveRight * moveStep;
+        input.move.x += 1.0f;
+    }
+    if (glm::dot(input.move, input.move) > 1.0f) {
+        input.move = glm::normalize(input.move);
+    }
+    const bool spaceDown = glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS;
+    if (!spectatorMode && spaceDown && !prevSpaceDown_) {
+        input.jump = true;
     }
     if (spectatorMode && glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        position.y += moveStep;
+        input.move.y += 1.0f;
     }
+    prevSpaceDown_ = spaceDown;
     if (spectatorMode && glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
-        position.y -= moveStep;
+        input.move.y -= 1.0f;
     }
     if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         glfwSetWindowShouldClose(window_, GLFW_TRUE);
     }
-
-    // Update position in camera state for rendering
-    cameraPosition_ = position;
 
     const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
     if (f1Down && !prevF1Down_) {
@@ -546,10 +631,38 @@ void RenderContext::processInput(float deltaTime, glm::vec3& position, glm::vec3
     prevF3Down_ = f3Down;
 }
 
-void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch) {
-    cameraPosition_ = position;
+void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId) {
+    localSessionId_ = localSessionId;
     cameraYaw_ = yaw;
     cameraPitch_ = pitch;
+
+    if (mode == PlayerMode::Spectator) {
+        cameraViewMode_ = CameraViewMode::FirstPerson;
+        cameraPosition_ = position;
+        return;
+    }
+
+    constexpr float eyeHeight = 1.62f;
+    constexpr float cameraDistance = 4.0f;
+    constexpr float thirdPersonTargetHeight = 0.85f;
+    const glm::vec3 eyePosition = position + glm::vec3(0.0f, eyeHeight, 0.0f);
+    const glm::vec3 thirdPersonTarget = position + glm::vec3(0.0f, thirdPersonTargetHeight, 0.0f);
+
+    switch (cameraViewMode_) {
+        case CameraViewMode::FirstPerson:
+            cameraPosition_ = eyePosition;
+            break;
+        case CameraViewMode::ThirdPersonFront: {
+            cameraYaw_ = yaw + 180.0f;
+            cameraPitch_ = -pitch;
+            cameraPosition_ = thirdPersonTarget - forward() * cameraDistance;
+            break;
+        }
+        case CameraViewMode::ThirdPersonBack:
+            cameraPitch_ = pitch;
+            cameraPosition_ = thirdPersonTarget - forward() * cameraDistance;
+            break;
+    }
 }
 
 void RenderContext::render(const ClientWorld& world) {
@@ -638,6 +751,21 @@ glm::vec3 RenderContext::forward() const {
 
 glm::vec3 RenderContext::right() const {
     return glm::normalize(glm::cross(forward(), glm::vec3(0.0f, 1.0f, 0.0f)));
+}
+
+bool RenderContext::shouldHideLocalPlayerModel(const ClientWorld& world, entt::entity entity) const {
+    if (cameraViewMode_ != CameraViewMode::FirstPerson) {
+        return false;
+    }
+
+    const auto& registry = world.getActorWorld().registry();
+    if (!registry.all_of<SessionComponent, PlayerComponent>(entity)) {
+        return false;
+    }
+
+    const auto& session = registry.get<SessionComponent>(entity);
+    const auto& player = registry.get<PlayerComponent>(entity);
+    return session.sessionId == localSessionId_ && player.mode == PlayerMode::Survival;
 }
 
 bool RenderContext::loadShaders() {
@@ -886,7 +1014,12 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             continue;
         }
 
-        if (currentBatch.vertices.size() + cached.vertexCount > UINT16_MAX) {
+        if (cached.vertexCount > kMaxBatchVertices || cached.indices.size() > kMaxBatchIndices) {
+            continue;
+        }
+
+        if (currentBatch.vertices.size() + cached.vertexCount > kMaxBatchVertices ||
+            currentBatch.indices.size() + cached.indices.size() > kMaxBatchIndices) {
             submitMeshBatch(currentBatch, programIndex_);
             currentBatch.vertices.clear();
             currentBatch.indices.clear();
@@ -913,20 +1046,27 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     MW_PROFILE_GAUGE("World.VisibleEntities", static_cast<double>(viewEntities.size_hint()));
     for (auto entity : viewEntities) {
         const auto& meshComp = registry.get<MeshComponent>(entity);
-        if (!meshComp.isVisible) {
+        if (!meshComp.isVisible || shouldHideLocalPlayerModel(world, entity)) {
             continue;
         }
 
-        if (currentBatch.vertices.size() + 24 > UINT16_MAX) {
+        const bool actorModel = registry.all_of<PlayerComponent>(entity) || registry.all_of<RobotComponent>(entity);
+        const size_t requiredVertices = actorModel ? kPlayerModelVertexCount : kBoxVertexCount;
+        const size_t requiredIndices = actorModel ? kPlayerModelIndexCount : kBoxIndexCount;
+        if (currentBatch.vertices.size() + requiredVertices > kMaxBatchVertices ||
+            currentBatch.indices.size() + requiredIndices > kMaxBatchIndices) {
             submitMeshBatch(currentBatch, programIndex_);
             currentBatch.vertices.clear();
             currentBatch.indices.clear();
         }
         const auto& transform = registry.get<TransformComponent>(entity);
         const glm::vec3 color(meshComp.color.r, meshComp.color.g, meshComp.color.b);
-        const glm::vec3 min = transform.position + glm::vec3(-0.35f, 0.01f, -0.35f);
-        const glm::vec3 max = transform.position + glm::vec3(0.35f, 1.81f, 0.35f);
-        addBox(currentBatch, min, max, color);
+        if (actorModel) {
+            addPlayerModel(currentBatch, transform, color);
+        } else {
+            const glm::vec3 center = transform.position + glm::vec3(0.0f, 0.91f, 0.0f);
+            addOrientedBox(currentBatch, center, glm::vec3(0.35f, 0.90f, 0.35f), transform.rotation.y, color);
+        }
     }
 
     // Flush remaining batch
@@ -1181,7 +1321,7 @@ void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos
                         continue;
                     }
 
-                    if (vertices.size() > UINT16_MAX - 4) {
+                    if (vertices.size() > kMaxBatchVertices - 4 || indices.size() > kMaxBatchIndices - 6) {
                         goto done;
                     }
 

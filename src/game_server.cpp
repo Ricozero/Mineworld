@@ -23,41 +23,6 @@ glm::vec3 kDefaultSpawnPosition = glm::vec3(0.0f, 2.0f, 0.0f);
 float kDefaultSpawnYaw = -90.0f;
 float kDefaultSpawnPitch = -12.0f;
 
-bool intersectsSolidBlock(ServerWorld& world, entt::registry& registry, entt::entity entity) {
-    if (!registry.all_of<TransformComponent, BoxColliderComponent>(entity)) {
-        return false;
-    }
-
-    const auto& transform = registry.get<TransformComponent>(entity);
-    const auto& collider = registry.get<BoxColliderComponent>(entity);
-    const glm::vec3 halfSize = collider.size * 0.5f;
-    const glm::vec3 min = transform.position + collider.offset - halfSize;
-    const glm::vec3 max = transform.position + collider.offset + halfSize;
-    constexpr float epsilon = 0.001f;
-
-    const glm::ivec3 minBlock{
-        static_cast<int>(std::floor(min.x)),
-        static_cast<int>(std::floor(min.y)),
-        static_cast<int>(std::floor(min.z)),
-    };
-    const glm::ivec3 maxBlock{
-        static_cast<int>(std::floor(max.x - epsilon)),
-        static_cast<int>(std::floor(max.y - epsilon)),
-        static_cast<int>(std::floor(max.z - epsilon)),
-    };
-
-    for (int x = minBlock.x; x <= maxBlock.x; ++x) {
-        for (int y = minBlock.y; y <= maxBlock.y; ++y) {
-            for (int z = minBlock.z; z <= maxBlock.z; ++z) {
-                if (world.getBlock(glm::ivec3(x, y, z)).type != BlockType::Air) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 }  // namespace
 
 GameServer::GameServer() {
@@ -68,7 +33,10 @@ GameServer::GameServer() {
         onSessionConnect(sessionId);
     });
     kcpServer->setOnPacket([this](uint32_t sessionId, const std::vector<uint8_t>& packet) {
-        onSessionPacket(sessionId, packet);
+        return onSessionPacket(sessionId, packet);
+    });
+    kcpServer->setOnDisconnect([this](uint32_t sessionId) {
+        onSessionDisconnect(sessionId);
     });
     server_ = std::move(kcpServer);
 
@@ -114,8 +82,8 @@ void GameServer::update(float deltaTime) {
     }
 }
 
-entt::entity GameServer::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
-    entt::entity entity = world_.createPlayer(name, sessionId, position, mode);
+entt::entity GameServer::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+    entt::entity entity = world_.createLocalPlayer(name, sessionId, position, mode);
     updateVisibleChunks();
     return entity;
 }
@@ -233,6 +201,13 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
         }
         const bool isPlayer = registry.all_of<PlayerComponent>(entity);
         const PlayerMode playerMode = isPlayer ? registry.get<PlayerComponent>(entity).mode : PlayerMode::Survival;
+        uint32_t lastInputSequence = 0;
+        if (isPlayer && registry.all_of<SessionComponent>(entity)) {
+            const auto& sessionComp = registry.get<SessionComponent>(entity);
+            if (auto sessionIt = sessions_.find(sessionComp.sessionId); sessionIt != sessions_.end()) {
+                lastInputSequence = sessionIt->second.lastProcessedInputSequence;
+            }
+        }
         snapshot.actors.push_back(NetActorState{
             name.name,
             transform.position,
@@ -241,6 +216,7 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
             transform.rotation.x,
             isPlayer,
             playerMode,
+            lastInputSequence,
         });
     }
 
@@ -435,22 +411,45 @@ void GameServer::onSessionConnect(uint32_t sessionId) {
     getOrCreateSession(sessionId);
 }
 
-void GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
+void GameServer::onSessionDisconnect(uint32_t sessionId) {
+    auto sessionIt = sessions_.find(sessionId);
+    if (sessionIt == sessions_.end()) {
+        return;
+    }
+
+    if (!sessionIt->second.actorName.empty()) {
+        entt::entity entity = world_.getEntityByName(sessionIt->second.actorName);
+        if (entity != entt::null) {
+            world_.destroyEntity(entity);
+        }
+    }
+
+    logging::info("Session {} disconnected", sessionId);
+    sessions_.erase(sessionIt);
+    updateVisibleChunks();
+}
+
+bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
     MW_PROFILE_COUNTER("Net.ServerPacketsIn", 1);
     MW_PROFILE_COUNTER("Net.ServerBytesIn", static_cast<int64_t>(packet.size()));
 
     if (deserializeClientHello(packet)) {
         onClientHello(sessionId);
-        return;
+        return true;
+    }
+
+    if (deserializeClientDisconnect(packet)) {
+        return false;
     }
 
     NetClientInput input;
     if (deserializeClientInput(packet, input)) {
         onClientInput(sessionId, input);
-        return;
+        return true;
     }
 
     logging::warn("Ignored unknown client packet from session {}", sessionId);
+    return true;
 }
 
 void GameServer::onClientHello(uint32_t sessionId) {
@@ -468,7 +467,7 @@ void GameServer::onClientHello(uint32_t sessionId) {
     float spawnYaw = kDefaultSpawnYaw;
     float spawnPitch = kDefaultSpawnPitch;
 
-    createPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
+    createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
 
     auto& registry = world_.getActorWorld().registry();
     auto view = registry.view<SessionComponent, TransformComponent>();
@@ -495,8 +494,13 @@ void GameServer::onClientHello(uint32_t sessionId) {
 }
 
 void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) {
+    auto sessionIt = sessions_.find(sessionId);
+    if (sessionIt != sessions_.end() && input.sequence <= sessionIt->second.lastProcessedInputSequence) {
+        return;
+    }
+
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent, ControllerInputComponent>();
     for (auto entity : view) {
         const auto& session = registry.get<SessionComponent>(entity);
         if (session.sessionId != sessionId) {
@@ -504,22 +508,19 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         }
         world_.getActorWorld().setPlayerMode(entity, input.playerMode);
         auto& transform = registry.get<TransformComponent>(entity);
-        if (input.playerMode == PlayerMode::Spectator) {
-            transform.position = input.position;
-        } else {
-            const glm::vec3 previousPosition = transform.position;
-            transform.position.x = input.position.x;
-            if (intersectsSolidBlock(world_, registry, entity)) {
-                transform.position.x = previousPosition.x;
-            }
-            transform.position.z = input.position.z;
-            if (intersectsSolidBlock(world_, registry, entity)) {
-                transform.position.z = previousPosition.z;
-            }
+        auto& controllerInput = registry.get<ControllerInputComponent>(entity);
+        controllerInput.move = input.move;
+        if (glm::dot(controllerInput.move, controllerInput.move) > 1.0f) {
+            controllerInput.move = glm::normalize(controllerInput.move);
         }
+        controllerInput.jump = input.jump;
+        controllerInput.sprint = input.sprint;
+        controllerInput.sequence = input.sequence;
         transform.rotation.x = input.pitch;
         transform.rotation.y = input.yaw;
-        world_.getActorWorld().updateEntityChunk(entity, transform.position);
+        if (sessionIt != sessions_.end()) {
+            sessionIt->second.lastProcessedInputSequence = input.sequence;
+        }
         break;
     }
 }

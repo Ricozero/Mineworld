@@ -25,7 +25,7 @@ public:
     bool unloadChunk(glm::ivec3 chunkPos);
     void applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData);
 
-    entt::entity createPlayer(
+    entt::entity createLocalPlayer(
         const std::string& name,
         uint32_t sessionId,
         glm::vec3 position = glm::vec3(0.0f),

@@ -79,6 +79,26 @@ bool deserializeClientHello(std::span<const uint8_t> bytes) {
     return msg->payload_type() == mineworld::net::NetMessagePayload::ClientHello;
 }
 
+std::vector<uint8_t> serializeClientDisconnect() {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto disconnect = mineworld::net::CreateClientDisconnect(builder);
+    const auto msg = mineworld::net::CreateNetMessage(
+        builder,
+        mineworld::net::NetMessagePayload::ClientDisconnect,
+        disconnect.Union());
+
+    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+}
+
+bool deserializeClientDisconnect(std::span<const uint8_t> bytes) {
+    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
+    if (!msg) {
+        return false;
+    }
+    return msg->payload_type() == mineworld::net::NetMessagePayload::ClientDisconnect;
+}
+
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
     flatbuffers::FlatBufferBuilder builder;
     const auto nameOffset = builder.CreateString(hello.actorName);
@@ -122,13 +142,16 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
 
 std::vector<uint8_t> serializeClientInput(const NetClientInput& input) {
     flatbuffers::FlatBufferBuilder builder;
-    const mineworld::net::Vec3 position = toFbVec3(input.position);
+    const mineworld::net::Vec3 move = toFbVec3(input.move);
     const auto inputOffset = mineworld::net::CreateClientInput(
         builder,
-        &position,
+        &move,
         input.yaw,
         input.pitch,
-        toWirePlayerMode(input.playerMode));
+        toWirePlayerMode(input.playerMode),
+        input.jump,
+        input.sprint,
+        input.sequence);
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
         mineworld::net::NetMessagePayload::ClientInput,
@@ -149,10 +172,13 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
         return false;
     }
 
-    outInput.position = fromFbVec3(fbInput->position());
+    outInput.move = fromFbVec3(fbInput->move());
     outInput.yaw = fbInput->yaw();
     outInput.pitch = fbInput->pitch();
     outInput.playerMode = fromWirePlayerMode(fbInput->player_mode());
+    outInput.jump = fbInput->jump();
+    outInput.sprint = fbInput->sprint();
+    outInput.sequence = fbInput->sequence();
     return true;
 }
 
@@ -173,7 +199,8 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers:
             actor.yaw,
             actor.pitch,
             actor.isPlayer,
-            toWirePlayerMode(actor.playerMode)));
+            toWirePlayerMode(actor.playerMode),
+            actor.lastInputSequence));
     }
     const auto actorsVec = builder.CreateVector(actorOffsets);
 
@@ -249,6 +276,7 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
             outActor.pitch = actor->pitch();
             outActor.isPlayer = actor->is_player();
             outActor.playerMode = fromWirePlayerMode(actor->player_mode());
+            outActor.lastInputSequence = actor->last_input_sequence();
             snapshot.actors.push_back(std::move(outActor));
         }
     }

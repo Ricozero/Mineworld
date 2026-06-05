@@ -29,7 +29,7 @@ public:
     void registerSystem(std::unique_ptr<ServerSystem> system);
     void update(float deltaTime);
 
-    entt::entity createPlayer(
+    entt::entity createLocalPlayer(
         const std::string& name,
         uint32_t sessionId,
         glm::vec3 position = glm::vec3(0.0f),
@@ -46,6 +46,7 @@ private:
         float snapshotTimer = 0.0f;
         bool initialSnapshotSent = false;
         bool helloReceived = false;
+        uint32_t lastProcessedInputSequence = 0;
         std::string actorName;
 
         glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
@@ -67,7 +68,8 @@ private:
     void pumpNetwork();
 
     void onSessionConnect(uint32_t sessionId);
-    void onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
+    void onSessionDisconnect(uint32_t sessionId);
+    bool onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
     void onClientHello(uint32_t sessionId);
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
 

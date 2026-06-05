@@ -103,6 +103,7 @@ int runClientOnly() {
         renderContext->pollEvents();
         client->update(elapsed.count());
     }
+    client->disconnect();
     return 0;
 }
 
@@ -132,6 +133,8 @@ int runCombined() {
         server->update(elapsed.count());
         client->update(elapsed.count());
     }
+    client->disconnect();
+    server->update(0.0f);
     return 0;
 }
 

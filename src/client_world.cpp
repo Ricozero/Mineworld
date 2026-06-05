@@ -24,8 +24,8 @@ void ClientWorld::applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData) {
     voxelWorld_.setBlockIfChunkLoaded(worldPos, blockData);
 }
 
-entt::entity ClientWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
-    return actorWorld_.createPlayer(name, sessionId, position, mode);
+entt::entity ClientWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+    return actorWorld_.createLocalPlayer(name, sessionId, position, mode);
 }
 
 entt::entity ClientWorld::createRemotePlayer(const std::string& name, glm::vec3 position, PlayerMode mode) {

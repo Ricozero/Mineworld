@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
 #include <unordered_map>
@@ -28,8 +29,8 @@ public:
     bool shouldClose() const;
     void pollEvents();
 
-    void processInput(float deltaTime, glm::vec3& position, glm::vec3& rotation, PlayerComponent& player);
-    void setCamera(const glm::vec3& position, float yaw, float pitch);
+    void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
+    void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
 
     void render(const ClientWorld& world);
     void invalidateChunkCache(glm::ivec3 chunkPos);
@@ -45,6 +46,7 @@ private:
 
     glm::vec3 forward() const;
     glm::vec3 right() const;
+    bool shouldHideLocalPlayerModel(const ClientWorld& world, entt::entity entity) const;
     bool loadShaders();
     void destroyShaders();
     bool initializeImGui();
@@ -78,12 +80,19 @@ private:
     enum class CursorMode { None,
                             Cross,
                             XYZ };
+    enum class CameraViewMode { FirstPerson,
+                                ThirdPersonFront,
+                                ThirdPersonBack };
     CursorMode cursorMode_ = CursorMode::None;
+    CameraViewMode cameraViewMode_ = CameraViewMode::FirstPerson;
     bool showChunkBounds_ = false;
     bool prevF1Down_ = false;
     bool prevF2Down_ = false;
     bool prevF3Down_ = false;
     bool prevF4Down_ = false;
+    bool prevF5Down_ = false;
+    bool prevSpaceDown_ = false;
+    uint32_t localSessionId_ = 0;
     unsigned short programIndex_ = 0xffff;
     unsigned short imguiProgramIndex_ = 0xffff;
     unsigned short imguiFontTextureIndex_ = 0xffff;

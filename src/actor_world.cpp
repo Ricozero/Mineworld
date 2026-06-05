@@ -18,7 +18,7 @@ BoxColliderComponent createPlayerCollider() {
 
 }  // namespace
 
-entt::entity ActorWorld::createPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
+entt::entity ActorWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
     return createPlayerEntity(name, sessionId, position, mode);
 }
 
@@ -41,6 +41,7 @@ entt::entity ActorWorld::createPlayerEntity(
     PlayerComponent player;
     player.mode = mode;
     registry_.emplace<PlayerComponent>(entity, player);
+    registry_.emplace<ControllerInputComponent>(entity);
     registry_.emplace<MeshComponent>(entity, glm::vec4(0.18f, 0.42f, 0.85f, 1.0f), mode == PlayerMode::Survival);
     if (sessionId.has_value()) {
         registry_.emplace<SessionComponent>(entity, *sessionId);
@@ -76,9 +77,10 @@ entt::entity ActorWorld::createRobot(const std::string& name, glm::vec3 position
     registry_.emplace<NameComponent>(entity, name);
     registry_.emplace<TransformComponent>(entity, position);
     registry_.emplace<PhysicsComponent>(entity);
-    registry_.emplace<BoxColliderComponent>(entity);
+    registry_.emplace<BoxColliderComponent>(entity, createPlayerCollider());
     registry_.emplace<RobotComponent>(entity);
     registry_.emplace<RandomMovementComponent>(entity);
+    registry_.emplace<ControllerInputComponent>(entity);
     registry_.emplace<MeshComponent>(entity, glm::vec4(0.85f, 0.32f, 0.20f, 1.0f), true);
     nameToEntityMap_[name] = entity;
     updateEntityChunk(entity, position);
@@ -112,10 +114,6 @@ void ActorWorld::setPlayerMode(entt::entity entity, PlayerMode mode) {
     }
 
     auto& player = registry_.get<PlayerComponent>(entity);
-    if (player.mode == mode) {
-        return;
-    }
-
     player.mode = mode;
     applyPlayerModeComponents(entity);
 }
@@ -145,6 +143,7 @@ void ActorWorld::applyPlayerModeComponents(entt::entity entity) {
         auto& physics = registry_.get<PhysicsComponent>(entity);
         physics.velocity = glm::vec3(0.0f);
         physics.acceleration = glm::vec3(0.0f);
+        physics.jumpImpulseTime = 0.0f;
         physics.isGrounded = false;
     }
     registry_.emplace_or_replace<BoxColliderComponent>(entity, createPlayerCollider());

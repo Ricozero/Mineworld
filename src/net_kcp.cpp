@@ -12,6 +12,11 @@ constexpr int kRecvMtu = 1400;
 constexpr uint32_t kMagic = 0x4B435048;
 constexpr size_t kRequestSize = 4;
 constexpr size_t kResponseSize = 8;
+constexpr uint32_t kSessionTimeoutMs = 10'000;
+
+bool isUdpPeerReset(asio::error_code ec) {
+    return ec == asio::error::connection_reset;
+}
 
 }  // namespace
 
@@ -85,12 +90,23 @@ void KcpChannel::sendReliable(const std::vector<uint8_t>& payload) {
     }
 }
 
+void KcpChannel::flush() {
+    if (!kcp_) {
+        return;
+    }
+    ikcp_update(kcp_, nowMs());
+    ikcp_flush(kcp_);
+}
+
 void KcpChannel::pump() {
     for (;;) {
         Udp::endpoint sender;
         asio::error_code ec;
         const auto received = socket_.receive_from(asio::buffer(recvBuffer_), sender, 0, ec);
         if (ec == asio::error::would_block || ec == asio::error::try_again) {
+            break;
+        }
+        if (isUdpPeerReset(ec)) {
             break;
         }
         if (ec) {
@@ -209,6 +225,10 @@ void KcpServer::setOnPacket(SessionPacketCallback callback) {
     onPacket_ = std::move(callback);
 }
 
+void KcpServer::setOnDisconnect(SessionDisconnectCallback callback) {
+    onDisconnect_ = std::move(callback);
+}
+
 void KcpServer::sendTo(uint32_t sessionId, const std::vector<uint8_t>& payload) {
     auto it = sessions_.find(sessionId);
     if (it == sessions_.end()) {
@@ -231,6 +251,9 @@ void KcpServer::pump() {
         asio::error_code ec;
         const auto received = socket_.receive_from(asio::buffer(recvBuffer_), sender, 0, ec);
         if (ec == asio::error::would_block || ec == asio::error::try_again) {
+            break;
+        }
+        if (isUdpPeerReset(ec)) {
             break;
         }
         if (ec) {
@@ -270,6 +293,7 @@ void KcpServer::pump() {
                           sender.address().to_string(), sender.port());
             session->remote = sender;
         }
+        session->lastReceiveMs = nowMs();
 
         const int inputResult = ikcp_input(
             session->kcp,
@@ -282,13 +306,22 @@ void KcpServer::pump() {
 
     // Update all KCP instances and collect received application packets
     const uint32_t now = nowMs();
+    std::vector<uint32_t> disconnectedSessions;
     for (auto& [id, session] : sessions_) {
         if (!session.kcp) {
             continue;
         }
         ikcp_update(session.kcp, now);
         processReceivedPackets(session);
+        if (session.pendingDisconnect) {
+            disconnectedSessions.push_back(id);
+        }
     }
+    for (uint32_t sessionId : disconnectedSessions) {
+        logging::info("Session {} disconnected by client", sessionId);
+        destroySession(sessionId, true);
+    }
+    removeTimedOutSessions(now);
 }
 
 bool KcpServer::hasSession(uint32_t sessionId) const {
@@ -353,6 +386,7 @@ KcpServer::SessionState& KcpServer::createSession(const Endpoint& endpoint) {
     SessionState session;
     session.sessionId = sessionId;
     session.remote = endpoint;
+    session.lastReceiveMs = nowMs();
 
     // Create KCP output context (must remain stable in memory)
     outputContexts_[sessionId] = KcpOutputContext{this, sessionId};
@@ -380,6 +414,38 @@ KcpServer::SessionState& KcpServer::createSession(const Endpoint& endpoint) {
     return it->second;
 }
 
+void KcpServer::destroySession(uint32_t sessionId, bool notify) {
+    auto it = sessions_.find(sessionId);
+    if (it == sessions_.end()) {
+        return;
+    }
+
+    if (it->second.kcp) {
+        ikcp_release(it->second.kcp);
+        it->second.kcp = nullptr;
+    }
+    sessions_.erase(it);
+    outputContexts_.erase(sessionId);
+
+    if (notify && onDisconnect_) {
+        onDisconnect_(sessionId);
+    }
+}
+
+void KcpServer::removeTimedOutSessions(uint32_t now) {
+    std::vector<uint32_t> timedOutSessions;
+    for (const auto& [id, session] : sessions_) {
+        if (now - session.lastReceiveMs >= kSessionTimeoutMs) {
+            timedOutSessions.push_back(id);
+        }
+    }
+
+    for (uint32_t sessionId : timedOutSessions) {
+        logging::info("Session {} timed out", sessionId);
+        destroySession(sessionId, true);
+    }
+}
+
 void KcpServer::processReceivedPackets(SessionState& session) {
     for (;;) {
         const int packetSize = ikcp_peeksize(session.kcp);
@@ -393,8 +459,9 @@ void KcpServer::processReceivedPackets(SessionState& session) {
         }
         packet.resize(static_cast<size_t>(received));
 
-        if (onPacket_) {
-            onPacket_(session.sessionId, packet);
+        if (onPacket_ && !onPacket_(session.sessionId, packet)) {
+            session.pendingDisconnect = true;
+            break;
         }
     }
 }
