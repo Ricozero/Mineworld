@@ -6,21 +6,13 @@
 #include <limits>
 
 #include "client_world.h"
+#include "config.h"
 #include "entity.h"
 #include "profiler.h"
 #include "render_context.h"
 #include "server_world.h"
 
 namespace {
-
-constexpr float kGravity = 9.8f;
-constexpr float kCollisionEpsilon = 0.001f;
-constexpr float kGroundProbeDistance = 0.05f;
-constexpr float kPlayerJumpImpulseDuration = 2.0f;
-constexpr float kPlayerJumpAcceleration = 80.0f;
-constexpr float kMaxFallSpeed = 50.0f;
-constexpr float kSurvivalSprintMultiplier = 1.6f;
-constexpr float kSpectatorSprintMultiplier = 5.0f;
 
 bool isSpectatorPlayer(entt::registry& registry, entt::entity entity) {
     return registry.all_of<PlayerComponent>(entity) &&
@@ -62,7 +54,7 @@ float movementSpeed(entt::registry& registry, entt::entity entity, const Control
         const auto& player = registry.get<PlayerComponent>(entity);
         const bool spectator = player.mode == PlayerMode::Spectator;
         const float baseSpeed = spectator ? player.spectatorMoveSpeed : player.survivalMoveSpeed;
-        const float multiplier = spectator ? kSpectatorSprintMultiplier : kSurvivalSprintMultiplier;
+        const float multiplier = spectator ? AppConfig::instance().spectatorSprintMultiplier : AppConfig::instance().survivalSprintMultiplier;
         return input.sprint ? baseSpeed * multiplier : baseSpeed;
     }
     if (registry.all_of<RobotComponent>(entity)) {
@@ -98,7 +90,7 @@ void applyControllerInput(entt::registry& registry, entt::entity entity, float d
         physics.velocity.x = move.x * speed;
         physics.velocity.z = move.z * speed;
         if (input.jump && physics.isGrounded) {
-            physics.jumpImpulseTime = kPlayerJumpImpulseDuration;
+            physics.jumpImpulseTime = AppConfig::instance().jumpImpulseDuration;
             physics.isGrounded = false;
         }
     }
@@ -124,9 +116,9 @@ bool findCollisionBoundary(
         static_cast<int>(std::floor(min.z)),
     };
     const glm::ivec3 maxBlock{
-        static_cast<int>(std::floor(max.x - kCollisionEpsilon)),
-        static_cast<int>(std::floor(max.y - kCollisionEpsilon)),
-        static_cast<int>(std::floor(max.z - kCollisionEpsilon)),
+        static_cast<int>(std::floor(max.x - AppConfig::instance().collisionEpsilon)),
+        static_cast<int>(std::floor(max.y - AppConfig::instance().collisionEpsilon)),
+        static_cast<int>(std::floor(max.z - AppConfig::instance().collisionEpsilon)),
     };
 
     bool collided = false;
@@ -167,9 +159,9 @@ bool findCollisionBoundary(
         static_cast<int>(std::floor(min.z)),
     };
     const glm::ivec3 maxBlock{
-        static_cast<int>(std::floor(max.x - kCollisionEpsilon)),
-        static_cast<int>(std::floor(max.y - kCollisionEpsilon)),
-        static_cast<int>(std::floor(max.z - kCollisionEpsilon)),
+        static_cast<int>(std::floor(max.x - AppConfig::instance().collisionEpsilon)),
+        static_cast<int>(std::floor(max.y - AppConfig::instance().collisionEpsilon)),
+        static_cast<int>(std::floor(max.z - AppConfig::instance().collisionEpsilon)),
     };
 
     bool collided = false;
@@ -214,7 +206,7 @@ void refreshGrounded(ClientWorld& world, entt::registry& registry, entt::entity 
     }
 
     TransformComponent probe = registry.get<TransformComponent>(entity);
-    probe.position.y -= kGroundProbeDistance;
+    probe.position.y -= AppConfig::instance().groundProbeDistance;
     physics.isGrounded = hasCollision(world, probe, registry.get<BoxColliderComponent>(entity));
 }
 
@@ -228,7 +220,7 @@ void refreshGrounded(ServerWorld& world, entt::registry& registry, entt::entity 
     }
 
     TransformComponent probe = registry.get<TransformComponent>(entity);
-    probe.position.y -= kGroundProbeDistance;
+    probe.position.y -= AppConfig::instance().groundProbeDistance;
     physics.isGrounded = hasCollision(world, probe, registry.get<BoxColliderComponent>(entity));
 }
 
@@ -254,9 +246,9 @@ void moveWithCollision(ClientWorld& world, entt::registry& registry, entt::entit
         }
 
         if (delta > 0.0f) {
-            transform.position[axis] = boundary - collider.offset[axis] - halfSize[axis] - kCollisionEpsilon;
+            transform.position[axis] = boundary - collider.offset[axis] - halfSize[axis] - AppConfig::instance().collisionEpsilon;
         } else {
-            transform.position[axis] = boundary - collider.offset[axis] + halfSize[axis] + kCollisionEpsilon;
+            transform.position[axis] = boundary - collider.offset[axis] + halfSize[axis] + AppConfig::instance().collisionEpsilon;
             if (axis == 1) {
                 physics.isGrounded = true;
             }
@@ -266,7 +258,7 @@ void moveWithCollision(ClientWorld& world, entt::registry& registry, entt::entit
 
     if (!physics.isGrounded) {
         TransformComponent probe = transform;
-        probe.position.y -= kGroundProbeDistance;
+        probe.position.y -= AppConfig::instance().groundProbeDistance;
         physics.isGrounded = hasCollision(world, probe, collider);
     }
     physics.acceleration = glm::vec3(0.0f);
@@ -283,12 +275,12 @@ void simulateClientActor(ClientWorld& world, entt::registry& registry, entt::ent
     auto& physics = registry.get<PhysicsComponent>(entity);
     if (physics.jumpImpulseTime > 0.0f) {
         const float impulseDelta = std::min(deltaTime, physics.jumpImpulseTime);
-        physics.velocity.y += kPlayerJumpAcceleration * impulseDelta;
+        physics.velocity.y += AppConfig::instance().jumpAcceleration * impulseDelta;
         physics.jumpImpulseTime -= impulseDelta;
     }
     if (physics.useGravity && !physics.isGrounded) {
-        physics.velocity.y -= kGravity * deltaTime;
-        physics.velocity.y = std::max(physics.velocity.y, -kMaxFallSpeed);
+        physics.velocity.y -= AppConfig::instance().gravity * deltaTime;
+        physics.velocity.y = std::max(physics.velocity.y, -AppConfig::instance().maxFallSpeed);
     }
 
     physics.velocity += physics.acceleration * deltaTime;
@@ -386,12 +378,12 @@ void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
         auto& physics = registry.get<PhysicsComponent>(entity);
         if (physics.jumpImpulseTime > 0.0f) {
             const float impulseDelta = std::min(deltaTime, physics.jumpImpulseTime);
-            physics.velocity.y += kPlayerJumpAcceleration * impulseDelta;
+            physics.velocity.y += AppConfig::instance().jumpAcceleration * impulseDelta;
             physics.jumpImpulseTime -= impulseDelta;
         }
         if (physics.useGravity && !physics.isGrounded) {
-            physics.velocity.y -= kGravity * deltaTime;
-            physics.velocity.y = std::max(physics.velocity.y, -kMaxFallSpeed);
+            physics.velocity.y -= AppConfig::instance().gravity * deltaTime;
+            physics.velocity.y = std::max(physics.velocity.y, -AppConfig::instance().maxFallSpeed);
         }
     }
 }
@@ -479,9 +471,9 @@ void PhysicsSystem::moveWithCollision(ServerWorld& world, entt::entity entity, f
         }
 
         if (delta > 0.0f) {
-            transform.position[axis] = boundary - collider.offset[axis] - halfSize[axis] - kCollisionEpsilon;
+            transform.position[axis] = boundary - collider.offset[axis] - halfSize[axis] - AppConfig::instance().collisionEpsilon;
         } else {
-            transform.position[axis] = boundary - collider.offset[axis] + halfSize[axis] + kCollisionEpsilon;
+            transform.position[axis] = boundary - collider.offset[axis] + halfSize[axis] + AppConfig::instance().collisionEpsilon;
             if (axis == 1) {
                 physics.isGrounded = true;
             }
@@ -491,7 +483,7 @@ void PhysicsSystem::moveWithCollision(ServerWorld& world, entt::entity entity, f
 
     if (!physics.isGrounded) {
         TransformComponent probe = transform;
-        probe.position.y -= kGroundProbeDistance;
+        probe.position.y -= AppConfig::instance().groundProbeDistance;
         physics.isGrounded = hasCollision(world, probe, collider);
     }
     physics.acceleration = glm::vec3(0.0f);

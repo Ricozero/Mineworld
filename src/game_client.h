@@ -5,7 +5,6 @@
 #include <deque>
 #include <entt/entt.hpp>
 #include <memory>
-#include <string>
 #include <vector>
 
 #include "client_world.h"
@@ -18,7 +17,7 @@ class InputSystem;
 
 class GameClient {
 public:
-    GameClient(RenderContext* renderContext, std::string serverAddress, uint16_t serverPort);
+    GameClient(RenderContext* renderContext, std::string address, uint16_t port);
     ~GameClient();
 
     ClientWorld& world() { return world_; }

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <thread>
 
+#include "config.h"
 #include "entity.h"
 #include "game_client.h"
 #include "game_server.h"
@@ -32,8 +33,11 @@ enum class ClientPlayMode {
     Local,
 };
 
-constexpr uint16_t kDefaultServerPort = 40000;
-constexpr const char* kDefaultServerAddress = "127.0.0.1";
+// Returns the directory containing the executable, with trailing slash
+std::string exeDir(const char* argv0) {
+    std::filesystem::path p(argv0);
+    return p.has_parent_path() ? p.parent_path().string() + "/" : "./";
+}
 
 RunMode parseRunMode(int argc, char* argv[]) {
     if (argc < 2) {
@@ -77,9 +81,10 @@ bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext) {
     return true;
 }
 
-int runServer() {
+int runServer(const std::string& dir) {
     profiling::Profiler::instance().setThreadName("ServerMain");
 
+    AppConfig::instance().load(dir);
     std::unique_ptr<GameServer> server;
     if (!initializeServer(server)) {
         return 1;
@@ -114,7 +119,7 @@ void stopClientSession(std::unique_ptr<GameClient>& client, std::unique_ptr<Game
 
 void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
     profiling::Profiler::instance().setThreadName("LocalServer");
-    constexpr auto kTickInterval = std::chrono::milliseconds(50);  // 20 ticks/s
+    const auto kTickInterval = std::chrono::microseconds(1'000'000 / AppConfig::instance().ticksPerSecond);
     auto nextTick = std::chrono::steady_clock::now();
     auto previousTime = nextTick;
     while (!stopServer) {
@@ -127,13 +132,15 @@ void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
     }
 }
 
-int runClient() {
+int runClient(const std::string& dir) {
     profiling::Profiler::instance().setThreadName("ClientMain");
 
     std::unique_ptr<RenderContext> renderContext;
     if (!initializeRenderContext(renderContext)) {
         return 1;
     }
+
+    AppConfig::instance().load(dir);
 
     ClientState state = ClientState::StartMenu;
     ClientPlayMode playMode = ClientPlayMode::Remote;
@@ -142,9 +149,9 @@ int runClient() {
     std::thread serverThread;
     std::atomic<bool> stopServer{false};
     char addressBuffer[128] = "127.0.0.1";
-    int port = kDefaultServerPort;
-    std::string connectingAddress = kDefaultServerAddress;
-    uint16_t connectingPort = kDefaultServerPort;
+    int port = AppConfig::instance().port;
+    std::string connectingAddress;
+    uint16_t connectingPort = AppConfig::instance().port;
 
     auto previousTime = std::chrono::steady_clock::now();
     while (!renderContext->shouldClose()) {
@@ -166,13 +173,16 @@ int runClient() {
                     stopClientSession(client, localServer, serverThread, stopServer);
                     stopServer = false;
                     playMode = action == RenderContext::StartMenuAction::Local ? ClientPlayMode::Local : ClientPlayMode::Remote;
-                    connectingAddress = playMode == ClientPlayMode::Local ? kDefaultServerAddress : addressBuffer;
-                    connectingPort = static_cast<uint16_t>(std::clamp(port, 1, 65535));
                     if (playMode == ClientPlayMode::Local) {
+                        connectingAddress = "127.0.0.1";
+                        connectingPort = AppConfig::instance().port;
                         if (!initializeServer(localServer)) {
                             return 1;
                         }
                         serverThread = std::thread(runLocalServer, localServer.get(), std::ref(stopServer));
+                    } else {
+                        connectingAddress = addressBuffer;
+                        connectingPort = static_cast<uint16_t>(std::clamp(port, 1, 65535));
                     }
                     client = std::make_unique<GameClient>(renderContext.get(), connectingAddress, connectingPort);
                     renderContext->captureMouse();
@@ -219,13 +229,14 @@ int runClient() {
 int main(int argc, char* argv[]) {
     logging::init();
 
+    const std::string dir = exeDir(argc > 0 ? argv[0] : "");
     const RunMode runMode = parseRunMode(argc, argv);
 
     switch (runMode) {
         case RunMode::Client:
-            return runClient();
+            return runClient(dir);
         case RunMode::Server:
-            return runServer();
+            return runServer(dir);
     }
 
     return 0;

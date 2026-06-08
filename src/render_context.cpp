@@ -492,9 +492,8 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
         updateImGuiInput();
         ImGui::NewFrame();
 
-        const ImVec2 windowSize(360.0f, 240.0f);
-        ImGui::SetNextWindowPos(ImVec2((windowWidth_ - windowSize.x) * 0.5f, (windowHeight_ - windowSize.y) * 0.5f), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
         constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
         if (ImGui::Begin("Mineworld", nullptr, flags)) {
             ImGui::TextUnformatted("Local");
@@ -555,9 +554,8 @@ RenderContext::ConnectingAction RenderContext::renderConnecting(const std::strin
         io.DeltaTime = 1.0f / 60.0f;
         updateImGuiInput();
         ImGui::NewFrame();
-        const ImVec2 windowSize(320.0f, 150.0f);
-        ImGui::SetNextWindowPos(ImVec2((windowWidth_ - windowSize.x) * 0.5f, (windowHeight_ - windowSize.y) * 0.5f), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_Always);
         if (ImGui::Begin("Connecting", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
             ImGui::Text("Connecting to %s:%u", address.c_str(), static_cast<unsigned>(port));
             ImGui::TextUnformatted("Waiting for server hello...");
@@ -1357,9 +1355,8 @@ void RenderContext::renderProfilerOverlay() {
 void RenderContext::renderInGameMenu() {
     MW_PROFILE_SCOPE("Menu.InGame");
 
-    const ImVec2 windowSize(260.0f, 120.0f);
-    ImGui::SetNextWindowPos(ImVec2((windowWidth_ - windowSize.x) * 0.5f, (windowHeight_ - windowSize.y) * 0.5f), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(260.0f, 0.0f), ImGuiCond_Always);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("Game Menu", nullptr, flags)) {
         if (ImGui::Button("Resume", ImVec2(-1.0f, 36.0f))) {

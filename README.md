@@ -2,8 +2,8 @@
 
 ## 开始
 
-- 已关闭cpptools提供的IntelliSense功能，因此c_cpp_properties.json已被弃用。
-- 使用clangd代码高亮和格式化，需要手动安装。
+- 已关闭cpptools提供的IntelliSense功能，因此c_cpp_properties.json已被弃用
+- 使用clangd代码高亮和格式化，需要手动安装
 
 ## 计划
 
@@ -50,5 +50,3 @@
 ### 工具
 
 - 加入调试命令行和界面
-- 加入配置文件
-- GPU分析工具

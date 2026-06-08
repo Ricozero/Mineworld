@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "chunk.h"
+#include "config.h"
 #include "entity.h"
 #include "log.h"
 #include "net_kcp.h"
@@ -14,21 +15,14 @@
 
 namespace {
 
-constexpr uint16_t kDefaultServerPort = 40000;
-constexpr int kTicksPerSecond = 20;
-constexpr int kChunkViewRadius = 2;
 constexpr size_t kMaxBlocksPerSnapshot = 4096;
-
-glm::vec3 kDefaultSpawnPosition = glm::vec3(0.0f, 2.0f, 0.0f);
-float kDefaultSpawnYaw = -90.0f;
-float kDefaultSpawnPitch = -12.0f;
 
 }  // namespace
 
 GameServer::GameServer() {
     logging::Scope logScope(logging::Channel::Server);
 
-    auto kcpServer = std::make_unique<KcpServer>(ioContext_, kDefaultServerPort);
+    auto kcpServer = std::make_unique<KcpServer>(ioContext_, AppConfig::instance().port);
     kcpServer->setOnConnect([this](uint32_t sessionId) {
         onSessionConnect(sessionId);
     });
@@ -59,7 +53,7 @@ void GameServer::update(float deltaTime) {
     }
     updateVisibleChunks();
 
-    constexpr float snapshotInterval = 1.0f / kTicksPerSecond;
+    const float snapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
     for (auto& [sessionId, session] : sessions_) {
         if (!session.helloReceived) {
             continue;
@@ -171,9 +165,9 @@ void GameServer::updateSessionVisibleChunks(Session& session) {
     session.lastChunkPos = currentChunkPos;
     session.cachedVisibleChunks.clear();
 
-    for (int dx = -kChunkViewRadius; dx <= kChunkViewRadius; ++dx) {
-        for (int dy = -kChunkViewRadius; dy <= kChunkViewRadius; ++dy) {
-            for (int dz = -kChunkViewRadius; dz <= kChunkViewRadius; ++dz) {
+    for (int dx = -AppConfig::instance().chunkViewRadius; dx <= AppConfig::instance().chunkViewRadius; ++dx) {
+        for (int dy = -AppConfig::instance().chunkViewRadius; dy <= AppConfig::instance().chunkViewRadius; ++dy) {
+            for (int dz = -AppConfig::instance().chunkViewRadius; dz <= AppConfig::instance().chunkViewRadius; ++dz) {
                 const glm::ivec3 chunkPos = currentChunkPos + glm::ivec3(dx, dy, dz);
                 if (world_.isChunkInBounds(chunkPos)) {
                     session.cachedVisibleChunks.insert(chunkPos);
@@ -325,9 +319,9 @@ void GameServer::updateVisibleChunks() {
                 static_cast<int>(std::floor(transform.position.y)),
                 static_cast<int>(std::floor(transform.position.z))));
 
-            for (int dx = -kChunkViewRadius; dx <= kChunkViewRadius; ++dx) {
-                for (int dy = -kChunkViewRadius; dy <= kChunkViewRadius; ++dy) {
-                    for (int dz = -kChunkViewRadius; dz <= kChunkViewRadius; ++dz) {
+            for (int dx = -AppConfig::instance().chunkViewRadius; dx <= AppConfig::instance().chunkViewRadius; ++dx) {
+                for (int dy = -AppConfig::instance().chunkViewRadius; dy <= AppConfig::instance().chunkViewRadius; ++dy) {
+                    for (int dz = -AppConfig::instance().chunkViewRadius; dz <= AppConfig::instance().chunkViewRadius; ++dz) {
                         const glm::ivec3 chunkPos = entityChunk + glm::ivec3(dx, dy, dz);
                         if (world_.isChunkInBounds(chunkPos)) {
                             desiredChunks.insert(chunkPos);
@@ -347,9 +341,9 @@ void GameServer::updateVisibleChunks() {
                 static_cast<int>(std::floor(transform.position.y)),
                 static_cast<int>(std::floor(transform.position.z))));
 
-            for (int dx = -kChunkViewRadius; dx <= kChunkViewRadius; ++dx) {
-                for (int dy = -kChunkViewRadius; dy <= kChunkViewRadius; ++dy) {
-                    for (int dz = -kChunkViewRadius; dz <= kChunkViewRadius; ++dz) {
+            for (int dx = -AppConfig::instance().chunkViewRadius; dx <= AppConfig::instance().chunkViewRadius; ++dx) {
+                for (int dy = -AppConfig::instance().chunkViewRadius; dy <= AppConfig::instance().chunkViewRadius; ++dy) {
+                    for (int dz = -AppConfig::instance().chunkViewRadius; dz <= AppConfig::instance().chunkViewRadius; ++dz) {
                         const glm::ivec3 chunkPos = entityChunk + glm::ivec3(dx, dy, dz);
                         if (world_.isChunkInBounds(chunkPos)) {
                             desiredChunks.insert(chunkPos);
@@ -463,9 +457,9 @@ void GameServer::onClientHello(uint32_t sessionId) {
     std::string actorName = "Player" + std::to_string(nextPlayerIndex_++);
     session.actorName = actorName;
 
-    glm::vec3 spawnPos = kDefaultSpawnPosition;
-    float spawnYaw = kDefaultSpawnYaw;
-    float spawnPitch = kDefaultSpawnPitch;
+    glm::vec3 spawnPos = AppConfig::instance().spawnPosition;
+    float spawnYaw = AppConfig::instance().spawnYaw;
+    float spawnPitch = AppConfig::instance().spawnPitch;
 
     createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
 

@@ -2,7 +2,7 @@ file(GLOB_RECURSE APPLICATION_SOURCE *.cpp)
 
 add_executable(mineworld ${APPLICATION_SOURCE})
 
-# 编译着色器
+# Compile shaders
 set(MINEWORLD_SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(MINEWORLD_SHADER_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/bin/shaders)
 set(MINEWORLD_VARYING_DEF ${MINEWORLD_SHADER_SOURCE_DIR}/varying.def.sc)
@@ -10,8 +10,8 @@ set(MINEWORLD_VARYING_DEF ${MINEWORLD_SHADER_SOURCE_DIR}/varying.def.sc)
 bgfx_compile_shaders(
     TYPE VERTEX
     SHADERS
-        ${MINEWORLD_SHADER_SOURCE_DIR}/vs_color.sc
-        ${MINEWORLD_SHADER_SOURCE_DIR}/vs_imgui.sc
+    ${MINEWORLD_SHADER_SOURCE_DIR}/vs_color.sc
+    ${MINEWORLD_SHADER_SOURCE_DIR}/vs_imgui.sc
     VARYING_DEF ${MINEWORLD_VARYING_DEF}
     OUTPUT_DIR ${MINEWORLD_SHADER_OUTPUT_DIR}
     OUT_FILES_VAR MINEWORLD_VERTEX_SHADERS
@@ -20,8 +20,8 @@ bgfx_compile_shaders(
 bgfx_compile_shaders(
     TYPE FRAGMENT
     SHADERS
-        ${MINEWORLD_SHADER_SOURCE_DIR}/fs_color.sc
-        ${MINEWORLD_SHADER_SOURCE_DIR}/fs_imgui.sc
+    ${MINEWORLD_SHADER_SOURCE_DIR}/fs_color.sc
+    ${MINEWORLD_SHADER_SOURCE_DIR}/fs_imgui.sc
     VARYING_DEF ${MINEWORLD_VARYING_DEF}
     OUTPUT_DIR ${MINEWORLD_SHADER_OUTPUT_DIR}
     OUT_FILES_VAR MINEWORLD_FRAGMENT_SHADERS
@@ -30,7 +30,10 @@ bgfx_compile_shaders(
 add_custom_target(mineworld_shaders DEPENDS ${MINEWORLD_VERTEX_SHADERS} ${MINEWORLD_FRAGMENT_SHADERS})
 add_dependencies(mineworld mineworld_shaders)
 
-# 协议生成
+# Copy config template to bin/ (always overwrite)
+configure_file(${CMAKE_SOURCE_DIR}/config.ini ${CMAKE_SOURCE_DIR}/bin/config.ini COPYONLY)
+
+# Generate FlatBuffers code
 set(MINEWORLD_FBS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/net_protocol.fbs)
 set(MINEWORLD_FBS_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
 set(MINEWORLD_FBS_GEN_HEADER ${MINEWORLD_FBS_GEN_DIR}/net_protocol_generated.h)
@@ -56,7 +59,7 @@ add_custom_target(mineworld_fbs DEPENDS ${MINEWORLD_FBS_GEN_HEADER})
 add_dependencies(mineworld mineworld_fbs)
 target_include_directories(mineworld PRIVATE ${MINEWORLD_FBS_GEN_DIR})
 
-# 编译链接
+# Compile and link
 target_link_libraries(mineworld PRIVATE
     EnTT::EnTT
     glm::glm

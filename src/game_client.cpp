@@ -9,20 +9,20 @@
 #include "render_context.h"
 #include "system.h"
 
-GameClient::GameClient(RenderContext* renderContext, std::string serverAddress, uint16_t serverPort)
+GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
     : renderContext_(renderContext) {
     logging::Scope logScope(logging::Channel::Client);
 
     auto channel = std::make_unique<KcpChannel>(ioContext_, 0);
     asio::error_code addressError;
-    asio::ip::address address = asio::ip::make_address(serverAddress, addressError);
+    asio::ip::address resolvedAddress = asio::ip::make_address(address, addressError);
     if (addressError) {
-        logging::warn("Invalid server address '{}': {}", serverAddress, addressError.message());
-        address = asio::ip::make_address("127.0.0.1");
+        logging::warn("Invalid server address '{}': {}", address, addressError.message());
+        resolvedAddress = asio::ip::make_address("127.0.0.1");
     }
     const auto serverEndpoint = IPacketChannel::Endpoint(
-        address,
-        serverPort);
+        resolvedAddress,
+        port);
     channel->setRemote(serverEndpoint);
     channel->startHandshake();
     channel_ = std::move(channel);
