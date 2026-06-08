@@ -38,6 +38,7 @@ table ClientInput {
   jump:bool = false;
   sprint:bool = false;
   sequence:uint = 0;
+  delta_time:float = 0;
 }
 
 table ActorState {

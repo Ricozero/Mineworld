@@ -151,6 +151,7 @@ void GameClient::sendInputToServer() {
         input.pitch = transform.rotation.x;
         input.jump = controllerInput.jump;
         input.sprint = controllerInput.sprint;
+        input.deltaTime = controllerInput.deltaTime;
         if (registry.all_of<PlayerComponent>(entity)) {
             auto& player = registry.get<PlayerComponent>(entity);
             input.playerMode = player.mode;
@@ -247,7 +248,7 @@ void GameClient::reconcileLocalActor(entt::registry& registry, entt::entity enti
     if (registry.all_of<PhysicsComponent>(entity)) {
         auto& physics = registry.get<PhysicsComponent>(entity);
         physics.velocity = actor.velocity;
-        physics.isGrounded = false;
+        // isGrounded is resolved naturally by moveWithCollision during replay.
     }
     if (registry.all_of<PlayerComponent>(entity)) {
         registry.get<PlayerComponent>(entity).mode = actor.playerMode;

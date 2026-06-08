@@ -8,6 +8,8 @@ class RenderContext;
 class ServerWorld;
 struct PredictedInput;
 
+void applyControllerInput(entt::registry& registry, entt::entity entity, float deltaTime, bool consumeJump);
+void simulateServerActor(ServerWorld& world, entt::registry& registry, entt::entity entity, float deltaTime);
 void simulateClientActor(ClientWorld& world, entt::registry& registry, entt::entity entity, float deltaTime);
 void applyClientPredictedInput(ClientWorld& world, entt::registry& registry, entt::entity entity, const PredictedInput& predictedInput);
 

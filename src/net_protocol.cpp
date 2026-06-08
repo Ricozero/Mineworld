@@ -151,7 +151,8 @@ std::vector<uint8_t> serializeClientInput(const NetClientInput& input) {
         toWirePlayerMode(input.playerMode),
         input.jump,
         input.sprint,
-        input.sequence);
+        input.sequence,
+        input.deltaTime);
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
         mineworld::net::NetMessagePayload::ClientInput,
@@ -179,6 +180,7 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
     outInput.jump = fbInput->jump();
     outInput.sprint = fbInput->sprint();
     outInput.sequence = fbInput->sequence();
+    outInput.deltaTime = fbInput->delta_time();
     return true;
 }
 

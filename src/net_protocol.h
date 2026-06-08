@@ -47,6 +47,7 @@ struct NetClientInput {
     bool jump = false;
     bool sprint = false;
     uint32_t sequence = 0;
+    float deltaTime = 0.0f;
 };
 
 struct NetServerHello {

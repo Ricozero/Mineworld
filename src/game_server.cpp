@@ -493,6 +493,9 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         return;
     }
 
+    constexpr float kMaxDeltaTime = 0.1f;
+    const float deltaTime = std::clamp(input.deltaTime, 0.0f, kMaxDeltaTime);
+
     auto& registry = world_.getActorWorld().registry();
     auto view = registry.view<SessionComponent, TransformComponent, ControllerInputComponent>();
     for (auto entity : view) {
@@ -510,11 +513,14 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         controllerInput.jump = input.jump;
         controllerInput.sprint = input.sprint;
         controllerInput.sequence = input.sequence;
+        controllerInput.deltaTime = deltaTime;
         transform.rotation.x = input.pitch;
         transform.rotation.y = input.yaw;
         if (sessionIt != sessions_.end()) {
             sessionIt->second.lastProcessedInputSequence = input.sequence;
         }
+        applyControllerInput(registry, entity, deltaTime, true);
+        simulateServerActor(world_, registry, entity, deltaTime);
         break;
     }
 }

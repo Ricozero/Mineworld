@@ -63,6 +63,8 @@ float movementSpeed(entt::registry& registry, entt::entity entity, const Control
     return 0.0f;
 }
 
+}  // namespace
+
 void applyControllerInput(entt::registry& registry, entt::entity entity, float deltaTime, bool consumeJump) {
     if (!registry.all_of<TransformComponent, ControllerInputComponent>(entity)) {
         return;
@@ -264,7 +266,58 @@ void moveWithCollision(ClientWorld& world, entt::registry& registry, entt::entit
     physics.acceleration = glm::vec3(0.0f);
 }
 
-}  // namespace
+void simulateServerActor(ServerWorld& world, entt::registry& registry, entt::entity entity, float deltaTime) {
+    if (isSpectatorPlayer(registry, entity) || !registry.all_of<TransformComponent, PhysicsComponent>(entity)) {
+        return;
+    }
+
+    auto& physics = registry.get<PhysicsComponent>(entity);
+    if (physics.jumpImpulseTime > 0.0f) {
+        const float impulseDelta = std::min(deltaTime, physics.jumpImpulseTime);
+        physics.velocity.y += AppConfig::instance().jumpAcceleration * impulseDelta;
+        physics.jumpImpulseTime -= impulseDelta;
+    }
+    if (physics.useGravity && !physics.isGrounded) {
+        physics.velocity.y -= AppConfig::instance().gravity * deltaTime;
+        physics.velocity.y = std::max(physics.velocity.y, -AppConfig::instance().maxFallSpeed);
+    }
+
+    physics.velocity += physics.acceleration * deltaTime;
+    if (registry.all_of<BoxColliderComponent>(entity)) {
+        // Reuse PhysicsSystem::moveWithCollision logic via the member function on a
+        // temporary PhysicsSystem — but since it's private we inline it here instead.
+        auto& transform = registry.get<TransformComponent>(entity);
+        const auto& collider = registry.get<BoxColliderComponent>(entity);
+        physics.isGrounded = false;
+        const glm::vec3 movement = physics.velocity * deltaTime;
+        const glm::vec3 halfSize = collider.size * 0.5f;
+        for (int axis = 0; axis < 3; ++axis) {
+            const float delta = movement[axis];
+            if (std::abs(delta) <= std::numeric_limits<float>::epsilon()) continue;
+            transform.position[axis] += delta;
+            float boundary = 0.0f;
+            if (!findCollisionBoundary(world, transform, collider, axis, delta, boundary)) continue;
+            if (delta > 0.0f) {
+                transform.position[axis] = boundary - collider.offset[axis] - halfSize[axis] - AppConfig::instance().collisionEpsilon;
+            } else {
+                transform.position[axis] = boundary - collider.offset[axis] + halfSize[axis] + AppConfig::instance().collisionEpsilon;
+                if (axis == 1) physics.isGrounded = true;
+            }
+            physics.velocity[axis] = 0.0f;
+        }
+        if (!physics.isGrounded) {
+            TransformComponent probe = transform;
+            probe.position.y -= AppConfig::instance().groundProbeDistance;
+            physics.isGrounded = hasCollision(world, probe, collider);
+        }
+        physics.acceleration = glm::vec3(0.0f);
+    } else {
+        auto& transform = registry.get<TransformComponent>(entity);
+        transform.position += physics.velocity * deltaTime;
+        physics.acceleration = glm::vec3(0.0f);
+    }
+    world.getActorWorld().updateEntityChunk(entity, registry.get<TransformComponent>(entity).position);
+}
 
 void simulateClientActor(ClientWorld& world, entt::registry& registry, entt::entity entity, float deltaTime) {
     if (isSpectatorPlayer(registry, entity) || !registry.all_of<TransformComponent, PhysicsComponent>(entity)) {
@@ -372,7 +425,7 @@ void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
     auto view = registry.view<PhysicsComponent, TransformComponent>();
 
     for (auto entity : view) {
-        if (isSpectatorPlayer(registry, entity)) {
+        if (isSpectatorPlayer(registry, entity) || registry.all_of<SessionComponent>(entity)) {
             continue;
         }
         auto& physics = registry.get<PhysicsComponent>(entity);
@@ -417,18 +470,20 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
         }
     }
 
+    // Players are driven per-input in onClientInput; only process non-players here.
     auto controllerView = registry.view<TransformComponent, ControllerInputComponent>();
     for (auto entity : controllerView) {
+        if (registry.all_of<SessionComponent>(entity)) continue;
         if (registry.get<ControllerInputComponent>(entity).jump) {
             refreshGrounded(world, registry, entity);
         }
         applyControllerInput(registry, entity, deltaTime, false);
     }
 
-    // Apply physics to all entities with physics
+    // Apply physics to all entities with physics (players excluded).
     auto view = registry.view<TransformComponent, PhysicsComponent>();
     for (auto entity : view) {
-        if (isSpectatorPlayer(registry, entity)) {
+        if (isSpectatorPlayer(registry, entity) || registry.all_of<SessionComponent>(entity)) {
             continue;
         }
         auto& physics = registry.get<PhysicsComponent>(entity);
