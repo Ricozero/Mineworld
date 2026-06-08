@@ -1,6 +1,11 @@
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <thread>
 
 #include "entity.h"
 #include "game_client.h"
@@ -12,29 +17,39 @@
 namespace {
 
 enum class RunMode {
-    Combined,
-    ClientOnly,
-    ServerOnly,
+    Client,
+    Server,
 };
+
+enum class ClientState {
+    StartMenu,
+    Connecting,
+    InGame,
+};
+
+enum class ClientPlayMode {
+    Remote,
+    Local,
+};
+
+constexpr uint16_t kDefaultServerPort = 40000;
+constexpr const char* kDefaultServerAddress = "127.0.0.1";
 
 RunMode parseRunMode(int argc, char* argv[]) {
     if (argc < 2) {
-        return RunMode::Combined;
+        return RunMode::Client;
     }
 
     const std::string_view arg = argv[1];
     if (arg == "client") {
-        return RunMode::ClientOnly;
+        return RunMode::Client;
     }
     if (arg == "server") {
-        return RunMode::ServerOnly;
-    }
-    if (arg == "combined") {
-        return RunMode::Combined;
+        return RunMode::Server;
     }
 
-    logging::warn("Unknown run mode '{}', defaulting to combined", arg);
-    return RunMode::Combined;
+    logging::warn("Unknown run mode '{}', defaulting to client", arg);
+    return RunMode::Client;
 }
 
 bool initializeServer(std::unique_ptr<GameServer>& server) {
@@ -53,17 +68,16 @@ bool initializeServer(std::unique_ptr<GameServer>& server) {
     return true;
 }
 
-bool initializeClient(std::unique_ptr<GameClient>& client, std::unique_ptr<RenderContext>& renderContext) {
+bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext) {
     logging::Scope logScope(logging::Channel::Client);
     renderContext = std::make_unique<RenderContext>();
     if (!renderContext->initialize(1280, 720, "Mineworld")) {
         return false;
     }
-    client = std::make_unique<GameClient>(renderContext.get());
     return true;
 }
 
-int runServerOnly() {
+int runServer() {
     profiling::Profiler::instance().setThreadName("ServerMain");
 
     std::unique_ptr<GameServer> server;
@@ -83,43 +97,54 @@ int runServerOnly() {
     }
 }
 
-int runClientOnly() {
-    profiling::Profiler::instance().setThreadName("ClientMain");
-
-    std::unique_ptr<GameClient> client;
-    std::unique_ptr<RenderContext> renderContext;
-    if (!initializeClient(client, renderContext)) {
-        return 1;
+void stopClientSession(std::unique_ptr<GameClient>& client, std::unique_ptr<GameServer>& localServer,
+                       std::thread& serverThread, std::atomic<bool>& stopServer) {
+    if (client) {
+        client->disconnect();
+        client.reset();
     }
-
-    auto previousTime = std::chrono::steady_clock::now();
-    while (!renderContext->shouldClose()) {
-        MW_PROFILE_SCOPE("Frame.Total");
-
-        const auto currentTime = std::chrono::steady_clock::now();
-        const std::chrono::duration<float> elapsed = currentTime - previousTime;
-        previousTime = currentTime;
-
-        renderContext->pollEvents();
-        client->update(elapsed.count());
+    if (localServer) {
+        stopServer = true;
+        if (serverThread.joinable()) {
+            serverThread.join();
+        }
+        localServer.reset();
     }
-    client->disconnect();
-    return 0;
 }
 
-int runCombined() {
-    profiling::Profiler::instance().setThreadName("Main");
-
-    std::unique_ptr<GameServer> server;
-    if (!initializeServer(server)) {
-        return 1;
+void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
+    profiling::Profiler::instance().setThreadName("LocalServer");
+    constexpr auto kTickInterval = std::chrono::milliseconds(50);  // 20 ticks/s
+    auto nextTick = std::chrono::steady_clock::now();
+    auto previousTime = nextTick;
+    while (!stopServer) {
+        std::this_thread::sleep_until(nextTick);
+        nextTick += kTickInterval;
+        const auto currentTime = std::chrono::steady_clock::now();
+        const std::chrono::duration<float> elapsed = currentTime - previousTime;
+        previousTime = currentTime;
+        server->update(elapsed.count());
     }
+}
 
-    std::unique_ptr<GameClient> client;
+int runClient() {
+    profiling::Profiler::instance().setThreadName("ClientMain");
+
     std::unique_ptr<RenderContext> renderContext;
-    if (!initializeClient(client, renderContext)) {
+    if (!initializeRenderContext(renderContext)) {
         return 1;
     }
+
+    ClientState state = ClientState::StartMenu;
+    ClientPlayMode playMode = ClientPlayMode::Remote;
+    std::unique_ptr<GameClient> client;
+    std::unique_ptr<GameServer> localServer;
+    std::thread serverThread;
+    std::atomic<bool> stopServer{false};
+    char addressBuffer[128] = "127.0.0.1";
+    int port = kDefaultServerPort;
+    std::string connectingAddress = kDefaultServerAddress;
+    uint16_t connectingPort = kDefaultServerPort;
 
     auto previousTime = std::chrono::steady_clock::now();
     while (!renderContext->shouldClose()) {
@@ -130,11 +155,62 @@ int runCombined() {
         previousTime = currentTime;
 
         renderContext->pollEvents();
-        server->update(elapsed.count());
-        client->update(elapsed.count());
+
+        switch (state) {
+            case ClientState::StartMenu: {
+                const RenderContext::StartMenuAction action = renderContext->renderStartMenu(addressBuffer, sizeof(addressBuffer), port);
+                if (action == RenderContext::StartMenuAction::Quit) {
+                    return 0;
+                }
+                if (action == RenderContext::StartMenuAction::Local || action == RenderContext::StartMenuAction::Remote) {
+                    stopClientSession(client, localServer, serverThread, stopServer);
+                    stopServer = false;
+                    playMode = action == RenderContext::StartMenuAction::Local ? ClientPlayMode::Local : ClientPlayMode::Remote;
+                    connectingAddress = playMode == ClientPlayMode::Local ? kDefaultServerAddress : addressBuffer;
+                    connectingPort = static_cast<uint16_t>(std::clamp(port, 1, 65535));
+                    if (playMode == ClientPlayMode::Local) {
+                        if (!initializeServer(localServer)) {
+                            return 1;
+                        }
+                        serverThread = std::thread(runLocalServer, localServer.get(), std::ref(stopServer));
+                    }
+                    client = std::make_unique<GameClient>(renderContext.get(), connectingAddress, connectingPort);
+                    renderContext->captureMouse();
+                    state = ClientState::Connecting;
+                }
+                break;
+            }
+            case ClientState::Connecting:
+                if (client) {
+                    client->update(elapsed.count());
+                    if (client->isSessionReady()) {
+                        renderContext->closeInGameMenu();
+                        state = ClientState::InGame;
+                    } else {
+                        const RenderContext::ConnectingAction action = renderContext->renderConnecting(connectingAddress, connectingPort);
+                        if (action == RenderContext::ConnectingAction::Cancel) {
+                            stopClientSession(client, localServer, serverThread, stopServer);
+                            stopServer = false;
+                            renderContext->releaseMouse();
+                            state = ClientState::StartMenu;
+                        }
+                    }
+                }
+                break;
+            case ClientState::InGame:
+                if (client) {
+                    client->update(elapsed.count());
+                }
+                if (renderContext->consumeInGameMenuAction() == RenderContext::InGameMenuAction::ReturnToStart) {
+                    stopClientSession(client, localServer, serverThread, stopServer);
+                    stopServer = false;
+                    renderContext->releaseMouse();
+                    state = ClientState::StartMenu;
+                }
+                break;
+        }
     }
-    client->disconnect();
-    server->update(0.0f);
+    stopClientSession(client, localServer, serverThread, stopServer);
     return 0;
 }
 
@@ -146,12 +222,10 @@ int main(int argc, char* argv[]) {
     const RunMode runMode = parseRunMode(argc, argv);
 
     switch (runMode) {
-        case RunMode::ClientOnly:
-            return runClientOnly();
-        case RunMode::ServerOnly:
-            return runServerOnly();
-        case RunMode::Combined:
-            return runCombined();
+        case RunMode::Client:
+            return runClient();
+        case RunMode::Server:
+            return runServer();
     }
 
     return 0;

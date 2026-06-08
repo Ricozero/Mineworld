@@ -457,6 +457,124 @@ bool RenderContext::shouldClose() const {
     return !window_ || glfwWindowShouldClose(window_);
 }
 
+RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffer, size_t addressBufferSize, int& port) {
+    MW_PROFILE_SCOPE("Menu.Start");
+
+    if (!window_ || !bgfxInitialized_) {
+        return StartMenuAction::None;
+    }
+
+    releaseMouse();
+
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+    windowWidth_ = std::max(windowWidth, 1);
+    windowHeight_ = std::max(windowHeight, 1);
+    framebufferWidth_ = std::max(framebufferWidth, 1);
+    framebufferHeight_ = std::max(framebufferHeight, 1);
+    framebufferScaleX_ = static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_);
+    framebufferScaleY_ = static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_);
+    bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
+    bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1b2533ff, 1.0f, 0);
+    bgfx::touch(kMainView);
+
+    StartMenuAction action = StartMenuAction::None;
+    if (imguiContext_) {
+        ImGui::SetCurrentContext(imguiContext_);
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
+        io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
+        io.DeltaTime = 1.0f / 60.0f;
+        updateImGuiInput();
+        ImGui::NewFrame();
+
+        const ImVec2 windowSize(360.0f, 240.0f);
+        ImGui::SetNextWindowPos(ImVec2((windowWidth_ - windowSize.x) * 0.5f, (windowHeight_ - windowSize.y) * 0.5f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::Begin("Mineworld", nullptr, flags)) {
+            ImGui::TextUnformatted("Local");
+            if (ImGui::Button("Start", ImVec2(-1.0f, 36.0f))) {
+                action = StartMenuAction::Local;
+            }
+            ImGui::Spacing();
+            ImGui::TextUnformatted("Remote Mode");
+            ImGui::InputText("IP", addressBuffer, addressBufferSize);
+            ImGui::InputInt("Port", &port);
+            port = std::clamp(port, 1, 65535);
+            if (ImGui::Button("Connect", ImVec2(-1.0f, 36.0f))) {
+                action = StartMenuAction::Remote;
+            }
+            ImGui::Spacing();
+            if (ImGui::Button("Quit Game", ImVec2(-1.0f, 36.0f))) {
+                action = StartMenuAction::Quit;
+            }
+        }
+        ImGui::End();
+        ImGui::Render();
+        renderImGuiDrawData(ImGui::GetDrawData());
+    }
+
+    bgfx::frame();
+    return action;
+}
+
+RenderContext::ConnectingAction RenderContext::renderConnecting(const std::string& address, uint16_t port) {
+    if (!window_ || !bgfxInitialized_) {
+        return ConnectingAction::None;
+    }
+
+    releaseMouse();
+
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+    windowWidth_ = std::max(windowWidth, 1);
+    windowHeight_ = std::max(windowHeight, 1);
+    framebufferWidth_ = std::max(framebufferWidth, 1);
+    framebufferHeight_ = std::max(framebufferHeight, 1);
+    framebufferScaleX_ = static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_);
+    framebufferScaleY_ = static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_);
+    bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
+    bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1b2533ff, 1.0f, 0);
+    bgfx::touch(kMainView);
+
+    ConnectingAction action = ConnectingAction::None;
+    if (imguiContext_) {
+        ImGui::SetCurrentContext(imguiContext_);
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
+        io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
+        io.DeltaTime = 1.0f / 60.0f;
+        updateImGuiInput();
+        ImGui::NewFrame();
+        const ImVec2 windowSize(320.0f, 150.0f);
+        ImGui::SetNextWindowPos(ImVec2((windowWidth_ - windowSize.x) * 0.5f, (windowHeight_ - windowSize.y) * 0.5f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+        if (ImGui::Begin("Connecting", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::Text("Connecting to %s:%u", address.c_str(), static_cast<unsigned>(port));
+            ImGui::TextUnformatted("Waiting for server hello...");
+            ImGui::Spacing();
+            if (ImGui::Button("Cancel", ImVec2(-1.0f, 36.0f))) {
+                action = ConnectingAction::Cancel;
+            }
+        }
+        ImGui::End();
+        ImGui::Render();
+        renderImGuiDrawData(ImGui::GetDrawData());
+    }
+
+    bgfx::frame();
+    return action;
+}
+
 void RenderContext::pollEvents() {
     MW_PROFILE_SCOPE("Client.PollEvents");
 
@@ -471,6 +589,24 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     }
 
     deltaTime = std::clamp(deltaTime, 0.0f, 0.05f);
+
+    const bool escapeDown = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
+    if (escapeDown && !prevEscapeDown_) {
+        inGameMenuOpen_ = !inGameMenuOpen_;
+        if (inGameMenuOpen_) {
+            releaseMouse();
+        } else {
+            captureMouse();
+        }
+    }
+    prevEscapeDown_ = escapeDown;
+
+    if (inGameMenuOpen_) {
+        input.move = glm::vec3(0.0f);
+        input.jump = false;
+        input.sprint = false;
+        return;
+    }
 
     // Hold Alt to release mouse, release Alt to recapture
     const bool altHeld = glfwGetKey(window_, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
@@ -489,10 +625,6 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
 
     // While mouse is released, only handle Escape and function keys
     if (!mouseCaptured_) {
-        if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-            glfwSetWindowShouldClose(window_, GLFW_TRUE);
-        }
-
         const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
         if (f1Down && !prevF1Down_) {
             showProfiler_ = !showProfiler_;
@@ -604,10 +736,6 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     if (spectatorMode && glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
         input.move.y -= 1.0f;
     }
-    if (glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
-        glfwSetWindowShouldClose(window_, GLFW_TRUE);
-    }
-
     const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
     if (f1Down && !prevF1Down_) {
         showProfiler_ = !showProfiler_;
@@ -729,43 +857,76 @@ void RenderContext::render(const ClientWorld& world) {
 
     recordBgfxStats(bgfx::getStats());
 
-    if (showProfiler_) {
-        renderProfilerOverlay(deltaTime);
-    }
+    const bool anyOverlay = showProfiler_ || cursorMode_ != CursorMode::None || inGameMenuOpen_;
+    if (anyOverlay && imguiContext_) {
+        ImGui::SetCurrentContext(imguiContext_);
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
+        io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
+        io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
+        updateImGuiInput();
+        ImGui::NewFrame();
 
-    if (cursorMode_ != CursorMode::None) {
-        renderCursorOverlay(deltaTime);
+        if (showProfiler_) {
+            renderProfilerOverlay();
+        }
+        if (cursorMode_ != CursorMode::None) {
+            renderCursorOverlay();
+        }
+        if (inGameMenuOpen_) {
+            renderInGameMenu();
+        }
+
+        ImGui::Render();
+        renderImGuiDrawData(ImGui::GetDrawData());
     }
 
     bgfx::frame();
 }
 
-glm::vec3 RenderContext::forward() const {
-    const float yaw = glm::radians(cameraYaw_);
-    const float pitch = glm::radians(cameraPitch_);
-    return glm::normalize(glm::vec3(
-        std::cos(yaw) * std::cos(pitch),
-        std::sin(pitch),
-        std::sin(yaw) * std::cos(pitch)));
+void RenderContext::captureMouse() {
+    if (!window_) {
+        return;
+    }
+    mouseCaptured_ = true;
+    glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    hasMousePosition_ = false;
 }
 
-glm::vec3 RenderContext::right() const {
-    return glm::normalize(glm::cross(forward(), glm::vec3(0.0f, 1.0f, 0.0f)));
+void RenderContext::releaseMouse() {
+    if (!window_) {
+        return;
+    }
+    mouseCaptured_ = false;
+    glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    hasMousePosition_ = false;
 }
 
-bool RenderContext::shouldHideLocalPlayerModel(const ClientWorld& world, entt::entity entity) const {
-    if (cameraViewMode_ != CameraViewMode::FirstPerson) {
-        return false;
-    }
+void RenderContext::closeInGameMenu() {
+    inGameMenuOpen_ = false;
+    pendingInGameMenuAction_ = InGameMenuAction::None;
+    captureMouse();
+}
 
-    const auto& registry = world.getActorWorld().registry();
-    if (!registry.all_of<SessionComponent, PlayerComponent>(entity)) {
-        return false;
-    }
+RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
+    const InGameMenuAction action = pendingInGameMenuAction_;
+    pendingInGameMenuAction_ = InGameMenuAction::None;
+    return action;
+}
 
-    const auto& session = registry.get<SessionComponent>(entity);
-    const auto& player = registry.get<PlayerComponent>(entity);
-    return session.sessionId == localSessionId_ && player.mode == PlayerMode::Survival;
+void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
+    MW_PROFILE_COUNTER("Chunk.CacheInvalidations", 1);
+
+    static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
+                                                                  glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
+    for (const auto& off : kInvalidateOffsets) {
+        const glm::ivec3 pos = chunkPos + off;
+        auto it = chunkMeshCache_.find(pos);
+        if (it != chunkMeshCache_.end()) {
+            chunkMeshCache_.erase(it);
+        }
+        chunkBlockCounts_.erase(pos);
+    }
 }
 
 bool RenderContext::loadShaders() {
@@ -896,42 +1057,6 @@ void RenderContext::shutdownImGui() {
         ImGui::DestroyContext(imguiContext_);
         imguiContext_ = nullptr;
     }
-}
-
-void RenderContext::updateImGuiInput() {
-    ImGuiIO& io = ImGui::GetIO();
-    io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
-    io.MouseWheel = 0.0f;
-
-    if (!window_ || mouseCaptured_) {
-        imguiScrollY_ = 0.0;
-        io.MouseDown[0] = false;
-        io.MouseDown[1] = false;
-        io.MouseDown[2] = false;
-        return;
-    }
-
-    double mouseX = 0.0;
-    double mouseY = 0.0;
-    glfwGetCursorPos(window_, &mouseX, &mouseY);
-    io.MousePos = ImVec2(static_cast<float>(mouseX), static_cast<float>(mouseY));
-    io.MouseDown[0] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-    io.MouseDown[1] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    io.MouseDown[2] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-
-    if (imguiScrollY_ != 0.0) {
-        io.MouseWheel = static_cast<float>(imguiScrollY_);
-        imguiScrollY_ = 0.0;
-    }
-}
-
-void RenderContext::handleScroll(GLFWwindow* window, double, double yOffset) {
-    auto* renderContext = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
-    if (!renderContext || renderContext->mouseCaptured_) {
-        return;
-    }
-
-    renderContext->imguiScrollY_ += yOffset;
 }
 
 void RenderContext::renderWorld(const ClientWorld& world) {
@@ -1084,21 +1209,9 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     }
 }
 
-void RenderContext::renderProfilerOverlay(float deltaTime) {
+void RenderContext::renderProfilerOverlay() {
     MW_PROFILE_SCOPE("Overlay.Profiler");
 
-    if (!imguiContext_) {
-        return;
-    }
-
-    ImGui::SetCurrentContext(imguiContext_);
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
-    io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
-    io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
-
-    updateImGuiInput();
-    ImGui::NewFrame();
     const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot();
 
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
@@ -1239,25 +1352,28 @@ void RenderContext::renderProfilerOverlay(float deltaTime) {
         }
     }
     ImGui::End();
-
-    ImGui::Render();
-    renderImGuiDrawData(ImGui::GetDrawData());
 }
 
-void RenderContext::renderCursorOverlay(float deltaTime) {
-    MW_PROFILE_SCOPE("Overlay.Cursor");
+void RenderContext::renderInGameMenu() {
+    MW_PROFILE_SCOPE("Menu.InGame");
 
-    if (!imguiContext_) {
-        return;
+    const ImVec2 windowSize(260.0f, 120.0f);
+    ImGui::SetNextWindowPos(ImVec2((windowWidth_ - windowSize.x) * 0.5f, (windowHeight_ - windowSize.y) * 0.5f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("Game Menu", nullptr, flags)) {
+        if (ImGui::Button("Resume", ImVec2(-1.0f, 36.0f))) {
+            closeInGameMenu();
+        }
+        if (ImGui::Button("Exit to Start", ImVec2(-1.0f, 36.0f))) {
+            pendingInGameMenuAction_ = InGameMenuAction::ReturnToStart;
+        }
     }
+    ImGui::End();
+}
 
-    ImGui::SetCurrentContext(imguiContext_);
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
-    io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
-    io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
-
-    ImGui::NewFrame();
+void RenderContext::renderCursorOverlay() {
+    MW_PROFILE_SCOPE("Overlay.Cursor");
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     const ImVec2 center(static_cast<float>(windowWidth_) * 0.5f, static_cast<float>(windowHeight_) * 0.5f);
 
@@ -1289,71 +1405,6 @@ void RenderContext::renderCursorOverlay(float deltaTime) {
         drawList->AddText(ImVec2(yEnd.x + 4.0f, yEnd.y - 6.0f), IM_COL32(100, 220, 100, 255), "Y");
         drawList->AddText(ImVec2(zEnd.x + 4.0f, zEnd.y - 6.0f), IM_COL32(100, 140, 220, 255), "Z");
     }
-
-    ImGui::Render();
-    renderImGuiDrawData(ImGui::GetDrawData());
-}
-
-void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, CachedChunkMesh& outMesh) {
-    MW_PROFILE_SCOPE("Chunk.BuildMesh");
-
-    const VoxelWorld& voxelWorld = world.getVoxelWorld();
-    const Chunk& chunk = voxelWorld.getChunk(chunkPos);
-
-    std::vector<PosColorVertex> vertices;
-    std::vector<uint16_t> indices;
-    vertices.reserve(1024);
-    indices.reserve(1536);
-
-    for (int x = 0; x < Chunk::SIZE; ++x) {
-        for (int y = 0; y < Chunk::SIZE; ++y) {
-            for (int z = 0; z < Chunk::SIZE; ++z) {
-                const glm::ivec3 localPos(x, y, z);
-                const BlockData block = chunk.getBlock(localPos);
-                if (block.type == BlockType::Air) {
-                    continue;
-                }
-
-                const glm::ivec3 worldPos = chunk.localToWorld(localPos);
-                const glm::vec3 baseColor = blockColor(block.type);
-                for (const Face& face : kFaces) {
-                    if (world.getBlock(worldPos + face.normal).type != BlockType::Air) {
-                        continue;
-                    }
-
-                    if (vertices.size() > kMaxBatchVertices - 4 || indices.size() > kMaxBatchIndices - 6) {
-                        goto done;
-                    }
-
-                    const auto start = static_cast<uint16_t>(vertices.size());
-                    const uint32_t packedColor = packColor(baseColor * face.shade);
-                    for (const glm::vec3& corner : face.corners) {
-                        glm::vec3 pos = glm::vec3(worldPos) + corner;
-                        vertices.push_back(PosColorVertex{pos.x, pos.y, pos.z, packedColor});
-                    }
-                    indices.push_back(start + 0);
-                    indices.push_back(start + 1);
-                    indices.push_back(start + 2);
-                    indices.push_back(start + 0);
-                    indices.push_back(start + 2);
-                    indices.push_back(start + 3);
-                }
-            }
-        }
-    }
-done:
-
-    outMesh.vertexCount = vertices.size();
-    outMesh.vertexData.resize(vertices.size() * 4);
-    for (size_t i = 0; i < vertices.size(); ++i) {
-        outMesh.vertexData[i * 4 + 0] = vertices[i].x;
-        outMesh.vertexData[i * 4 + 1] = vertices[i].y;
-        outMesh.vertexData[i * 4 + 2] = vertices[i].z;
-        float colorAsFloat;
-        std::memcpy(&colorAsFloat, &vertices[i].abgr, sizeof(float));
-        outMesh.vertexData[i * 4 + 3] = colorAsFloat;
-    }
-    outMesh.indices = std::move(indices);
 }
 
 void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
@@ -1453,17 +1504,128 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
     }
 }
 
-void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
-    MW_PROFILE_COUNTER("Chunk.CacheInvalidations", 1);
+void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, CachedChunkMesh& outMesh) {
+    MW_PROFILE_SCOPE("Chunk.BuildMesh");
 
-    static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
-                                                                  glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
-    for (const auto& off : kInvalidateOffsets) {
-        const glm::ivec3 pos = chunkPos + off;
-        auto it = chunkMeshCache_.find(pos);
-        if (it != chunkMeshCache_.end()) {
-            chunkMeshCache_.erase(it);
+    const VoxelWorld& voxelWorld = world.getVoxelWorld();
+    const Chunk& chunk = voxelWorld.getChunk(chunkPos);
+
+    std::vector<PosColorVertex> vertices;
+    std::vector<uint16_t> indices;
+    vertices.reserve(1024);
+    indices.reserve(1536);
+
+    for (int x = 0; x < Chunk::SIZE; ++x) {
+        for (int y = 0; y < Chunk::SIZE; ++y) {
+            for (int z = 0; z < Chunk::SIZE; ++z) {
+                const glm::ivec3 localPos(x, y, z);
+                const BlockData block = chunk.getBlock(localPos);
+                if (block.type == BlockType::Air) {
+                    continue;
+                }
+
+                const glm::ivec3 worldPos = chunk.localToWorld(localPos);
+                const glm::vec3 baseColor = blockColor(block.type);
+                for (const Face& face : kFaces) {
+                    if (world.getBlock(worldPos + face.normal).type != BlockType::Air) {
+                        continue;
+                    }
+
+                    if (vertices.size() > kMaxBatchVertices - 4 || indices.size() > kMaxBatchIndices - 6) {
+                        goto done;
+                    }
+
+                    const auto start = static_cast<uint16_t>(vertices.size());
+                    const uint32_t packedColor = packColor(baseColor * face.shade);
+                    for (const glm::vec3& corner : face.corners) {
+                        glm::vec3 pos = glm::vec3(worldPos) + corner;
+                        vertices.push_back(PosColorVertex{pos.x, pos.y, pos.z, packedColor});
+                    }
+                    indices.push_back(start + 0);
+                    indices.push_back(start + 1);
+                    indices.push_back(start + 2);
+                    indices.push_back(start + 0);
+                    indices.push_back(start + 2);
+                    indices.push_back(start + 3);
+                }
+            }
         }
-        chunkBlockCounts_.erase(pos);
     }
+done:
+
+    outMesh.vertexCount = vertices.size();
+    outMesh.vertexData.resize(vertices.size() * 4);
+    for (size_t i = 0; i < vertices.size(); ++i) {
+        outMesh.vertexData[i * 4 + 0] = vertices[i].x;
+        outMesh.vertexData[i * 4 + 1] = vertices[i].y;
+        outMesh.vertexData[i * 4 + 2] = vertices[i].z;
+        float colorAsFloat;
+        std::memcpy(&colorAsFloat, &vertices[i].abgr, sizeof(float));
+        outMesh.vertexData[i * 4 + 3] = colorAsFloat;
+    }
+    outMesh.indices = std::move(indices);
+}
+
+void RenderContext::updateImGuiInput() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
+    io.MouseWheel = 0.0f;
+
+    if (!window_ || mouseCaptured_) {
+        imguiScrollY_ = 0.0;
+        io.MouseDown[0] = false;
+        io.MouseDown[1] = false;
+        io.MouseDown[2] = false;
+        return;
+    }
+
+    double mouseX = 0.0;
+    double mouseY = 0.0;
+    glfwGetCursorPos(window_, &mouseX, &mouseY);
+    io.MousePos = ImVec2(static_cast<float>(mouseX), static_cast<float>(mouseY));
+    io.MouseDown[0] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    io.MouseDown[1] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
+    io.MouseDown[2] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
+
+    if (imguiScrollY_ != 0.0) {
+        io.MouseWheel = static_cast<float>(imguiScrollY_);
+        imguiScrollY_ = 0.0;
+    }
+}
+
+void RenderContext::handleScroll(GLFWwindow* window, double, double yOffset) {
+    auto* renderContext = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
+    if (!renderContext || renderContext->mouseCaptured_) {
+        return;
+    }
+
+    renderContext->imguiScrollY_ += yOffset;
+}
+
+glm::vec3 RenderContext::forward() const {
+    const float yaw = glm::radians(cameraYaw_);
+    const float pitch = glm::radians(cameraPitch_);
+    return glm::normalize(glm::vec3(
+        std::cos(yaw) * std::cos(pitch),
+        std::sin(pitch),
+        std::sin(yaw) * std::cos(pitch)));
+}
+
+glm::vec3 RenderContext::right() const {
+    return glm::normalize(glm::cross(forward(), glm::vec3(0.0f, 1.0f, 0.0f)));
+}
+
+bool RenderContext::shouldHideLocalPlayerModel(const ClientWorld& world, entt::entity entity) const {
+    if (cameraViewMode_ != CameraViewMode::FirstPerson) {
+        return false;
+    }
+
+    const auto& registry = world.getActorWorld().registry();
+    if (!registry.all_of<SessionComponent, PlayerComponent>(entity)) {
+        return false;
+    }
+
+    const auto& session = registry.get<SessionComponent>(entity);
+    const auto& player = registry.get<PlayerComponent>(entity);
+    return session.sessionId == localSessionId_ && player.mode == PlayerMode::Survival;
 }

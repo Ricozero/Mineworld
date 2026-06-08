@@ -160,16 +160,16 @@ void GameServer::updateSessionVisibleChunks(Session& session) {
         break;
     }
 
+    if (currentChunkPos.x == INT_MAX) {
+        return;
+    }
+
     if (currentChunkPos == session.lastChunkPos) {
         return;
     }
 
     session.lastChunkPos = currentChunkPos;
     session.cachedVisibleChunks.clear();
-
-    if (currentChunkPos.x == INT_MAX) {
-        return;
-    }
 
     for (int dx = -kChunkViewRadius; dx <= kChunkViewRadius; ++dx) {
         for (int dy = -kChunkViewRadius; dy <= kChunkViewRadius; ++dy) {

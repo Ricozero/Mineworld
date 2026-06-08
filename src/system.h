@@ -25,7 +25,7 @@ public:
 
 class InputSystem : public ClientSystem {
 public:
-    explicit InputSystem(RenderContext* renderContext = nullptr, uint32_t localSessionId = 0);
+    InputSystem(RenderContext* renderContext, uint32_t localSessionId);
     void update(ClientWorld& world, float deltaTime) override;
 
     bool hasInputChanged() const { return inputChanged_; }
@@ -52,7 +52,7 @@ private:
 
 class RenderSystem : public ClientSystem {
 public:
-    explicit RenderSystem(RenderContext* renderContext = nullptr, uint32_t localSessionId = 0);
+    RenderSystem(RenderContext* renderContext, uint32_t localSessionId);
     void update(ClientWorld& world, float deltaTime) override;
 
 private:
