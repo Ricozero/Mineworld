@@ -2,12 +2,12 @@
 
 #include <algorithm>
 
+#include "client_system.h"
 #include "entity.h"
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
 #include "render_context.h"
-#include "system.h"
 
 GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
     : renderContext_(renderContext) {

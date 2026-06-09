@@ -20,10 +20,6 @@ bool isUdpPeerReset(asio::error_code ec) {
 
 }  // namespace
 
-// Handshake protocol constants
-namespace kcp_handshake {
-}  // namespace kcp_handshake
-
 // ============================================================
 // KcpChannel (client-side, single connection)
 // ============================================================

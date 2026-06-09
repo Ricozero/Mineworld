@@ -26,6 +26,11 @@
 
 namespace {
 
+template <typename T>
+T cycleMode(T current) {
+    return static_cast<T>((static_cast<int>(current) + 1) % static_cast<int>(T::Count));
+}
+
 constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
 constexpr uint32_t kResetFlags = BGFX_RESET_VSYNC;
@@ -370,6 +375,67 @@ void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
 
 }  // namespace
 
+bool ChunkMeshCache::contains(glm::ivec3 chunkPos) const {
+    return entries_.count(chunkPos) > 0;
+}
+
+const ChunkMeshCache::Entry* ChunkMeshCache::get(glm::ivec3 chunkPos) const {
+    auto it = entries_.find(chunkPos);
+    return it != entries_.end() ? &it->second : nullptr;
+}
+
+void ChunkMeshCache::put(glm::ivec3 chunkPos, size_t blockCount, Entry entry) {
+    blockCounts_[chunkPos] = blockCount;
+    entries_[chunkPos] = std::move(entry);
+}
+
+void ChunkMeshCache::invalidate(glm::ivec3 chunkPos) {
+    entries_.erase(chunkPos);
+    blockCounts_.erase(chunkPos);
+}
+
+void ChunkMeshCache::evictStale(const std::vector<glm::ivec3>& loadedChunks) {
+    std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
+    std::vector<glm::ivec3> toRemove;
+    toRemove.reserve(entries_.size());
+    for (const auto& [pos, _] : entries_) {
+        if (!loadedSet.count(pos)) {
+            toRemove.push_back(pos);
+        }
+    }
+    for (const glm::ivec3& pos : toRemove) {
+        invalidate(pos);
+    }
+}
+
+bool ChunkMeshCache::needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount,
+                                  const std::unordered_map<glm::ivec3, size_t>& currentCounts) const {
+    auto countIt = blockCounts_.find(chunkPos);
+    if (countIt == blockCounts_.end() || countIt->second != currentBlockCount || !contains(chunkPos)) {
+        return true;
+    }
+
+    static const std::array<glm::ivec3, 6> kNeighborOffsets = {{
+        glm::ivec3(1, 0, 0),
+        glm::ivec3(-1, 0, 0),
+        glm::ivec3(0, 1, 0),
+        glm::ivec3(0, -1, 0),
+        glm::ivec3(0, 0, 1),
+        glm::ivec3(0, 0, -1),
+    }};
+    for (const glm::ivec3& off : kNeighborOffsets) {
+        const glm::ivec3 neighbor = chunkPos + off;
+        auto prevIt = blockCounts_.find(neighbor);
+        auto currIt = currentCounts.find(neighbor);
+        if (prevIt != blockCounts_.end() && currIt != currentCounts.end()) {
+            if (prevIt->second != currIt->second) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 RenderContext::~RenderContext() {
     shutdown();
 }
@@ -625,17 +691,13 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     if (!mouseCaptured_) {
         const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
         if (f1Down && !prevF1Down_) {
-            showProfiler_ = !showProfiler_;
+            profilerMode_ = cycleMode(profilerMode_);
         }
         prevF1Down_ = f1Down;
 
         const bool f2Down = glfwGetKey(window_, GLFW_KEY_F2) == GLFW_PRESS;
         if (f2Down && !prevF2Down_) {
-            cursorMode_ = (cursorMode_ == CursorMode::None)
-                              ? CursorMode::Cross
-                          : (cursorMode_ == CursorMode::Cross)
-                              ? CursorMode::XYZ
-                              : CursorMode::None;
+            cursorMode_ = cycleMode(cursorMode_);
         }
         prevF2Down_ = f2Down;
 
@@ -647,11 +709,7 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
 
         const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
         if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
-            cameraViewMode_ = cameraViewMode_ == CameraViewMode::FirstPerson
-                                  ? CameraViewMode::ThirdPersonFront
-                              : cameraViewMode_ == CameraViewMode::ThirdPersonFront
-                                  ? CameraViewMode::ThirdPersonBack
-                                  : CameraViewMode::FirstPerson;
+            cameraViewMode_ = cycleMode(cameraViewMode_);
         }
         prevF5Down_ = f5Down;
 
@@ -691,11 +749,7 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
 
     const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
     if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
-        cameraViewMode_ = cameraViewMode_ == CameraViewMode::FirstPerson
-                              ? CameraViewMode::ThirdPersonFront
-                          : cameraViewMode_ == CameraViewMode::ThirdPersonFront
-                              ? CameraViewMode::ThirdPersonBack
-                              : CameraViewMode::FirstPerson;
+        cameraViewMode_ = cycleMode(cameraViewMode_);
         logging::info("Switched camera view to {}",
                       cameraViewMode_ == CameraViewMode::FirstPerson        ? "first-person"
                       : cameraViewMode_ == CameraViewMode::ThirdPersonFront ? "third-person-front"
@@ -736,17 +790,13 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     }
     const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
     if (f1Down && !prevF1Down_) {
-        showProfiler_ = !showProfiler_;
+        profilerMode_ = cycleMode(profilerMode_);
     }
     prevF1Down_ = f1Down;
 
     const bool f2Down = glfwGetKey(window_, GLFW_KEY_F2) == GLFW_PRESS;
     if (f2Down && !prevF2Down_) {
-        cursorMode_ = (cursorMode_ == CursorMode::None)
-                          ? CursorMode::Cross
-                      : (cursorMode_ == CursorMode::Cross)
-                          ? CursorMode::XYZ
-                          : CursorMode::None;
+        cursorMode_ = cycleMode(cursorMode_);
     }
     prevF2Down_ = f2Down;
 
@@ -787,6 +837,8 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
         case CameraViewMode::ThirdPersonBack:
             cameraPitch_ = pitch;
             cameraPosition_ = thirdPersonTarget - forward() * cameraDistance;
+            break;
+        default:
             break;
     }
 }
@@ -855,7 +907,7 @@ void RenderContext::render(const ClientWorld& world) {
 
     recordBgfxStats(bgfx::getStats());
 
-    const bool anyOverlay = showProfiler_ || cursorMode_ != CursorMode::None || inGameMenuOpen_;
+    const bool anyOverlay = profilerMode_ != ProfilerMode::Hidden || cursorMode_ != CursorMode::Hidden || inGameMenuOpen_;
     if (anyOverlay && imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
         ImGuiIO& io = ImGui::GetIO();
@@ -865,10 +917,10 @@ void RenderContext::render(const ClientWorld& world) {
         updateImGuiInput();
         ImGui::NewFrame();
 
-        if (showProfiler_) {
+        if (profilerMode_ != ProfilerMode::Hidden) {
             renderProfilerOverlay();
         }
-        if (cursorMode_ != CursorMode::None) {
+        if (cursorMode_ != CursorMode::Hidden) {
             renderCursorOverlay();
         }
         if (inGameMenuOpen_) {
@@ -918,12 +970,7 @@ void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
     static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
                                                                   glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
     for (const auto& off : kInvalidateOffsets) {
-        const glm::ivec3 pos = chunkPos + off;
-        auto it = chunkMeshCache_.find(pos);
-        if (it != chunkMeshCache_.end()) {
-            chunkMeshCache_.erase(it);
-        }
-        chunkBlockCounts_.erase(pos);
+        chunkMeshCache_.invalidate(chunkPos + off);
     }
 }
 
@@ -950,15 +997,15 @@ bool RenderContext::loadShaders() {
         return false;
     }
 
-    programIndex_ = program.idx;
+    worldShader_.program = program.idx;
     return true;
 }
 
 void RenderContext::destroyShaders() {
-    bgfx::ProgramHandle program{programIndex_};
+    bgfx::ProgramHandle program{worldShader_.program};
     if (bgfx::isValid(program)) {
         bgfx::destroy(program);
-        programIndex_ = bgfx::kInvalidHandle;
+        worldShader_.program = bgfx::kInvalidHandle;
     }
 }
 
@@ -994,7 +1041,7 @@ bool RenderContext::initializeImGui() {
         shutdownImGui();
         return false;
     }
-    imguiFontTextureIndex_ = fontTexture.idx;
+    imguiShader_.fontTexture = fontTexture.idx;
 
     bgfx::UniformHandle textureUniform = bgfx::createUniform("s_tex", bgfx::UniformType::Sampler);
     if (!bgfx::isValid(textureUniform)) {
@@ -1002,7 +1049,7 @@ bool RenderContext::initializeImGui() {
         shutdownImGui();
         return false;
     }
-    imguiTextureUniformIndex_ = textureUniform.idx;
+    imguiShader_.textureUniform = textureUniform.idx;
 
     const char* rendererDir = shaderDirectoryForRenderer(bgfx::getRendererType());
     std::filesystem::path shaderDir = std::filesystem::path("shaders") / rendererDir;
@@ -1027,27 +1074,27 @@ bool RenderContext::initializeImGui() {
         shutdownImGui();
         return false;
     }
-    imguiProgramIndex_ = program.idx;
+    imguiShader_.program = program.idx;
     return true;
 }
 
 void RenderContext::shutdownImGui() {
-    bgfx::ProgramHandle program{imguiProgramIndex_};
+    bgfx::ProgramHandle program{imguiShader_.program};
     if (bgfx::isValid(program)) {
         bgfx::destroy(program);
-        imguiProgramIndex_ = bgfx::kInvalidHandle;
+        imguiShader_.program = bgfx::kInvalidHandle;
     }
 
-    bgfx::UniformHandle textureUniform{imguiTextureUniformIndex_};
+    bgfx::UniformHandle textureUniform{imguiShader_.textureUniform};
     if (bgfx::isValid(textureUniform)) {
         bgfx::destroy(textureUniform);
-        imguiTextureUniformIndex_ = bgfx::kInvalidHandle;
+        imguiShader_.textureUniform = bgfx::kInvalidHandle;
     }
 
-    bgfx::TextureHandle fontTexture{imguiFontTextureIndex_};
+    bgfx::TextureHandle fontTexture{imguiShader_.fontTexture};
     if (bgfx::isValid(fontTexture)) {
         bgfx::destroy(fontTexture);
-        imguiFontTextureIndex_ = bgfx::kInvalidHandle;
+        imguiShader_.fontTexture = bgfx::kInvalidHandle;
     }
 
     if (imguiContext_) {
@@ -1064,60 +1111,24 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     const auto loadedChunks = voxelWorld.getLoadedChunks();
     MW_PROFILE_GAUGE("World.LoadedChunks", static_cast<double>(loadedChunks.size()));
 
-    // Remove cached meshes for unloaded chunks
-    std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
-    std::vector<glm::ivec3> staleChunks;
-    staleChunks.reserve(chunkMeshCache_.size());
-    for (const auto& [chunkPos, _] : chunkMeshCache_) {
-        if (loadedSet.find(chunkPos) == loadedSet.end()) {
-            staleChunks.push_back(chunkPos);
-        }
-    }
-    for (const glm::ivec3& chunkPos : staleChunks) {
-        chunkBlockCounts_.erase(chunkPos);
-        chunkMeshCache_.erase(chunkPos);
-    }
+    chunkMeshCache_.evictStale(loadedChunks);
 
     // Build/update cached meshes per chunk (only when dirty)
     std::unordered_map<glm::ivec3, size_t> currentCounts;
     currentCounts.reserve(loadedChunks.size());
     for (const glm::ivec3& chunkPos : loadedChunks) {
-        const Chunk& chunk = voxelWorld.getChunk(chunkPos);
-        currentCounts[chunkPos] = chunk.getBlockCount();
+        currentCounts[chunkPos] = voxelWorld.getChunk(chunkPos).getBlockCount();
     }
 
     for (const glm::ivec3& chunkPos : loadedChunks) {
         const size_t blockCount = currentCounts[chunkPos];
-
-        auto countIt = chunkBlockCounts_.find(chunkPos);
-        bool needsRebuild = (countIt == chunkBlockCounts_.end()) ||
-                            (countIt->second != blockCount) ||
-                            (chunkMeshCache_.find(chunkPos) == chunkMeshCache_.end());
-
-        if (!needsRebuild) {
-            static const std::array<glm::ivec3, 6> kNeighborOffsets = {{glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0), glm::ivec3(0, 1, 0),
-                                                                        glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
-            for (const glm::ivec3& off : kNeighborOffsets) {
-                const glm::ivec3 neighbor = chunkPos + off;
-                auto prevNeighborIt = chunkBlockCounts_.find(neighbor);
-                auto currNeighborIt = currentCounts.find(neighbor);
-                if (prevNeighborIt != chunkBlockCounts_.end() && currNeighborIt != currentCounts.end()) {
-                    if (prevNeighborIt->second != currNeighborIt->second) {
-                        needsRebuild = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if (needsRebuild) {
-            CachedChunkMesh cachedMesh;
-            buildChunkMesh(world, chunkPos, cachedMesh);
+        if (chunkMeshCache_.needsRebuild(chunkPos, blockCount, currentCounts)) {
+            ChunkMeshCache::Entry entry;
+            buildChunkMesh(world, chunkPos, entry);
             MW_PROFILE_COUNTER("Chunk.MeshRebuilds", 1);
-            MW_PROFILE_COUNTER("Chunk.MeshBuildVertices", static_cast<int64_t>(cachedMesh.vertexCount));
-            MW_PROFILE_COUNTER("Chunk.MeshBuildIndices", static_cast<int64_t>(cachedMesh.indices.size()));
-            chunkBlockCounts_[chunkPos] = blockCount;
-            chunkMeshCache_[chunkPos] = std::move(cachedMesh);
+            MW_PROFILE_COUNTER("Chunk.MeshBuildVertices", static_cast<int64_t>(entry.vertexCount));
+            MW_PROFILE_COUNTER("Chunk.MeshBuildIndices", static_cast<int64_t>(entry.indices.size()));
+            chunkMeshCache_.put(chunkPos, blockCount, std::move(entry));
         }
     }
     MW_PROFILE_GAUGE("Chunk.MeshCacheSize", static_cast<double>(chunkMeshCache_.size()));
@@ -1128,37 +1139,33 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     currentBatch.indices.reserve(12288);
 
     for (const glm::ivec3& chunkPos : loadedChunks) {
-        const auto cacheIt = chunkMeshCache_.find(chunkPos);
-        if (cacheIt == chunkMeshCache_.end()) {
-            continue;
-        }
-        const auto& cached = cacheIt->second;
-        if (cached.vertexCount == 0 || cached.indices.empty()) {
+        const ChunkMeshCache::Entry* cached = chunkMeshCache_.get(chunkPos);
+        if (!cached || cached->vertexCount == 0 || cached->indices.empty()) {
             continue;
         }
 
-        if (cached.vertexCount > kMaxBatchVertices || cached.indices.size() > kMaxBatchIndices) {
+        if (cached->vertexCount > kMaxBatchVertices || cached->indices.size() > kMaxBatchIndices) {
             continue;
         }
 
-        if (currentBatch.vertices.size() + cached.vertexCount > kMaxBatchVertices ||
-            currentBatch.indices.size() + cached.indices.size() > kMaxBatchIndices) {
-            submitMeshBatch(currentBatch, programIndex_);
+        if (currentBatch.vertices.size() + cached->vertexCount > kMaxBatchVertices ||
+            currentBatch.indices.size() + cached->indices.size() > kMaxBatchIndices) {
+            submitMeshBatch(currentBatch, worldShader_.program);
             currentBatch.vertices.clear();
             currentBatch.indices.clear();
         }
 
         const auto baseVertex = static_cast<uint16_t>(currentBatch.vertices.size());
-        const size_t floatsPerVertex = 4;
-        for (size_t i = 0; i < cached.vertexCount; ++i) {
-            float x = cached.vertexData[i * floatsPerVertex + 0];
-            float y = cached.vertexData[i * floatsPerVertex + 1];
-            float z = cached.vertexData[i * floatsPerVertex + 2];
+        constexpr size_t kFloatsPerVertex = 4;
+        for (size_t i = 0; i < cached->vertexCount; ++i) {
+            float x = cached->vertexData[i * kFloatsPerVertex + 0];
+            float y = cached->vertexData[i * kFloatsPerVertex + 1];
+            float z = cached->vertexData[i * kFloatsPerVertex + 2];
             uint32_t abgr;
-            std::memcpy(&abgr, &cached.vertexData[i * floatsPerVertex + 3], sizeof(uint32_t));
+            std::memcpy(&abgr, &cached->vertexData[i * kFloatsPerVertex + 3], sizeof(uint32_t));
             currentBatch.vertices.push_back(PosColorVertex{x, y, z, abgr});
         }
-        for (uint16_t idx : cached.indices) {
+        for (uint16_t idx : cached->indices) {
             currentBatch.indices.push_back(baseVertex + idx);
         }
     }
@@ -1178,7 +1185,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
         const size_t requiredIndices = actorModel ? kPlayerModelIndexCount : kBoxIndexCount;
         if (currentBatch.vertices.size() + requiredVertices > kMaxBatchVertices ||
             currentBatch.indices.size() + requiredIndices > kMaxBatchIndices) {
-            submitMeshBatch(currentBatch, programIndex_);
+            submitMeshBatch(currentBatch, worldShader_.program);
             currentBatch.vertices.clear();
             currentBatch.indices.clear();
         }
@@ -1193,7 +1200,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     }
 
     // Flush remaining batch
-    submitMeshBatch(currentBatch, programIndex_);
+    submitMeshBatch(currentBatch, worldShader_.program);
 
     if (showChunkBounds_) {
         MeshBuilder lineBatch;
@@ -1203,7 +1210,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             const glm::vec3 max = min + glm::vec3(static_cast<float>(Chunk::SIZE));
             addLineBox(lineBatch, min, max, boundColor);
         }
-        submitLineBatch(lineBatch, programIndex_);
+        submitLineBatch(lineBatch, worldShader_.program);
     }
 }
 
@@ -1277,7 +1284,7 @@ void RenderContext::renderProfilerOverlay() {
             ImGui::EndTable();
         }
 
-        if (ImGui::BeginTable("ProfilerScopes", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
+        if (profilerMode_ == ProfilerMode::Full && ImGui::BeginTable("ProfilerScopes", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
             ImGui::TableSetupColumn("Scope", ImGuiTableColumnFlags_WidthFixed, kColName);
             ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
@@ -1302,7 +1309,7 @@ void RenderContext::renderProfilerOverlay() {
             ImGui::EndTable();
         }
 
-        if (ImGui::BeginTable("ProfilerCounters", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
+        if (profilerMode_ == ProfilerMode::Full && ImGui::BeginTable("ProfilerCounters", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
             ImGui::TableSetupColumn("Counter", ImGuiTableColumnFlags_WidthFixed, kColName);
             ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
@@ -1327,7 +1334,7 @@ void RenderContext::renderProfilerOverlay() {
             ImGui::EndTable();
         }
 
-        if (ImGui::BeginTable("ProfilerGauges", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
+        if (profilerMode_ == ProfilerMode::Full && ImGui::BeginTable("ProfilerGauges", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
             ImGui::TableSetupColumn("Gauge", ImGuiTableColumnFlags_WidthFixed, kColName);
             ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
@@ -1371,7 +1378,7 @@ void RenderContext::renderInGameMenu() {
 
 void RenderContext::renderCursorOverlay() {
     MW_PROFILE_SCOPE("Overlay.Cursor");
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     const ImVec2 center(static_cast<float>(windowWidth_) * 0.5f, static_cast<float>(windowHeight_) * 0.5f);
 
     if (cursorMode_ == CursorMode::Cross) {
@@ -1434,9 +1441,9 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
     bgfx::setViewTransform(kImGuiView, nullptr, projection);
     bgfx::touch(kImGuiView);
 
-    const bgfx::ProgramHandle program{imguiProgramIndex_};
-    const bgfx::TextureHandle fontTexture{imguiFontTextureIndex_};
-    const bgfx::UniformHandle textureUniform{imguiTextureUniformIndex_};
+    const bgfx::ProgramHandle program{imguiShader_.program};
+    const bgfx::TextureHandle fontTexture{imguiShader_.fontTexture};
+    const bgfx::UniformHandle textureUniform{imguiShader_.textureUniform};
     if (!bgfx::isValid(program) || !bgfx::isValid(fontTexture) || !bgfx::isValid(textureUniform)) {
         return;
     }
@@ -1501,7 +1508,7 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
     }
 }
 
-void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, CachedChunkMesh& outMesh) {
+void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, ChunkMeshCache::Entry& outMesh) {
     MW_PROFILE_SCOPE("Chunk.BuildMesh");
 
     const VoxelWorld& voxelWorld = world.getVoxelWorld();

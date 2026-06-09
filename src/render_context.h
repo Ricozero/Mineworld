@@ -17,6 +17,30 @@ struct ImDrawData;
 struct ImGuiContext;
 struct GLFWwindow;
 
+class ChunkMeshCache {
+public:
+    struct Entry {
+        std::vector<float> vertexData;
+        std::vector<uint16_t> indices;
+        size_t vertexCount = 0;
+    };
+
+    bool contains(glm::ivec3 chunkPos) const;
+    const Entry* get(glm::ivec3 chunkPos) const;
+    void put(glm::ivec3 chunkPos, size_t blockCount, Entry entry);
+    void invalidate(glm::ivec3 chunkPos);
+    void evictStale(const std::vector<glm::ivec3>& loadedChunks);
+    bool needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount,
+                      const std::unordered_map<glm::ivec3, size_t>& currentCounts) const;
+
+    const std::unordered_map<glm::ivec3, Entry>& entries() const { return entries_; }
+    size_t size() const { return entries_.size(); }
+
+private:
+    std::unordered_map<glm::ivec3, Entry> entries_;
+    std::unordered_map<glm::ivec3, size_t> blockCounts_;
+};
+
 class RenderContext {
 public:
     // clang-format off
@@ -56,16 +80,21 @@ public:
     void invalidateChunkCache(glm::ivec3 chunkPos);
 
 private:
-    struct CachedChunkMesh {
-        std::vector<float> vertexData;
-        std::vector<uint16_t> indices;
-        size_t vertexCount = 0;
+    // clang-format off
+    enum class CursorMode { Hidden, Cross, XYZ, Count };
+    enum class CameraViewMode { FirstPerson, ThirdPersonFront, ThirdPersonBack, Count };
+    enum class ProfilerMode { Hidden, Summary, Full, Count };
+    // clang-format on
+
+    struct WorldShader {
+        uint16_t program = 0xffff;
     };
 
-    // clang-format off
-    enum class CursorMode { None, Cross, XYZ };
-    enum class CameraViewMode { FirstPerson, ThirdPersonFront, ThirdPersonBack };
-    // clang-format on
+    struct ImGuiShader {
+        uint16_t program      = 0xffff;
+        uint16_t fontTexture  = 0xffff;
+        uint16_t textureUniform = 0xffff;
+    };
 
     // Init helpers
     bool loadShaders();
@@ -79,7 +108,7 @@ private:
     void renderCursorOverlay();
     void renderInGameMenu();
     void renderImGuiDrawData(ImDrawData* drawData);
-    void buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, CachedChunkMesh& outMesh);
+    void buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, ChunkMeshCache::Entry& outMesh);
 
     // Input helpers
     void updateImGuiInput();
@@ -97,7 +126,7 @@ private:
     int windowHeight_ = 720;
     float framebufferScaleX_ = 1.0f;
     float framebufferScaleY_ = 1.0f;
-    unsigned short programIndex_ = 0xffff;
+    WorldShader worldShader_;
 
     // Camera
     glm::vec3 cameraPosition_{8.0f, 6.0f, 24.0f};
@@ -122,20 +151,17 @@ private:
     bool prevF5Down_ = false;
 
     // Overlay & in-game menu state
-    bool showProfiler_ = false;
+    ProfilerMode profilerMode_ = ProfilerMode::Hidden;
     bool showChunkBounds_ = false;
-    CursorMode cursorMode_ = CursorMode::None;
+    CursorMode cursorMode_ = CursorMode::Hidden;
     bool inGameMenuOpen_ = false;
     InGameMenuAction pendingInGameMenuAction_ = InGameMenuAction::None;
 
-    // ImGui handles
+    // ImGui
     ImGuiContext* imguiContext_ = nullptr;
     double imguiScrollY_ = 0.0;
-    unsigned short imguiProgramIndex_ = 0xffff;
-    unsigned short imguiFontTextureIndex_ = 0xffff;
-    unsigned short imguiTextureUniformIndex_ = 0xffff;
+    ImGuiShader imguiShader_;
 
     // Chunk mesh cache
-    std::unordered_map<glm::ivec3, CachedChunkMesh> chunkMeshCache_;
-    std::unordered_map<glm::ivec3, size_t> chunkBlockCounts_;
+    ChunkMeshCache chunkMeshCache_;
 };

@@ -11,7 +11,7 @@
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
-#include "system.h"
+#include "server_system.h"
 
 namespace {
 
