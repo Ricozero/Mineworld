@@ -3,3 +3,4 @@ BasedOnStyle: Google
 IndentWidth: 4
 AccessModifierOffset: -4
 ColumnLimit: 0
+AllowShortCaseLabelsOnASingleLine: true

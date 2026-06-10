@@ -230,7 +230,7 @@ void simulateServerActor(ServerWorld& world, entt::registry& registry, entt::ent
 }
 
 void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
-    MW_PROFILE_SCOPE("System.Physics");
+    MW_PROFILE_SCOPE("Server.Physics");
 
     auto& registry = world.getActorWorld().registry();
     applyGravity(registry, deltaTime);
@@ -244,7 +244,7 @@ void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
 }
 
 void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
-    MW_PROFILE_SCOPE("System.Physics.Gravity");
+    MW_PROFILE_SCOPE("Server.Physics.Gravity");
 
     auto view = registry.view<PhysicsComponent, TransformComponent>();
     for (auto entity : view) {
@@ -265,7 +265,7 @@ void PhysicsSystem::applyGravity(entt::registry& registry, float deltaTime) {
 }
 
 void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
-    MW_PROFILE_SCOPE("System.Physics.Movement");
+    MW_PROFILE_SCOPE("Server.Physics.Movement");
 
     auto& registry = world.getActorWorld().registry();
 
@@ -323,7 +323,7 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
 }
 
 void PhysicsSystem::moveWithCollision(ServerWorld& world, entt::entity entity, float deltaTime) {
-    MW_PROFILE_SCOPE("System.Physics.Collision");
+    MW_PROFILE_SCOPE("Server.Physics.Collision");
 
     auto& registry = world.getActorWorld().registry();
     moveWithCollisionServer(world, registry, entity, deltaTime);

@@ -178,7 +178,7 @@ InputSystem::InputSystem(RenderContext* renderContext, uint32_t localSessionId)
 }
 
 void InputSystem::update(ClientWorld& world, float deltaTime) {
-    MW_PROFILE_SCOPE("System.Input");
+    MW_PROFILE_SCOPE("Client.Input");
 
     if (!renderContext_) {
         return;
@@ -217,7 +217,7 @@ RenderSystem::RenderSystem(RenderContext* renderContext, uint32_t localSessionId
 }
 
 void RenderSystem::update(ClientWorld& world, float deltaTime) {
-    MW_PROFILE_SCOPE("System.Render");
+    MW_PROFILE_SCOPE("Client.Render");
 
     if (!renderContext_) {
         return;

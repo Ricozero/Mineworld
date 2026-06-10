@@ -36,6 +36,8 @@ Entry& findOrAddSorted(std::vector<Entry>& entries, std::string_view name) {
     return *it;
 }
 
+constexpr double kSmoothAlpha = 0.01;
+
 double smooth(double current, double sample, double alpha) {
     return current == 0.0 ? sample : current * (1.0 - alpha) + sample * alpha;
 }
@@ -125,7 +127,7 @@ void Profiler::setGauge(std::string_view name, double value) {
     std::lock_guard lock(profilerMutex());
     GaugeEntry& entry = findOrAddSorted(gauges_, name);
     entry.value = value;
-    entry.avgValue = smooth(entry.avgValue, value, 0.08);
+    entry.avgValue = smooth(entry.avgValue, value, kSmoothAlpha);
     entry.maxValue = std::max(entry.maxValue, value);
 }
 
@@ -158,22 +160,22 @@ void Profiler::finishFrameLocked(double frameMs) {
 
     for (ScopeEntry& entry : scopes_) {
         entry.lastMs = entry.curMs;
-        entry.avgMs = smooth(entry.avgMs, entry.lastMs, 0.08);
+        entry.avgMs = smooth(entry.avgMs, entry.lastMs, kSmoothAlpha);
         entry.maxMs = std::max(entry.maxMs, entry.lastMs);
         entry.lastCalls = entry.curCalls;
-        entry.avgCalls = smooth(entry.avgCalls, static_cast<double>(entry.lastCalls), 0.08);
+        entry.avgCalls = smooth(entry.avgCalls, static_cast<double>(entry.lastCalls), kSmoothAlpha);
         entry.maxCalls = std::max(entry.maxCalls, entry.lastCalls);
     }
     for (CounterEntry& entry : counters_) {
         entry.lastValue = entry.curValue;
-        entry.avgValue = smooth(entry.avgValue, static_cast<double>(entry.lastValue), 0.08);
+        entry.avgValue = smooth(entry.avgValue, static_cast<double>(entry.lastValue), kSmoothAlpha);
         entry.maxValue = std::max(entry.maxValue, entry.lastValue);
     }
 
 #if defined(TRACY_ENABLE)
     TracyCPlot("Frame.ms", frameMs_);
     TracyCPlot("Frame.fps", fps_);
-    TracyCFrameMarkNamed("Main");
+    TracyCFrameMark;
 #endif
 
     for (ScopeEntry& entry : scopes_) {

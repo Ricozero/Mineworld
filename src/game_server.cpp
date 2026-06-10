@@ -70,8 +70,8 @@ void GameServer::update(float deltaTime) {
 
         std::vector<uint8_t> payload;
         payload = serializeSnapshot(snapshot, session.snapshotBuilder);
-        MW_PROFILE_COUNTER("Net.ServerSnapshotsOut", 1);
-        MW_PROFILE_COUNTER("Net.ServerBytesOut", static_cast<int64_t>(payload.size()));
+        MW_PROFILE_COUNTER("Server.ServerSnapshotsOut", 1);
+        MW_PROFILE_COUNTER("Server.ServerBytesOut", static_cast<int64_t>(payload.size()));
         server_->sendTo(sessionId, payload);
     }
 }
@@ -424,8 +424,8 @@ void GameServer::onSessionDisconnect(uint32_t sessionId) {
 }
 
 bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
-    MW_PROFILE_COUNTER("Net.ServerPacketsIn", 1);
-    MW_PROFILE_COUNTER("Net.ServerBytesIn", static_cast<int64_t>(packet.size()));
+    MW_PROFILE_COUNTER("Server.ServerPacketsIn", 1);
+    MW_PROFILE_COUNTER("Server.ServerBytesIn", static_cast<int64_t>(packet.size()));
 
     if (deserializeClientHello(packet)) {
         onClientHello(sessionId);

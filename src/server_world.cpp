@@ -5,7 +5,6 @@
 
 #include "profiler.h"
 
-
 namespace {
 
 constexpr glm::ivec3 kWorldMin{-1024, -256, -1024};
@@ -98,7 +97,7 @@ entt::entity ServerWorld::getEntityByName(const std::string& name) const {
 
 void ServerWorld::generateChunk(Chunk& chunk) const {
     MW_PROFILE_SCOPE("Server.GenerateChunk");
-    MW_PROFILE_COUNTER("World.ChunksGenerated", 1);
+    MW_PROFILE_COUNTER("Server.ChunksGenerated", 1);
 
     for (int x = 0; x < Chunk::SIZE; ++x) {
         for (int y = 0; y < Chunk::SIZE; ++y) {

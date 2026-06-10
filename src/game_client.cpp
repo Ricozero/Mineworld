@@ -69,8 +69,8 @@ void GameClient::pumpNetwork() {
 
     std::vector<uint8_t> packet;
     while (channel_->popPacket(packet)) {
-        MW_PROFILE_COUNTER("Net.ClientPacketsIn", 1);
-        MW_PROFILE_COUNTER("Net.ClientBytesIn", static_cast<int64_t>(packet.size()));
+        MW_PROFILE_COUNTER("Server.ClientPacketsIn", 1);
+        MW_PROFILE_COUNTER("Server.ClientBytesIn", static_cast<int64_t>(packet.size()));
 
         // Try ServerHello first
         NetServerHello hello;
@@ -191,9 +191,9 @@ void GameClient::replaySnapshots() {
 
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     MW_PROFILE_SCOPE("Client.ApplySnapshot");
-    MW_PROFILE_COUNTER("Net.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
-    MW_PROFILE_COUNTER("Net.SnapshotBlocks", static_cast<int64_t>(snapshot.blocks.size()));
-    MW_PROFILE_COUNTER("Net.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
+    MW_PROFILE_COUNTER("Server.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
+    MW_PROFILE_COUNTER("Server.SnapshotBlocks", static_cast<int64_t>(snapshot.blocks.size()));
+    MW_PROFILE_COUNTER("Server.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
 
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
@@ -292,6 +292,7 @@ void GameClient::queueRemoteActorSample(entt::registry& registry, entt::entity e
 }
 
 void GameClient::updateRemoteInterpolation(float deltaTime) {
+    MW_PROFILE_SCOPE("Client.RemoteInterpolation");
     snapshotClock_ += deltaTime;
 
     constexpr double interpolationDelay = 0.10;

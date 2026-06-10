@@ -17,12 +17,17 @@ struct ImDrawData;
 struct ImGuiContext;
 struct GLFWwindow;
 
+// Bit (i*6+j) set when chunk face i and j are connected by open air (i<j).
+// Face indices: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z.
+using ChunkFaceConnectivity = uint32_t;
+
 class ChunkMeshCache {
 public:
     struct Entry {
         std::vector<float> vertexData;
         std::vector<uint16_t> indices;
         size_t vertexCount = 0;
+        ChunkFaceConnectivity faceConnectivity = ~0u;
     };
 
     bool contains(glm::ivec3 chunkPos) const;
@@ -91,8 +96,8 @@ private:
     };
 
     struct ImGuiShader {
-        uint16_t program      = 0xffff;
-        uint16_t fontTexture  = 0xffff;
+        uint16_t program = 0xffff;
+        uint16_t fontTexture = 0xffff;
         uint16_t textureUniform = 0xffff;
     };
 
