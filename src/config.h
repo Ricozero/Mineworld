@@ -40,6 +40,17 @@ public:
         return value;
     }
 
+    bool getBool(std::string_view key, bool fallback = false) const {
+        auto it = entries_.find(std::string(key));
+        if (it == entries_.end()) {
+            return fallback;
+        }
+        const std::string& v = it->second;
+        if (v == "true" || v == "1" || v == "yes") return true;
+        if (v == "false" || v == "0" || v == "no") return false;
+        return fallback;
+    }
+
     float getFloat(std::string_view key, float fallback = 0.0f) const {
         auto it = entries_.find(std::string(key));
         if (it == entries_.end()) {
@@ -94,6 +105,13 @@ private:
 };
 
 struct AppConfig {
+    // [window]
+    int windowWidth = 1280;
+    int windowHeight = 720;
+
+    // [render]
+    std::string graphicsApi = "dx11";
+
     // [server]
     uint16_t port = 40000;
     int ticksPerSecond = 20;
@@ -122,6 +140,9 @@ struct AppConfig {
     void load(const std::string& configDir) {
         Config cfg;
         cfg.load(configDir + "config.ini");
+        windowWidth = cfg.getInt("window.width", windowWidth);
+        windowHeight = cfg.getInt("window.height", windowHeight);
+        graphicsApi = cfg.get("render.graphics_api", graphicsApi);
         port = static_cast<uint16_t>(cfg.getInt("server.port", port));
         ticksPerSecond = cfg.getInt("server.ticks_per_second", ticksPerSecond);
         chunkViewRadius = cfg.getInt("server.chunk_view_radius", chunkViewRadius);

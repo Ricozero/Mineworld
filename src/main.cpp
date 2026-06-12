@@ -8,7 +8,6 @@
 #include <thread>
 
 #include "config.h"
-#include "entity.h"
 #include "game_client.h"
 #include "game_server.h"
 #include "log.h"
@@ -33,12 +32,6 @@ enum class ClientPlayMode {
     Local,
 };
 
-// Returns the directory containing the executable, with trailing slash
-std::string exeDir(const char* argv0) {
-    std::filesystem::path p(argv0);
-    return p.has_parent_path() ? p.parent_path().string() + "/" : "./";
-}
-
 RunMode parseRunMode(int argc, char* argv[]) {
     if (argc < 2) {
         return RunMode::Client;
@@ -60,14 +53,8 @@ bool initializeServer(std::unique_ptr<GameServer>& server) {
     logging::Scope logScope(logging::Channel::Server);
     server = std::make_unique<GameServer>();
 
-    // Create robots (AI-controlled entities)
-    auto steve = server->createRobot("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
-    auto alice = server->createRobot("Alice", glm::vec3(12.0f, 1.0f, 12.0f));
-
-    // Disable gravity for robots so they stay on the surface
-    auto& registry = server->world().getActorWorld().registry();
-    registry.get<PhysicsComponent>(steve).useGravity = false;
-    registry.get<PhysicsComponent>(alice).useGravity = false;
+    server->createRobot("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
+    server->createRobot("Alice", glm::vec3(12.0f, 1.0f, 12.0f));
 
     return true;
 }
@@ -75,7 +62,8 @@ bool initializeServer(std::unique_ptr<GameServer>& server) {
 bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext) {
     logging::Scope logScope(logging::Channel::Client);
     renderContext = std::make_unique<RenderContext>();
-    if (!renderContext->initialize(1280, 720, "Mineworld")) {
+    const AppConfig& cfg = AppConfig::instance();
+    if (!renderContext->initialize(cfg.windowWidth, cfg.windowHeight, "Mineworld")) {
         return false;
     }
     return true;
@@ -135,12 +123,11 @@ void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
 int runClient(const std::string& dir) {
     profiling::Profiler::instance().setThreadName("ClientMain");
 
+    AppConfig::instance().load(dir);
     std::unique_ptr<RenderContext> renderContext;
     if (!initializeRenderContext(renderContext)) {
         return 1;
     }
-
-    AppConfig::instance().load(dir);
 
     ClientState state = ClientState::StartMenu;
     ClientPlayMode playMode = ClientPlayMode::Remote;
@@ -229,7 +216,8 @@ int runClient(const std::string& dir) {
 int main(int argc, char* argv[]) {
     logging::init();
 
-    const std::string dir = exeDir(argc > 0 ? argv[0] : "");
+    std::filesystem::path path(argv[0]);
+    const std::string dir = path.has_parent_path() ? path.parent_path().string() + "/" : "./";
     const RunMode runMode = parseRunMode(argc, argv);
 
     switch (runMode) {

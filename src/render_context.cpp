@@ -21,6 +21,7 @@
 
 #include "chunk.h"
 #include "client_world.h"
+#include "config.h"
 #include "entity.h"
 #include "log.h"
 #include "profiler.h"
@@ -84,7 +85,7 @@ glm::vec3 blockColor(BlockType type) {
         case BlockType::Stone:
             return glm::vec3(0.48f, 0.50f, 0.53f);
         case BlockType::Dirt:
-            return glm::vec3(0.43f, 0.28f, 0.16f);
+            return glm::vec3(0.26f, 0.17f, 0.10f);
         case BlockType::Grass:
             return glm::vec3(0.24f, 0.58f, 0.22f);
         case BlockType::Wood:
@@ -592,7 +593,12 @@ bool RenderContext::initialize(int width, int height, const char* title) {
     }
 
     bgfx::Init init;
-    init.type = bgfx::RendererType::Direct3D11;
+    const std::string& api = AppConfig::instance().graphicsApi;
+    if (api == "dx11") init.type = bgfx::RendererType::Direct3D11;
+    else if (api == "dx12") init.type = bgfx::RendererType::Direct3D12;
+    else if (api == "opengl") init.type = bgfx::RendererType::OpenGL;
+    else if (api == "vulkan") init.type = bgfx::RendererType::Vulkan;
+    else init.type = bgfx::RendererType::Direct3D11;
     init.platformData.nwh = glfwGetWin32Window(window_);
     init.resolution.width = static_cast<uint32_t>(framebufferWidth_);
     init.resolution.height = static_cast<uint32_t>(framebufferHeight_);
@@ -1749,6 +1755,7 @@ void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos
                 const glm::ivec3 worldPos = chunk.localToWorld(localPos);
                 const glm::vec3 baseColor = blockColor(block.type);
                 for (const Face& face : kFaces) {
+                    // Face culling
                     if (world.getBlock(worldPos + face.normal).type != BlockType::Air) {
                         continue;
                     }
