@@ -109,7 +109,6 @@ void Profiler::recordScope(std::string_view name, double elapsedMs) {
 
     ScopeEntry& entry = findOrAddSorted(scopes_, name);
     entry.curMs += elapsedMs;
-    entry.curCalls += 1;
 
     if (name == "Frame.Total") {
         finishFrameLocked(elapsedMs);
@@ -162,9 +161,6 @@ void Profiler::finishFrameLocked(double frameMs) {
         entry.lastMs = entry.curMs;
         entry.avgMs = smooth(entry.avgMs, entry.lastMs, kSmoothAlpha);
         entry.maxMs = std::max(entry.maxMs, entry.lastMs);
-        entry.lastCalls = entry.curCalls;
-        entry.avgCalls = smooth(entry.avgCalls, static_cast<double>(entry.lastCalls), kSmoothAlpha);
-        entry.maxCalls = std::max(entry.maxCalls, entry.lastCalls);
     }
     for (CounterEntry& entry : counters_) {
         entry.lastValue = entry.curValue;
@@ -180,7 +176,6 @@ void Profiler::finishFrameLocked(double frameMs) {
 
     for (ScopeEntry& entry : scopes_) {
         entry.curMs = 0.0;
-        entry.curCalls = 0;
     }
     for (CounterEntry& entry : counters_) {
         entry.curValue = 0;

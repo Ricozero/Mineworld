@@ -22,13 +22,7 @@ bool isSolidBlock(ClientWorld& world, glm::ivec3 worldPos) {
     return world.getBlock(worldPos).type != BlockType::Air;
 }
 
-bool findCollisionBoundary(
-    ClientWorld& world,
-    const TransformComponent& transform,
-    const BoxColliderComponent& collider,
-    int axis,
-    float delta,
-    float& boundary) {
+bool findCollisionBoundary(ClientWorld& world, const TransformComponent& transform, const BoxColliderComponent& collider, int axis, float delta, float& boundary) {
     const glm::vec3 halfSize = collider.size * 0.5f;
     const glm::vec3 min = transform.position + collider.offset - halfSize;
     const glm::vec3 max = transform.position + collider.offset + halfSize;

@@ -29,12 +29,8 @@ public:
     void registerSystem(std::unique_ptr<ServerSystem> system);
     void update(float deltaTime);
 
-    entt::entity createLocalPlayer(
-        const std::string& name,
-        uint32_t sessionId,
-        glm::vec3 position = glm::vec3(0.0f),
-        PlayerMode mode = PlayerMode::Survival);
-    entt::entity createRobot(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
+    entt::entity createRobot(const std::string& name, glm::vec3 position);
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
     void setBlock(glm::ivec3 worldPos, BlockData blockData);

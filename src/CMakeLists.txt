@@ -2,6 +2,9 @@ file(GLOB_RECURSE APPLICATION_SOURCE *.cpp)
 
 add_executable(mineworld ${APPLICATION_SOURCE})
 
+# Copy config template to bin
+configure_file(${CMAKE_SOURCE_DIR}/config.ini ${CMAKE_SOURCE_DIR}/bin/config.ini COPYONLY)
+
 # Compile shaders
 set(MINEWORLD_SHADER_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
 set(MINEWORLD_SHADER_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/bin/shaders)
@@ -29,9 +32,6 @@ bgfx_compile_shaders(
 
 add_custom_target(mineworld_shaders DEPENDS ${MINEWORLD_VERTEX_SHADERS} ${MINEWORLD_FRAGMENT_SHADERS})
 add_dependencies(mineworld mineworld_shaders)
-
-# Copy config template to bin/ (always overwrite)
-configure_file(${CMAKE_SOURCE_DIR}/config.ini ${CMAKE_SOURCE_DIR}/bin/config.ini COPYONLY)
 
 # Generate FlatBuffers code
 set(MINEWORLD_FBS_SCHEMA ${CMAKE_CURRENT_SOURCE_DIR}/net_protocol.fbs)

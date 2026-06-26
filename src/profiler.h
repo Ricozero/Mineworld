@@ -25,10 +25,6 @@ struct ScopeEntry {
     double curMs = 0.0;
     double avgMs = 0.0;
     double maxMs = 0.0;
-    int64_t lastCalls = 0;
-    int64_t curCalls = 0;
-    double avgCalls = 0;
-    int64_t maxCalls = 0;
 };
 
 struct CounterEntry {

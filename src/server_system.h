@@ -21,5 +21,4 @@ public:
 private:
     void applyGravity(entt::registry& registry, float deltaTime);
     void updateMovement(ServerWorld& world, float deltaTime);
-    void moveWithCollision(ServerWorld& world, entt::entity entity, float deltaTime);
 };

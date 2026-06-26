@@ -26,11 +26,7 @@ entt::entity ActorWorld::createRemotePlayer(const std::string& name, glm::vec3 p
     return createPlayerEntity(name, std::nullopt, position, mode);
 }
 
-entt::entity ActorWorld::createPlayerEntity(
-    const std::string& name,
-    std::optional<uint32_t> sessionId,
-    glm::vec3 position,
-    PlayerMode mode) {
+entt::entity ActorWorld::createPlayerEntity(const std::string& name, std::optional<uint32_t> sessionId, glm::vec3 position, PlayerMode mode) {
     if (getEntityByName(name) != entt::null) {
         logging::error("Player '{}' already exists", name);
         return entt::null;
@@ -50,20 +46,11 @@ entt::entity ActorWorld::createPlayerEntity(
     nameToEntityMap_[name] = entity;
     updateEntityChunk(entity, position);
     if (sessionId.has_value()) {
-        logging::info("Player '{}' created at ({}, {}, {}) session={} mode={}",
-                      name,
-                      position.x,
-                      position.y,
-                      position.z,
-                      *sessionId,
-                      mode == PlayerMode::Spectator ? "spectator" : "survival");
+        logging::info("Player '{}' created at ({}, {}, {}) mode={} session={}",
+                      name, position.x, position.y, position.z, mode == PlayerMode::Spectator ? "spectator" : "survival", *sessionId);
     } else {
         logging::info("Remote player '{}' created at ({}, {}, {}) mode={}",
-                      name,
-                      position.x,
-                      position.y,
-                      position.z,
-                      mode == PlayerMode::Spectator ? "spectator" : "survival");
+                      name, position.x, position.y, position.z, mode == PlayerMode::Spectator ? "spectator" : "survival");
     }
     return entity;
 }

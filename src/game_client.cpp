@@ -20,9 +20,7 @@ GameClient::GameClient(RenderContext* renderContext, std::string address, uint16
         logging::warn("Invalid server address '{}': {}", address, addressError.message());
         resolvedAddress = asio::ip::make_address("127.0.0.1");
     }
-    const auto serverEndpoint = IPacketChannel::Endpoint(
-        resolvedAddress,
-        port);
+    const auto serverEndpoint = IPacketChannel::Endpoint(resolvedAddress, port);
     channel->setRemote(serverEndpoint);
     channel->startHandshake();
     channel_ = std::move(channel);

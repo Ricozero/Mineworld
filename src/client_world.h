@@ -25,16 +25,9 @@ public:
     bool unloadChunk(glm::ivec3 chunkPos);
     void applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData);
 
-    entt::entity createLocalPlayer(
-        const std::string& name,
-        uint32_t sessionId,
-        glm::vec3 position = glm::vec3(0.0f),
-        PlayerMode mode = PlayerMode::Survival);
-    entt::entity createRemotePlayer(
-        const std::string& name,
-        glm::vec3 position = glm::vec3(0.0f),
-        PlayerMode mode = PlayerMode::Survival);
-    entt::entity createRobot(const std::string& name, glm::vec3 position = glm::vec3(0.0f));
+    entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
+    entt::entity createRemotePlayer(const std::string& name, glm::vec3 position, PlayerMode mode);
+    entt::entity createRobot(const std::string& name, glm::vec3 position);
     void destroyEntity(entt::entity entity);
     entt::entity getEntityByName(const std::string& name) const;
 

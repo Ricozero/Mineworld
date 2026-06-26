@@ -57,13 +57,7 @@ float movementSpeed(entt::registry& registry, entt::entity entity, const Control
     return 0.0f;
 }
 
-bool findCollisionBoundary(
-    ServerWorld& world,
-    const TransformComponent& transform,
-    const BoxColliderComponent& collider,
-    int axis,
-    float delta,
-    float& boundary) {
+bool findCollisionBoundary(ServerWorld& world, const TransformComponent& transform, const BoxColliderComponent& collider, int axis, float delta, float& boundary) {
     const glm::vec3 halfSize = collider.size * 0.5f;
     const glm::vec3 min = transform.position + collider.offset - halfSize;
     const glm::vec3 max = transform.position + collider.offset + halfSize;
@@ -119,11 +113,7 @@ void refreshGrounded(ServerWorld& world, entt::registry& registry, entt::entity 
     physics.isGrounded = hasCollision(world, probe, registry.get<BoxColliderComponent>(entity));
 }
 
-void moveWithCollisionServer(
-    ServerWorld& world,
-    entt::registry& registry,
-    entt::entity entity,
-    float deltaTime) {
+void moveWithCollision(ServerWorld& world, entt::registry& registry, entt::entity entity, float deltaTime) {
     auto& transform = registry.get<TransformComponent>(entity);
     auto& physics = registry.get<PhysicsComponent>(entity);
     const auto& collider = registry.get<BoxColliderComponent>(entity);
@@ -220,7 +210,7 @@ void simulateServerActor(ServerWorld& world, entt::registry& registry, entt::ent
 
     physics.velocity += physics.acceleration * deltaTime;
     if (registry.all_of<BoxColliderComponent>(entity)) {
-        moveWithCollisionServer(world, registry, entity, deltaTime);
+        moveWithCollision(world, registry, entity, deltaTime);
     } else {
         auto& transform = registry.get<TransformComponent>(entity);
         transform.position += physics.velocity * deltaTime;
@@ -310,7 +300,7 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
         auto& physics = registry.get<PhysicsComponent>(entity);
         physics.velocity += physics.acceleration * deltaTime;
         if (registry.all_of<BoxColliderComponent>(entity)) {
-            moveWithCollision(world, entity, deltaTime);
+            moveWithCollision(world, registry, entity, deltaTime);
         } else {
             auto& transform = registry.get<TransformComponent>(entity);
             transform.position += physics.velocity * deltaTime;
@@ -320,11 +310,4 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
             registry.get<ControllerInputComponent>(entity).jump = false;
         }
     }
-}
-
-void PhysicsSystem::moveWithCollision(ServerWorld& world, entt::entity entity, float deltaTime) {
-    MW_PROFILE_SCOPE("Server.Physics.Collision");
-
-    auto& registry = world.getActorWorld().registry();
-    moveWithCollisionServer(world, registry, entity, deltaTime);
 }

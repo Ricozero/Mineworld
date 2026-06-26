@@ -1516,7 +1516,7 @@ void RenderContext::renderProfilerOverlay() {
             ImGui::TableSetupColumn("Scope", ImGuiTableColumnFlags_WidthFixed, kColName);
             ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Calls", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
 
@@ -1532,7 +1532,7 @@ void RenderContext::renderProfilerOverlay() {
                 ImGui::TableNextColumn();
                 rightAlignedText("%.1f", entry.avgMs);
                 ImGui::TableNextColumn();
-                rightAlignedText("%llu", static_cast<unsigned long long>(entry.lastCalls));
+                rightAlignedText("%.1f", entry.maxMs);
             }
             ImGui::EndTable();
         }
