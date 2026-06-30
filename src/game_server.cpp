@@ -70,8 +70,8 @@ void GameServer::update(float deltaTime) {
 
         std::vector<uint8_t> payload;
         payload = serializeSnapshot(snapshot, session.snapshotBuilder);
-        MW_PROFILE_COUNTER("Server.ServerSnapshotsOut", 1);
-        MW_PROFILE_COUNTER("Server.ServerBytesOut", static_cast<int64_t>(payload.size()));
+        MW_PROFILE_COUNTER("Server.SnapshotsOut", 1);
+        MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
         server_->sendTo(sessionId, payload);
     }
 }
@@ -190,8 +190,11 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
         const auto& name = registry.get<NameComponent>(entity);
         const auto& transform = registry.get<TransformComponent>(entity);
         glm::vec3 velocity{0.0f};
+        bool isGrounded = false;
         if (registry.all_of<PhysicsComponent>(entity)) {
-            velocity = registry.get<PhysicsComponent>(entity).velocity;
+            const auto& physics = registry.get<PhysicsComponent>(entity);
+            velocity = physics.velocity;
+            isGrounded = physics.isGrounded;
         }
         const bool isPlayer = registry.all_of<PlayerComponent>(entity);
         const PlayerMode playerMode = isPlayer ? registry.get<PlayerComponent>(entity).mode : PlayerMode::Survival;
@@ -211,6 +214,7 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
             isPlayer,
             playerMode,
             lastInputSequence,
+            isGrounded,
         });
     }
 
@@ -424,8 +428,8 @@ void GameServer::onSessionDisconnect(uint32_t sessionId) {
 }
 
 bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
-    MW_PROFILE_COUNTER("Server.ServerPacketsIn", 1);
-    MW_PROFILE_COUNTER("Server.ServerBytesIn", static_cast<int64_t>(packet.size()));
+    MW_PROFILE_COUNTER("Server.PacketsIn", 1);
+    MW_PROFILE_COUNTER("Server.BytesIn", static_cast<int64_t>(packet.size()));
 
     if (deserializeClientHello(packet)) {
         onClientHello(sessionId);
@@ -493,9 +497,6 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         return;
     }
 
-    constexpr float kMaxDeltaTime = 0.1f;
-    const float deltaTime = std::clamp(input.deltaTime, 0.0f, kMaxDeltaTime);
-
     auto& registry = world_.getActorWorld().registry();
     auto view = registry.view<SessionComponent, TransformComponent, ControllerInputComponent>();
     for (auto entity : view) {
@@ -510,17 +511,14 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         if (glm::dot(controllerInput.move, controllerInput.move) > 1.0f) {
             controllerInput.move = glm::normalize(controllerInput.move);
         }
-        controllerInput.jump = input.jump;
+        controllerInput.jump = controllerInput.jump || input.jump;
         controllerInput.sprint = input.sprint;
         controllerInput.sequence = input.sequence;
-        controllerInput.deltaTime = deltaTime;
         transform.rotation.x = input.pitch;
         transform.rotation.y = input.yaw;
         if (sessionIt != sessions_.end()) {
             sessionIt->second.lastProcessedInputSequence = input.sequence;
         }
-        applyControllerInput(registry, entity, deltaTime, true);
-        simulateServerActor(world_, registry, entity, deltaTime);
         break;
     }
 }

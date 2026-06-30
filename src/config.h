@@ -126,8 +126,7 @@ struct AppConfig {
     float gravity = 9.8f;
     float collisionEpsilon = 0.001f;
     float groundProbeDistance = 0.05f;
-    float jumpImpulseDuration = 2.0f;
-    float jumpAcceleration = 80.0f;
+    float jumpSpeed = 5.0f;
     float maxFallSpeed = 50.0f;
     float survivalSprintMultiplier = 1.6f;
     float spectatorSprintMultiplier = 5.0f;
@@ -154,8 +153,7 @@ struct AppConfig {
         gravity = cfg.getFloat("physics.gravity", gravity);
         collisionEpsilon = cfg.getFloat("physics.collision_epsilon", collisionEpsilon);
         groundProbeDistance = cfg.getFloat("physics.ground_probe_distance", groundProbeDistance);
-        jumpImpulseDuration = cfg.getFloat("physics.jump_impulse_duration", jumpImpulseDuration);
-        jumpAcceleration = cfg.getFloat("physics.jump_acceleration", jumpAcceleration);
+        jumpSpeed = cfg.getFloat("physics.jump_speed", jumpSpeed);
         maxFallSpeed = cfg.getFloat("physics.max_fall_speed", maxFallSpeed);
         survivalSprintMultiplier = cfg.getFloat("physics.survival_sprint_multiplier", survivalSprintMultiplier);
         spectatorSprintMultiplier = cfg.getFloat("physics.spectator_sprint_multiplier", spectatorSprintMultiplier);

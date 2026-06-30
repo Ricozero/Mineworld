@@ -21,7 +21,6 @@ struct PhysicsComponent {
 
     float mass = 1.0f;
     float drag = 0.2f;
-    float jumpImpulseTime = 0.0f;
     bool useGravity = true;
     bool isGrounded = false;
 };

@@ -19,6 +19,5 @@ public:
     void update(ServerWorld& world, float deltaTime) override;
 
 private:
-    void applyGravity(entt::registry& registry, float deltaTime);
     void updateMovement(ServerWorld& world, float deltaTime);
 };

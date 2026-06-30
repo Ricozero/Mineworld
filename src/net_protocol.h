@@ -20,6 +20,7 @@ struct NetActorState {
     bool isPlayer = false;
     PlayerMode playerMode = PlayerMode::Survival;
     uint32_t lastInputSequence = 0;
+    bool isGrounded = false;
 };
 
 struct NetChunkState {

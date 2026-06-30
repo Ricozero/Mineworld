@@ -67,8 +67,8 @@ void GameClient::pumpNetwork() {
 
     std::vector<uint8_t> packet;
     while (channel_->popPacket(packet)) {
-        MW_PROFILE_COUNTER("Server.ClientPacketsIn", 1);
-        MW_PROFILE_COUNTER("Server.ClientBytesIn", static_cast<int64_t>(packet.size()));
+        MW_PROFILE_COUNTER("Client.PacketsIn", 1);
+        MW_PROFILE_COUNTER("Client.BytesIn", static_cast<int64_t>(packet.size()));
 
         // Try ServerHello first
         NetServerHello hello;
@@ -189,9 +189,9 @@ void GameClient::replaySnapshots() {
 
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     MW_PROFILE_SCOPE("Client.ApplySnapshot");
-    MW_PROFILE_COUNTER("Server.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
-    MW_PROFILE_COUNTER("Server.SnapshotBlocks", static_cast<int64_t>(snapshot.blocks.size()));
-    MW_PROFILE_COUNTER("Server.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
+    MW_PROFILE_COUNTER("Client.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
+    MW_PROFILE_COUNTER("Client.SnapshotBlocks", static_cast<int64_t>(snapshot.blocks.size()));
+    MW_PROFILE_COUNTER("Client.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
 
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
@@ -246,7 +246,7 @@ void GameClient::reconcileLocalActor(entt::registry& registry, entt::entity enti
     if (registry.all_of<PhysicsComponent>(entity)) {
         auto& physics = registry.get<PhysicsComponent>(entity);
         physics.velocity = actor.velocity;
-        // isGrounded is resolved naturally by moveWithCollision during replay.
+        physics.isGrounded = actor.isGrounded;
     }
     if (registry.all_of<PlayerComponent>(entity)) {
         registry.get<PlayerComponent>(entity).mode = actor.playerMode;
@@ -254,8 +254,7 @@ void GameClient::reconcileLocalActor(entt::registry& registry, entt::entity enti
     if (registry.all_of<PredictedInputComponent>(entity)) {
         auto& prediction = registry.get<PredictedInputComponent>(entity);
         prediction.lastAcknowledgedInputSequence = std::max(prediction.lastAcknowledgedInputSequence, actor.lastInputSequence);
-        while (!prediction.pendingInputs.empty() &&
-               prediction.pendingInputs.front().input.sequence <= prediction.lastAcknowledgedInputSequence) {
+        while (!prediction.pendingInputs.empty() && prediction.pendingInputs.front().input.sequence <= prediction.lastAcknowledgedInputSequence) {
             prediction.pendingInputs.pop_front();
         }
         if (registry.all_of<ControllerInputComponent, PlayerComponent>(entity)) {

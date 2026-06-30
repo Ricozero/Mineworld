@@ -50,6 +50,7 @@ table ActorState {
   is_player:bool = false;
   player_mode:ubyte = 0;
   last_input_sequence:uint = 0;
+  is_grounded:bool = false;
 }
 
 table ChunkState {

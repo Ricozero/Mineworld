@@ -121,21 +121,19 @@ void ActorWorld::applyPlayerModeComponents(entt::entity entity) {
         if (registry_.all_of<MeshComponent>(entity)) {
             registry_.get<MeshComponent>(entity).isVisible = false;
         }
-        return;
-    }
-
-    if (!registry_.all_of<PhysicsComponent>(entity)) {
-        registry_.emplace<PhysicsComponent>(entity);
     } else {
-        auto& physics = registry_.get<PhysicsComponent>(entity);
-        physics.velocity = glm::vec3(0.0f);
-        physics.acceleration = glm::vec3(0.0f);
-        physics.jumpImpulseTime = 0.0f;
-        physics.isGrounded = false;
-    }
-    registry_.emplace_or_replace<BoxColliderComponent>(entity, createPlayerCollider());
-    if (registry_.all_of<MeshComponent>(entity)) {
-        registry_.get<MeshComponent>(entity).isVisible = true;
+        if (!registry_.all_of<PhysicsComponent>(entity)) {
+            registry_.emplace<PhysicsComponent>(entity);
+        } else {
+            auto& physics = registry_.get<PhysicsComponent>(entity);
+            physics.velocity = glm::vec3(0.0f);
+            physics.acceleration = glm::vec3(0.0f);
+            physics.isGrounded = false;
+        }
+        registry_.emplace_or_replace<BoxColliderComponent>(entity, createPlayerCollider());
+        if (registry_.all_of<MeshComponent>(entity)) {
+            registry_.get<MeshComponent>(entity).isVisible = true;
+        }
     }
 }
 

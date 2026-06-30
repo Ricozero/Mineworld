@@ -202,7 +202,8 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers:
             actor.pitch,
             actor.isPlayer,
             toWirePlayerMode(actor.playerMode),
-            actor.lastInputSequence));
+            actor.lastInputSequence,
+            actor.isGrounded));
     }
     const auto actorsVec = builder.CreateVector(actorOffsets);
 
@@ -270,16 +271,17 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
             if (!actor || !actor->name()) {
                 return false;
             }
-            NetActorState outActor;
-            outActor.name = actor->name()->str();
-            outActor.position = fromFbVec3(actor->position());
-            outActor.velocity = fromFbVec3(actor->velocity());
-            outActor.yaw = actor->yaw();
-            outActor.pitch = actor->pitch();
-            outActor.isPlayer = actor->is_player();
-            outActor.playerMode = fromWirePlayerMode(actor->player_mode());
-            outActor.lastInputSequence = actor->last_input_sequence();
-            snapshot.actors.push_back(std::move(outActor));
+            snapshot.actors.push_back(NetActorState{
+                actor->name()->str(),
+                fromFbVec3(actor->position()),
+                fromFbVec3(actor->velocity()),
+                actor->yaw(),
+                actor->pitch(),
+                actor->is_player(),
+                fromWirePlayerMode(actor->player_mode()),
+                actor->last_input_sequence(),
+                actor->is_grounded(),
+            });
         }
     }
 
