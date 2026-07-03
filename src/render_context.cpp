@@ -1851,11 +1851,10 @@ bool RenderContext::shouldHideLocalPlayerModel(const ClientWorld& world, entt::e
     }
 
     const auto& registry = world.getActorWorld().registry();
-    if (!registry.all_of<SessionComponent, PlayerComponent>(entity)) {
+    if (!registry.all_of<SessionComponent>(entity)) {
         return false;
     }
 
     const auto& session = registry.get<SessionComponent>(entity);
-    const auto& player = registry.get<PlayerComponent>(entity);
-    return session.sessionId == localSessionId_ && player.mode == PlayerMode::Survival;
+    return session.sessionId == localSessionId_;
 }

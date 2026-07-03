@@ -130,6 +130,7 @@ struct AppConfig {
     float maxFallSpeed = 50.0f;
     float survivalSprintMultiplier = 1.6f;
     float spectatorSprintMultiplier = 5.0f;
+    float airborneSpeedMultiplier = 0.5f;
 
     static AppConfig& instance() {
         static AppConfig inst;
@@ -157,6 +158,7 @@ struct AppConfig {
         maxFallSpeed = cfg.getFloat("physics.max_fall_speed", maxFallSpeed);
         survivalSprintMultiplier = cfg.getFloat("physics.survival_sprint_multiplier", survivalSprintMultiplier);
         spectatorSprintMultiplier = cfg.getFloat("physics.spectator_sprint_multiplier", spectatorSprintMultiplier);
+        airborneSpeedMultiplier = cfg.getFloat("physics.airborne_speed_multiplier", airborneSpeedMultiplier);
     }
 
 private:

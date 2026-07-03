@@ -1,8 +1,8 @@
 #pragma once
 
 #include <cstdint>
-#include <glm/glm.hpp>
 #include <deque>
+#include <glm/glm.hpp>
 #include <string>
 
 struct NameComponent {
@@ -34,20 +34,12 @@ struct ControllerInputComponent {
     glm::vec3 move{0.0f};
     bool jump = false;
     bool sprint = false;
-    uint32_t sequence = 0;
     float deltaTime = 0.0f;
 };
 
 enum class PlayerMode : uint8_t {
     Survival = 0,
     Spectator = 1,
-};
-
-struct PredictedInput {
-    ControllerInputComponent input;
-    PlayerMode playerMode = PlayerMode::Survival;
-    glm::vec3 rotation{0.0f};
-    float deltaTime = 0.0f;
 };
 
 struct PlayerComponent {
@@ -74,12 +66,6 @@ struct MeshComponent {
 
 struct SessionComponent {
     uint32_t sessionId = 0;
-};
-
-struct PredictedInputComponent {
-    std::deque<PredictedInput> pendingInputs;
-    uint32_t nextInputSequence = 1;
-    uint32_t lastAcknowledgedInputSequence = 0;
 };
 
 struct InterpolationSample {

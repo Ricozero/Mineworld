@@ -36,7 +36,6 @@ private:
     void sendInputToServer();
     void replaySnapshots();
     void applySnapshot(const NetSnapshot& snapshot);
-    void reconcileLocalActor(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
 
@@ -54,4 +53,5 @@ private:
     bool helloPending_ = true;
     bool disconnectSent_ = false;
     double snapshotClock_ = 0.0;
+    uint32_t nextInputSequence_ = 1;
 };

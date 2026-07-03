@@ -13,11 +13,6 @@
 #include "profiler.h"
 #include "server_system.h"
 
-namespace {
-
-constexpr size_t kMaxBlocksPerSnapshot = 4096;
-
-}  // namespace
 
 GameServer::GameServer() {
     logging::Scope logScope(logging::Channel::Server);
@@ -95,8 +90,7 @@ bool GameServer::loadChunk(glm::ivec3 chunkPos) {
 
     for (auto& [sessionId, session] : sessions_) {
         if (session.initialSnapshotSent) {
-            session.pendingChunkUpdates.push_back(NetChunkState{chunkPos, true});
-            session.pendingDirtyChunks.push_back(chunkPos);
+            session.pendingChunkUpdates.push_back(buildLoadedChunkState(chunkPos));
         }
     }
     return true;
@@ -117,12 +111,6 @@ bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
 
 void GameServer::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     world_.setBlock(worldPos, blockData);
-
-    for (auto& [sessionId, session] : sessions_) {
-        if (session.initialSnapshotSent) {
-            session.pendingBlockUpdates.push_back(NetBlockState{worldPos, blockData});
-        }
-    }
 }
 
 GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
@@ -190,21 +178,11 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
         const auto& name = registry.get<NameComponent>(entity);
         const auto& transform = registry.get<TransformComponent>(entity);
         glm::vec3 velocity{0.0f};
-        bool isGrounded = false;
         if (registry.all_of<PhysicsComponent>(entity)) {
-            const auto& physics = registry.get<PhysicsComponent>(entity);
-            velocity = physics.velocity;
-            isGrounded = physics.isGrounded;
+            velocity = registry.get<PhysicsComponent>(entity).velocity;
         }
         const bool isPlayer = registry.all_of<PlayerComponent>(entity);
         const PlayerMode playerMode = isPlayer ? registry.get<PlayerComponent>(entity).mode : PlayerMode::Survival;
-        uint32_t lastInputSequence = 0;
-        if (isPlayer && registry.all_of<SessionComponent>(entity)) {
-            const auto& sessionComp = registry.get<SessionComponent>(entity);
-            if (auto sessionIt = sessions_.find(sessionComp.sessionId); sessionIt != sessions_.end()) {
-                lastInputSequence = sessionIt->second.lastProcessedInputSequence;
-            }
-        }
         snapshot.actors.push_back(NetActorState{
             name.name,
             transform.position,
@@ -213,8 +191,6 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
             transform.rotation.x,
             isPlayer,
             playerMode,
-            lastInputSequence,
-            isGrounded,
         });
     }
 
@@ -222,87 +198,28 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
     const auto& visibleChunks = session.cachedVisibleChunks;
 
     if (forceFullChunkState) {
-        snapshot.chunks.reserve(visibleChunks.size());
         for (const auto& chunkPos : visibleChunks) {
             if (world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-                snapshot.chunks.push_back(NetChunkState{chunkPos, true});
-            }
-        }
-    } else {
-        std::vector<NetChunkState> remainingChunks;
-        remainingChunks.reserve(session.pendingChunkUpdates.size());
-        for (const auto& chunkState : session.pendingChunkUpdates) {
-            if (visibleChunks.count(chunkState.chunkPos) > 0) {
-                snapshot.chunks.push_back(chunkState);
-            } else {
-                remainingChunks.push_back(chunkState);
-            }
-        }
-        session.pendingChunkUpdates = std::move(remainingChunks);
-    }
-
-    if (forceFullChunkState && session.pendingBlockUpdates.empty() && session.pendingDirtyChunks.empty()) {
-        for (const auto& chunkPos : visibleChunks) {
-            if (world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-                session.pendingDirtyChunks.push_back(chunkPos);
+                session.pendingChunkUpdates.push_back(buildLoadedChunkState(chunkPos));
             }
         }
     }
 
-    // Expand dirty chunks into block updates incrementally
-    while (!session.pendingDirtyChunks.empty() && session.pendingBlockUpdates.size() < kMaxBlocksPerSnapshot * 2) {
-        glm::ivec3 chunkPos = session.pendingDirtyChunks.back();
-        session.pendingDirtyChunks.pop_back();
-
-        if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
+    constexpr int kMaxChunksPerSnapshot = 4;
+    std::vector<NetChunkState> remainingChunks;
+    remainingChunks.reserve(session.pendingChunkUpdates.size());
+    for (auto& chunkState : session.pendingChunkUpdates) {
+        if (visibleChunks.count(chunkState.chunkPos) == 0) {
+            remainingChunks.push_back(std::move(chunkState));
             continue;
         }
-        if (visibleChunks.count(chunkPos) == 0) {
-            continue;
-        }
-
-        queueChunkBlockSnapshot(chunkPos, session);
-    }
-
-    // Process pending block updates with in-place compaction
-    snapshot.blocks.reserve(std::min(session.pendingBlockUpdates.size(), kMaxBlocksPerSnapshot));
-
-    size_t readIdx = 0;
-    size_t writeIdx = 0;
-    const size_t totalPending = session.pendingBlockUpdates.size();
-
-    while (readIdx < totalPending && snapshot.blocks.size() < kMaxBlocksPerSnapshot) {
-        NetBlockState& block = session.pendingBlockUpdates[readIdx];
-        const glm::ivec3 chunkPos = Chunk::worldToChunk(block.worldPos);
-
-        if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-            ++readIdx;
-            continue;
-        }
-
-        if (visibleChunks.count(chunkPos) > 0) {
-            snapshot.blocks.push_back(std::move(block));
-            ++readIdx;
+        if (static_cast<int>(snapshot.chunks.size()) < kMaxChunksPerSnapshot) {
+            snapshot.chunks.push_back(std::move(chunkState));
         } else {
-            if (writeIdx != readIdx) {
-                session.pendingBlockUpdates[writeIdx] = std::move(block);
-            }
-            ++writeIdx;
-            ++readIdx;
+            remainingChunks.push_back(std::move(chunkState));
         }
     }
-
-    while (readIdx < totalPending) {
-        if (writeIdx != readIdx) {
-            session.pendingBlockUpdates[writeIdx] = std::move(session.pendingBlockUpdates[readIdx]);
-        }
-        ++writeIdx;
-        ++readIdx;
-    }
-
-    while (session.pendingBlockUpdates.size() > writeIdx) {
-        session.pendingBlockUpdates.pop_back();
-    }
+    session.pendingChunkUpdates = std::move(remainingChunks);
 
     return snapshot;
 }
@@ -375,23 +292,20 @@ void GameServer::updateVisibleChunks() {
     }
 }
 
-void GameServer::queueChunkBlockSnapshot(glm::ivec3 chunkPos, Session& session) {
-    MW_PROFILE_SCOPE("Server.QueueChunkBlocks");
-
+NetChunkState GameServer::buildLoadedChunkState(glm::ivec3 chunkPos) {
+    NetChunkState state;
+    state.chunkPos = chunkPos;
+    state.loaded = true;
     const Chunk& chunk = world_.getChunk(chunkPos);
+    state.blocks.reserve(Chunk::SIZE * Chunk::SIZE * Chunk::SIZE);
     for (int x = 0; x < Chunk::SIZE; ++x) {
         for (int y = 0; y < Chunk::SIZE; ++y) {
             for (int z = 0; z < Chunk::SIZE; ++z) {
-                const glm::ivec3 localPos(x, y, z);
-                const BlockData block = chunk.getBlock(localPos);
-                if (block.type == BlockType::Air) {
-                    continue;
-                }
-
-                session.pendingBlockUpdates.push_back(NetBlockState{chunk.localToWorld(localPos), block});
+                state.blocks.push_back(chunk.getBlock({x, y, z}));
             }
         }
     }
+    return state;
 }
 
 void GameServer::pumpNetwork() {
@@ -431,23 +345,24 @@ bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>&
     MW_PROFILE_COUNTER("Server.PacketsIn", 1);
     MW_PROFILE_COUNTER("Server.BytesIn", static_cast<int64_t>(packet.size()));
 
-    if (deserializeClientHello(packet)) {
-        onClientHello(sessionId);
-        return true;
+    using Payload = mineworld::net::NetMessagePayload;
+    switch (getPacketType(packet)) {
+        case Payload::ClientHello:
+            onClientHello(sessionId);
+            return true;
+        case Payload::ClientDisconnect:
+            return false;
+        case Payload::ClientInput: {
+            NetClientInput input;
+            if (deserializeClientInput(packet, input)) {
+                onClientInput(sessionId, input);
+            }
+            return true;
+        }
+        default:
+            logging::warn("Ignored unknown client packet from session {}", sessionId);
+            return true;
     }
-
-    if (deserializeClientDisconnect(packet)) {
-        return false;
-    }
-
-    NetClientInput input;
-    if (deserializeClientInput(packet, input)) {
-        onClientInput(sessionId, input);
-        return true;
-    }
-
-    logging::warn("Ignored unknown client packet from session {}", sessionId);
-    return true;
 }
 
 void GameServer::onClientHello(uint32_t sessionId) {
@@ -498,7 +413,7 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
     }
 
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent, ControllerInputComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent>();
     for (auto entity : view) {
         const auto& session = registry.get<SessionComponent>(entity);
         if (session.sessionId != sessionId) {
@@ -506,19 +421,16 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         }
         world_.getActorWorld().setPlayerMode(entity, input.playerMode);
         auto& transform = registry.get<TransformComponent>(entity);
-        auto& controllerInput = registry.get<ControllerInputComponent>(entity);
-        controllerInput.move = input.move;
-        if (glm::dot(controllerInput.move, controllerInput.move) > 1.0f) {
-            controllerInput.move = glm::normalize(controllerInput.move);
-        }
-        controllerInput.jump = controllerInput.jump || input.jump;
-        controllerInput.sprint = input.sprint;
-        controllerInput.sequence = input.sequence;
+        transform.position = input.position;
         transform.rotation.x = input.pitch;
         transform.rotation.y = input.yaw;
+        if (registry.all_of<PhysicsComponent>(entity)) {
+            registry.get<PhysicsComponent>(entity).velocity = input.velocity;
+        }
         if (sessionIt != sessions_.end()) {
             sessionIt->second.lastProcessedInputSequence = input.sequence;
         }
+        world_.getActorWorld().updateEntityChunk(entity, transform.position);
         break;
     }
 }

@@ -5,9 +5,6 @@
 
 class ServerWorld;
 
-void applyControllerInput(entt::registry& registry, entt::entity entity, float deltaTime, bool consumeJump);
-void simulateServerActor(ServerWorld& world, entt::registry& registry, entt::entity entity, float deltaTime);
-
 class ServerSystem {
 public:
     virtual ~ServerSystem() = default;

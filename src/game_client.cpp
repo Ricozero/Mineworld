@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "chunk.h"
 #include "client_system.h"
 #include "entity.h"
 #include "log.h"
@@ -70,21 +71,26 @@ void GameClient::pumpNetwork() {
         MW_PROFILE_COUNTER("Client.PacketsIn", 1);
         MW_PROFILE_COUNTER("Client.BytesIn", static_cast<int64_t>(packet.size()));
 
-        // Try ServerHello first
-        NetServerHello hello;
-        if (deserializeServerHello(packet, hello)) {
-            handleServerHello(hello);
-            continue;
+        using Payload = mineworld::net::NetMessagePayload;
+        switch (getPacketType(packet)) {
+            case Payload::ServerHello: {
+                NetServerHello hello;
+                if (deserializeServerHello(packet, hello)) {
+                    handleServerHello(hello);
+                }
+                break;
+            }
+            case Payload::Snapshot: {
+                NetSnapshot snapshot;
+                if (deserializeSnapshot(packet, snapshot)) {
+                    snapshotBuffer_.push_back(std::move(snapshot));
+                }
+                break;
+            }
+            default:
+                logging::warn("Ignored unknown packet");
+                break;
         }
-
-        // Try Snapshot
-        NetSnapshot snapshot;
-        if (deserializeSnapshot(packet, snapshot)) {
-            snapshotBuffer_.push_back(std::move(snapshot));
-            continue;
-        }
-
-        logging::warn("Ignored unknown packet");
     }
 }
 
@@ -107,17 +113,14 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
     localSessionId_ = hello.sessionId;
     logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
 
-    // Create the local player based on server instructions. Spectator is a player mode.
     entt::entity entity = world_.createLocalPlayer(hello.actorName, hello.sessionId, hello.position, hello.playerMode);
     if (entity != entt::null) {
         auto& registry = world_.getActorWorld().registry();
         auto& transform = registry.get<TransformComponent>(entity);
         transform.rotation.y = hello.yaw;
         transform.rotation.x = hello.pitch;
-        registry.emplace_or_replace<PredictedInputComponent>(entity);
     }
 
-    // Now register input and render systems with the correct session ID
     auto inputSystemPtr = std::make_unique<InputSystem>(renderContext_, localSessionId_);
     inputSystem_ = inputSystemPtr.get();
     registerSystem(std::move(inputSystemPtr));
@@ -142,26 +145,17 @@ void GameClient::sendInputToServer() {
             continue;
         }
         const auto& transform = registry.get<TransformComponent>(entity);
-        const auto& controllerInput = registry.get<ControllerInputComponent>(entity);
         NetClientInput input;
-        input.move = controllerInput.move;
+        input.position = transform.position;
+        if (registry.all_of<PhysicsComponent>(entity)) {
+            input.velocity = registry.get<PhysicsComponent>(entity).velocity;
+        }
         input.yaw = transform.rotation.y;
         input.pitch = transform.rotation.x;
-        input.jump = controllerInput.jump;
-        input.sprint = controllerInput.sprint;
-        input.deltaTime = controllerInput.deltaTime;
         if (registry.all_of<PlayerComponent>(entity)) {
-            auto& player = registry.get<PlayerComponent>(entity);
-            input.playerMode = player.mode;
-            player.jumpRequested = false;
+            input.playerMode = registry.get<PlayerComponent>(entity).mode;
         }
-        if (registry.all_of<PredictedInputComponent>(entity)) {
-            auto& prediction = registry.get<PredictedInputComponent>(entity);
-            input.sequence = prediction.nextInputSequence++;
-            ControllerInputComponent pendingInput = controllerInput;
-            pendingInput.sequence = input.sequence;
-            prediction.pendingInputs.push_back(PredictedInput{pendingInput, input.playerMode, transform.rotation, controllerInput.deltaTime});
-        }
+        input.sequence = nextInputSequence_++;
         channel_->sendReliable(serializeClientInput(input));
         break;
     }
@@ -190,25 +184,28 @@ void GameClient::replaySnapshots() {
 void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     MW_PROFILE_SCOPE("Client.ApplySnapshot");
     MW_PROFILE_COUNTER("Client.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
-    MW_PROFILE_COUNTER("Client.SnapshotBlocks", static_cast<int64_t>(snapshot.blocks.size()));
     MW_PROFILE_COUNTER("Client.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
 
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
             world_.loadChunk(chunk.chunkPos);
-            if (renderContext_) {
-                renderContext_->invalidateChunkCache(chunk.chunkPos);
+            int i = 0;
+            for (int x = 0; x < Chunk::SIZE; ++x) {
+                for (int y = 0; y < Chunk::SIZE; ++y) {
+                    for (int z = 0; z < Chunk::SIZE; ++z, ++i) {
+                        if (i < static_cast<int>(chunk.blocks.size())) {
+                            const glm::ivec3 worldPos = chunk.chunkPos * Chunk::SIZE + glm::ivec3(x, y, z);
+                            world_.applyBlockSnapshot(worldPos, chunk.blocks[i]);
+                        }
+                    }
+                }
             }
         } else {
             world_.unloadChunk(chunk.chunkPos);
-            if (renderContext_) {
-                renderContext_->invalidateChunkCache(chunk.chunkPos);
-            }
         }
-    }
-
-    for (const auto& block : snapshot.blocks) {
-        world_.applyBlockSnapshot(block.worldPos, block.data);
+        if (renderContext_) {
+            renderContext_->invalidateChunkCache(chunk.chunkPos);
+        }
     }
 
     auto& registry = world_.getActorWorld().registry();
@@ -222,50 +219,13 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
         if (entity == entt::null) {
             continue;
         }
-        if (registry.all_of<SessionComponent>(entity)) {
-            const auto& session = registry.get<SessionComponent>(entity);
-            if (session.sessionId == localSessionId_) {
-                reconcileLocalActor(registry, entity, actor);
-                continue;
+        if (!registry.all_of<SessionComponent>(entity)) {
+            if (actor.isPlayer) {
+                world_.getActorWorld().setPlayerMode(entity, actor.playerMode);
             }
-        }
-        if (actor.isPlayer) {
-            world_.getActorWorld().setPlayerMode(entity, actor.playerMode);
-        }
-        queueRemoteActorSample(registry, entity, actor);
-    }
-}
-
-void GameClient::reconcileLocalActor(entt::registry& registry, entt::entity entity, const NetActorState& actor) {
-    auto& transform = registry.get<TransformComponent>(entity);
-    const glm::vec3 currentRotation = transform.rotation;
-    transform.position = actor.position;
-    transform.rotation.y = actor.yaw;
-    transform.rotation.x = actor.pitch;
-
-    if (registry.all_of<PhysicsComponent>(entity)) {
-        auto& physics = registry.get<PhysicsComponent>(entity);
-        physics.velocity = actor.velocity;
-        physics.isGrounded = actor.isGrounded;
-    }
-    if (registry.all_of<PlayerComponent>(entity)) {
-        registry.get<PlayerComponent>(entity).mode = actor.playerMode;
-    }
-    if (registry.all_of<PredictedInputComponent>(entity)) {
-        auto& prediction = registry.get<PredictedInputComponent>(entity);
-        prediction.lastAcknowledgedInputSequence = std::max(prediction.lastAcknowledgedInputSequence, actor.lastInputSequence);
-        while (!prediction.pendingInputs.empty() && prediction.pendingInputs.front().input.sequence <= prediction.lastAcknowledgedInputSequence) {
-            prediction.pendingInputs.pop_front();
-        }
-        if (registry.all_of<ControllerInputComponent, PlayerComponent>(entity)) {
-            const ControllerInputComponent currentInput = registry.get<ControllerInputComponent>(entity);
-            for (const auto& pending : prediction.pendingInputs) {
-                applyClientPredictedInput(world_, registry, entity, pending);
-            }
-            registry.get<ControllerInputComponent>(entity) = currentInput;
+            queueRemoteActorSample(registry, entity, actor);
         }
     }
-    transform.rotation = currentRotation;
 }
 
 void GameClient::queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor) {

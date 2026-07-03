@@ -4,7 +4,6 @@
 
 #include <asio.hpp>
 #include <cstdint>
-#include <deque>
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
 #include <memory>
@@ -48,9 +47,7 @@ private:
         glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
         std::unordered_set<glm::ivec3> cachedVisibleChunks;
 
-        std::vector<glm::ivec3> pendingDirtyChunks;
         std::vector<NetChunkState> pendingChunkUpdates;
-        std::deque<NetBlockState> pendingBlockUpdates;
 
         flatbuffers::FlatBufferBuilder snapshotBuilder{8192};
     };
@@ -60,7 +57,7 @@ private:
     void updateVisibleChunks();
     void updateSessionVisibleChunks(Session& session);
 
-    void queueChunkBlockSnapshot(glm::ivec3 chunkPos, Session& session);
+    NetChunkState buildLoadedChunkState(glm::ivec3 chunkPos);
     void pumpNetwork();
 
     void onSessionConnect(uint32_t sessionId);

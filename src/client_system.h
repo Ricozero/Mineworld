@@ -5,10 +5,6 @@
 
 class ClientWorld;
 class RenderContext;
-struct PredictedInput;
-
-void simulateClientActor(ClientWorld& world, entt::registry& registry, entt::entity entity, float deltaTime);
-void applyClientPredictedInput(ClientWorld& world, entt::registry& registry, entt::entity entity, const PredictedInput& predictedInput);
 
 class ClientSystem {
 public:

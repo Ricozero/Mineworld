@@ -10,7 +10,6 @@
 #include "config.h"
 #include "entity.h"
 
-
 namespace common_system {
 
 inline bool isSpectatorPlayer(entt::registry& registry, entt::entity entity) {
@@ -141,6 +140,80 @@ void simulateActorPhysics(World& world, entt::registry& registry, entt::entity e
     } else {
         transform.position += physics.velocity * deltaTime;
         physics.acceleration = glm::vec3(0.0f);
+    }
+}
+
+inline glm::vec3 yawForward(float yawDegrees) {
+    const float yaw = glm::radians(yawDegrees);
+    return glm::normalize(glm::vec3(std::cos(yaw), 0.0f, std::sin(yaw)));
+}
+
+inline glm::vec3 yawRight(float yawDegrees) {
+    return glm::normalize(glm::cross(yawForward(yawDegrees), glm::vec3(0.0f, 1.0f, 0.0f)));
+}
+
+inline glm::vec3 lookForward(float yawDegrees, float pitchDegrees) {
+    const float yaw = glm::radians(yawDegrees);
+    const float pitch = glm::radians(pitchDegrees);
+    return glm::normalize(glm::vec3(
+        std::cos(yaw) * std::cos(pitch),
+        std::sin(pitch),
+        std::sin(yaw) * std::cos(pitch)));
+}
+
+inline glm::vec3 lookRight(float yawDegrees, float pitchDegrees) {
+    return glm::normalize(glm::cross(lookForward(yawDegrees, pitchDegrees), glm::vec3(0.0f, 1.0f, 0.0f)));
+}
+
+inline float movementSpeed(entt::registry& registry, entt::entity entity, const ControllerInputComponent& input) {
+    if (registry.all_of<PlayerComponent>(entity)) {
+        const auto& player = registry.get<PlayerComponent>(entity);
+        const bool spectator = player.mode == PlayerMode::Spectator;
+        const float baseSpeed = spectator ? player.spectatorMoveSpeed : player.survivalMoveSpeed;
+        const float multiplier = spectator ? AppConfig::instance().spectatorSprintMultiplier : AppConfig::instance().survivalSprintMultiplier;
+        return input.sprint ? baseSpeed * multiplier : baseSpeed;
+    }
+    if (registry.all_of<RobotComponent>(entity)) {
+        return registry.get<RobotComponent>(entity).moveSpeed;
+    }
+    return 0.0f;
+}
+
+inline void applyControllerInput(entt::registry& registry, entt::entity entity, float deltaTime, bool consumeJump) {
+    if (!registry.all_of<TransformComponent, ControllerInputComponent>(entity)) {
+        return;
+    }
+
+    auto& transform = registry.get<TransformComponent>(entity);
+    auto& input = registry.get<ControllerInputComponent>(entity);
+    const float speed = movementSpeed(registry, entity, input);
+    const bool spectator = common_system::isSpectatorPlayer(registry, entity);
+
+    if (spectator) {
+        glm::vec3 move = lookForward(transform.rotation.y, transform.rotation.x) * input.move.z +
+                         lookRight(transform.rotation.y, transform.rotation.x) * input.move.x +
+                         glm::vec3(0.0f, input.move.y, 0.0f);
+        if (glm::dot(move, move) > 1.0f) {
+            move = glm::normalize(move);
+        }
+        transform.position += move * speed * deltaTime;
+    } else if (registry.all_of<PhysicsComponent>(entity)) {
+        glm::vec3 move = yawForward(transform.rotation.y) * input.move.z + yawRight(transform.rotation.y) * input.move.x;
+        if (glm::dot(move, move) > 1.0f) {
+            move = glm::normalize(move);
+        }
+        auto& physics = registry.get<PhysicsComponent>(entity);
+        const float airborneMultiplier = physics.isGrounded ? 1.0f : AppConfig::instance().airborneSpeedMultiplier;
+        physics.velocity.x = move.x * speed * airborneMultiplier;
+        physics.velocity.z = move.z * speed * airborneMultiplier;
+        if (input.jump && physics.isGrounded) {
+            physics.velocity.y = AppConfig::instance().jumpSpeed;
+            physics.isGrounded = false;
+        }
+    }
+
+    if (consumeJump) {
+        input.jump = false;
     }
 }
 

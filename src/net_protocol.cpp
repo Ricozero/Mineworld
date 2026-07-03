@@ -11,7 +11,6 @@ namespace {
 
 constexpr size_t kMaxActors = 2048;
 constexpr size_t kMaxChunks = 65536;
-constexpr size_t kMaxBlocks = 65536;
 
 flatbuffers::DetachedBuffer finish(flatbuffers::FlatBufferBuilder& builder,
                                    flatbuffers::Offset<mineworld::net::NetMessage> message) {
@@ -59,6 +58,14 @@ PlayerMode fromWirePlayerMode(uint8_t mode) {
 
 }  // namespace
 
+mineworld::net::NetMessagePayload getPacketType(std::span<const uint8_t> bytes) {
+    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
+    if (!msg) {
+        return mineworld::net::NetMessagePayload::NONE;
+    }
+    return msg->payload_type();
+}
+
 std::vector<uint8_t> serializeClientHello() {
     flatbuffers::FlatBufferBuilder builder;
     const auto hello = mineworld::net::CreateClientHello(builder);
@@ -71,14 +78,6 @@ std::vector<uint8_t> serializeClientHello() {
     return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
 }
 
-bool deserializeClientHello(std::span<const uint8_t> bytes) {
-    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
-    if (!msg) {
-        return false;
-    }
-    return msg->payload_type() == mineworld::net::NetMessagePayload::ClientHello;
-}
-
 std::vector<uint8_t> serializeClientDisconnect() {
     flatbuffers::FlatBufferBuilder builder;
     const auto disconnect = mineworld::net::CreateClientDisconnect(builder);
@@ -89,14 +88,6 @@ std::vector<uint8_t> serializeClientDisconnect() {
 
     flatbuffers::DetachedBuffer buffer = finish(builder, msg);
     return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
-}
-
-bool deserializeClientDisconnect(std::span<const uint8_t> bytes) {
-    const mineworld::net::NetMessage* msg = tryGetMessage(bytes);
-    if (!msg) {
-        return false;
-    }
-    return msg->payload_type() == mineworld::net::NetMessagePayload::ClientDisconnect;
 }
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
@@ -142,17 +133,16 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
 
 std::vector<uint8_t> serializeClientInput(const NetClientInput& input) {
     flatbuffers::FlatBufferBuilder builder;
-    const mineworld::net::Vec3 move = toFbVec3(input.move);
+    const mineworld::net::Vec3 position = toFbVec3(input.position);
+    const mineworld::net::Vec3 velocity = toFbVec3(input.velocity);
     const auto inputOffset = mineworld::net::CreateClientInput(
         builder,
-        &move,
+        &position,
+        &velocity,
         input.yaw,
         input.pitch,
         toWirePlayerMode(input.playerMode),
-        input.jump,
-        input.sprint,
-        input.sequence,
-        input.deltaTime);
+        input.sequence);
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
         mineworld::net::NetMessagePayload::ClientInput,
@@ -173,14 +163,12 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
         return false;
     }
 
-    outInput.move = fromFbVec3(fbInput->move());
+    outInput.position = fromFbVec3(fbInput->position());
+    outInput.velocity = fromFbVec3(fbInput->velocity());
     outInput.yaw = fbInput->yaw();
     outInput.pitch = fbInput->pitch();
     outInput.playerMode = fromWirePlayerMode(fbInput->player_mode());
-    outInput.jump = fbInput->jump();
-    outInput.sprint = fbInput->sprint();
     outInput.sequence = fbInput->sequence();
-    outInput.deltaTime = fbInput->delta_time();
     return true;
 }
 
@@ -201,9 +189,7 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers:
             actor.yaw,
             actor.pitch,
             actor.isPlayer,
-            toWirePlayerMode(actor.playerMode),
-            actor.lastInputSequence,
-            actor.isGrounded));
+            toWirePlayerMode(actor.playerMode)));
     }
     const auto actorsVec = builder.CreateVector(actorOffsets);
 
@@ -211,31 +197,29 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers:
     chunkOffsets.reserve(snapshot.chunks.size());
     for (const auto& chunk : snapshot.chunks) {
         const mineworld::net::IVec3 chunkPos = toFbIVec3(chunk.chunkPos);
+        flatbuffers::Offset<flatbuffers::Vector<uint8_t>> blocksVec;
+        if (!chunk.blocks.empty()) {
+            std::vector<uint8_t> blockBytes;
+            blockBytes.reserve(chunk.blocks.size() * 2);
+            for (const auto& block : chunk.blocks) {
+                blockBytes.push_back(static_cast<uint8_t>(block.type));
+                blockBytes.push_back(static_cast<uint8_t>(block.orientation));
+            }
+            blocksVec = builder.CreateVector(blockBytes);
+        }
         chunkOffsets.push_back(mineworld::net::CreateChunkState(
             builder,
             &chunkPos,
-            chunk.loaded));
+            chunk.loaded,
+            blocksVec));
     }
     const auto chunksVec = builder.CreateVector(chunkOffsets);
-
-    std::vector<flatbuffers::Offset<mineworld::net::BlockState>> blockOffsets;
-    blockOffsets.reserve(snapshot.blocks.size());
-    for (const auto& block : snapshot.blocks) {
-        const mineworld::net::IVec3 worldPos = toFbIVec3(block.worldPos);
-        blockOffsets.push_back(mineworld::net::CreateBlockState(
-            builder,
-            &worldPos,
-            static_cast<uint8_t>(block.data.type),
-            static_cast<uint8_t>(block.data.orientation)));
-    }
-    const auto blocksVec = builder.CreateVector(blockOffsets);
 
     const auto snapshotOffset = mineworld::net::CreateSnapshot(
         builder,
         snapshot.sequence,
         actorsVec,
-        chunksVec,
-        blocksVec);
+        chunksVec);
 
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
@@ -279,8 +263,6 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
                 actor->pitch(),
                 actor->is_player(),
                 fromWirePlayerMode(actor->player_mode()),
-                actor->last_input_sequence(),
-                actor->is_grounded(),
             });
         }
     }
@@ -297,26 +279,17 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
             NetChunkState outChunk;
             outChunk.chunkPos = fromFbIVec3(chunk->chunk_pos());
             outChunk.loaded = chunk->loaded();
-            snapshot.chunks.push_back(outChunk);
-        }
-    }
-
-    if (const auto* blocks = fbSnapshot->blocks()) {
-        if (blocks->size() > kMaxBlocks) {
-            return false;
-        }
-        snapshot.blocks.reserve(blocks->size());
-        for (const mineworld::net::BlockState* block : *blocks) {
-            if (!block) {
-                return false;
+            if (const auto* chunkBytes = chunk->blocks()) {
+                const size_t count = chunkBytes->size() / 2;
+                outChunk.blocks.reserve(count);
+                for (flatbuffers::uoffset_t i = 0; i < static_cast<flatbuffers::uoffset_t>(count); ++i) {
+                    outChunk.blocks.push_back(BlockData{
+                        static_cast<BlockType>((*chunkBytes)[i * 2]),
+                        static_cast<BlockOrientation>((*chunkBytes)[i * 2 + 1]),
+                    });
+                }
             }
-            NetBlockState outBlock;
-            outBlock.worldPos = fromFbIVec3(block->world_pos());
-            outBlock.data = BlockData{
-                static_cast<BlockType>(block->type()),
-                static_cast<BlockOrientation>(block->orientation()),
-            };
-            snapshot.blocks.push_back(outBlock);
+            snapshot.chunks.push_back(std::move(outChunk));
         }
     }
 

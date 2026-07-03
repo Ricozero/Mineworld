@@ -10,6 +10,7 @@
 
 #include "block.h"
 #include "entity.h"
+#include "net_protocol_generated.h"
 
 struct NetActorState {
     std::string name;
@@ -19,36 +20,27 @@ struct NetActorState {
     float pitch = 0.0f;
     bool isPlayer = false;
     PlayerMode playerMode = PlayerMode::Survival;
-    uint32_t lastInputSequence = 0;
-    bool isGrounded = false;
 };
 
 struct NetChunkState {
     glm::ivec3 chunkPos{0};
     bool loaded = false;
-};
-
-struct NetBlockState {
-    glm::ivec3 worldPos{0};
-    BlockData data{};
+    std::vector<BlockData> blocks;
 };
 
 struct NetSnapshot {
     uint32_t sequence = 0;
     std::vector<NetActorState> actors;
     std::vector<NetChunkState> chunks;
-    std::vector<NetBlockState> blocks;
 };
 
 struct NetClientInput {
-    glm::vec3 move{0.0f};
+    glm::vec3 position{0.0f};
+    glm::vec3 velocity{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
     PlayerMode playerMode = PlayerMode::Survival;
-    bool jump = false;
-    bool sprint = false;
     uint32_t sequence = 0;
-    float deltaTime = 0.0f;
 };
 
 struct NetServerHello {
@@ -60,11 +52,11 @@ struct NetServerHello {
     PlayerMode playerMode = PlayerMode::Survival;
 };
 
+mineworld::net::NetMessagePayload getPacketType(std::span<const uint8_t> bytes);
+
 std::vector<uint8_t> serializeClientHello();
-bool deserializeClientHello(std::span<const uint8_t> bytes);
 
 std::vector<uint8_t> serializeClientDisconnect();
-bool deserializeClientDisconnect(std::span<const uint8_t> bytes);
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello);
 bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outHello);

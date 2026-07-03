@@ -31,14 +31,12 @@ table ServerHello {
 }
 
 table ClientInput {
-  move:Vec3;
+  position:Vec3;
+  velocity:Vec3;
   yaw:float;
   pitch:float;
   player_mode:ubyte = 0;
-  jump:bool = false;
-  sprint:bool = false;
   sequence:uint = 0;
-  delta_time:float = 0;
 }
 
 table ActorState {
@@ -49,26 +47,18 @@ table ActorState {
   pitch:float;
   is_player:bool = false;
   player_mode:ubyte = 0;
-  last_input_sequence:uint = 0;
-  is_grounded:bool = false;
 }
 
 table ChunkState {
   chunk_pos:IVec3;
   loaded:bool;
-}
-
-table BlockState {
-  world_pos:IVec3;
-  type:ubyte;
-  orientation:ubyte;
+  blocks:[ubyte];
 }
 
 table Snapshot {
   sequence:uint;
   actors:[ActorState];
   chunks:[ChunkState];
-  blocks:[BlockState];
 }
 
 union NetMessagePayload {
