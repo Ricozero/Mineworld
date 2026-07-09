@@ -1,15 +1,16 @@
 #include "log.h"
 
+#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
+#include <filesystem>
 #include <memory>
-#include <mutex>
+#include <vector>
 
 namespace logging {
 namespace {
 
 std::shared_ptr<spdlog::logger> currentLogger_;
-std::once_flag initFlag;
 
 const char* channelName(Channel channel) {
     switch (channel) {
@@ -23,35 +24,36 @@ const char* channelName(Channel channel) {
     return "App";
 }
 
-std::shared_ptr<spdlog::logger> createLogger(const char* name, const std::shared_ptr<spdlog::sinks::sink>& sink) {
-    auto logger = std::make_shared<spdlog::logger>(name, sink);
+std::shared_ptr<spdlog::logger> createLogger(const char* name, const std::vector<spdlog::sink_ptr>& sinks) {
+    auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
     logger->set_level(spdlog::level::trace);
+    logger->flush_on(spdlog::level::info);
     spdlog::register_logger(logger);
     return logger;
 }
 
 }  // namespace
 
-void init() {
-    std::call_once(initFlag, []() {
-        spdlog::set_pattern("[%n] [%^%l%$] %v");
+void init(const std::string& dir) {
+    spdlog::set_pattern("[%n] [%^%l%$] %v");
 
-        auto sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-        createLogger(channelName(Channel::App), sink);
-        createLogger(channelName(Channel::Client), sink);
-        createLogger(channelName(Channel::Server), sink);
+    std::vector<spdlog::sink_ptr> sinks{
+        std::make_shared<spdlog::sinks::stdout_color_sink_mt>(),
+        std::make_shared<spdlog::sinks::basic_file_sink_mt>((std::filesystem::path(dir) / "mineworld.log").string(), true),
+    };
 
-        currentLogger_ = spdlog::get(channelName(Channel::App));
-    });
+    createLogger(channelName(Channel::App), sinks);
+    createLogger(channelName(Channel::Client), sinks);
+    createLogger(channelName(Channel::Server), sinks);
+
+    currentLogger_ = spdlog::get(channelName(Channel::App));
 }
 
 std::shared_ptr<spdlog::logger> getLogger(Channel channel) {
-    init();
     return spdlog::get(channelName(channel));
 }
 
 std::shared_ptr<spdlog::logger> currentLogger() {
-    init();
     if (!currentLogger_) {
         currentLogger_ = getLogger(Channel::App);
     }

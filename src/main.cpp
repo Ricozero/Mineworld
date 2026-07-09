@@ -2,6 +2,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -214,10 +215,10 @@ int runClient(const std::string& dir) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    logging::init();
-
     std::filesystem::path path(argv[0]);
     const std::string dir = path.has_parent_path() ? path.parent_path().string() + "/" : "./";
+    logging::init(dir);
+
     const RunMode runMode = parseRunMode(argc, argv);
 
     switch (runMode) {

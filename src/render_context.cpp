@@ -980,8 +980,6 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
 }
 
 void RenderContext::render(const ClientWorld& world) {
-    MW_PROFILE_SCOPE("Client.Render");
-
     if (!window_ || !bgfxInitialized_) {
         return;
     }

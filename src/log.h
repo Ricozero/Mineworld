@@ -1,9 +1,10 @@
 #pragma once
 
-#include <memory>
-
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
+
+#include <memory>
+#include <string>
 
 namespace logging {
 
@@ -13,7 +14,7 @@ enum class Channel {
     Server,
 };
 
-void init();
+void init(const std::string& dir);
 std::shared_ptr<spdlog::logger> getLogger(Channel channel);
 std::shared_ptr<spdlog::logger> currentLogger();
 
