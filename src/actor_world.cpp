@@ -18,6 +18,9 @@ BoxColliderComponent createPlayerCollider() {
 
 }  // namespace
 
+ActorWorld::ActorWorld(bool maintainChunkIndex) : maintainChunkIndex_(maintainChunkIndex) {
+}
+
 entt::entity ActorWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
     return createPlayerEntity(name, sessionId, position, mode);
 }
@@ -138,6 +141,10 @@ void ActorWorld::applyPlayerModeComponents(entt::entity entity) {
 }
 
 void ActorWorld::updateEntityChunk(entt::entity entity, const glm::vec3& position) {
+    if (!maintainChunkIndex_) {
+        return;
+    }
+
     glm::ivec3 newChunk = positionToChunk(position);
     auto it = entityToChunk_.find(entity);
     if (it != entityToChunk_.end()) {
@@ -154,6 +161,10 @@ void ActorWorld::updateEntityChunk(entt::entity entity, const glm::vec3& positio
 }
 
 glm::ivec3 ActorWorld::getEntityChunk(entt::entity entity) const {
+    if (!maintainChunkIndex_) {
+        return glm::ivec3(0);
+    }
+
     auto it = entityToChunk_.find(entity);
     if (it == entityToChunk_.end()) {
         return glm::ivec3(0);
@@ -163,6 +174,10 @@ glm::ivec3 ActorWorld::getEntityChunk(entt::entity entity) const {
 
 const std::vector<entt::entity>& ActorWorld::getEntitiesInChunk(glm::ivec3 chunkPos) const {
     static const std::vector<entt::entity> empty;
+    if (!maintainChunkIndex_) {
+        return empty;
+    }
+
     auto it = chunkToEntities_.find(chunkPos);
     return it != chunkToEntities_.end() ? it->second : empty;
 }
@@ -172,6 +187,10 @@ bool ActorWorld::loadEntitiesInChunk(glm::ivec3 chunkPos) {
 }
 
 bool ActorWorld::unloadEntitiesInChunk(glm::ivec3 chunkPos) {
+    if (!maintainChunkIndex_) {
+        return true;
+    }
+
     auto it = chunkToEntities_.find(chunkPos);
     if (it == chunkToEntities_.end()) {
         return true;

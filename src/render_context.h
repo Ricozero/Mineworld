@@ -8,6 +8,7 @@
 #include <glm/gtx/hash.hpp>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "entity.h"
@@ -33,10 +34,10 @@ public:
     bool contains(glm::ivec3 chunkPos) const;
     const Entry* get(glm::ivec3 chunkPos) const;
     void put(glm::ivec3 chunkPos, size_t blockCount, Entry entry);
+    void markDirty(glm::ivec3 chunkPos);
     void invalidate(glm::ivec3 chunkPos);
     void evictStale(const std::vector<glm::ivec3>& loadedChunks);
-    bool needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount,
-                      const std::unordered_map<glm::ivec3, size_t>& currentCounts) const;
+    bool needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount, const std::unordered_map<glm::ivec3, size_t>& currentCounts) const;
 
     const std::unordered_map<glm::ivec3, Entry>& entries() const { return entries_; }
     size_t size() const { return entries_.size(); }
@@ -44,6 +45,7 @@ public:
 private:
     std::unordered_map<glm::ivec3, Entry> entries_;
     std::unordered_map<glm::ivec3, size_t> blockCounts_;
+    std::unordered_set<glm::ivec3> dirtyChunks_;
 };
 
 class RenderContext {

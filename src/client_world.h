@@ -3,6 +3,7 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
 
 #include "actor_world.h"
 #include "voxel_world.h"
@@ -23,7 +24,7 @@ public:
 
     bool loadChunk(glm::ivec3 chunkPos);
     bool unloadChunk(glm::ivec3 chunkPos);
-    void applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData);
+    bool applyChunkSnapshot(glm::ivec3 chunkPos, const std::vector<BlockData>& blocks);
 
     entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
     entt::entity createRemotePlayer(const std::string& name, glm::vec3 position, PlayerMode mode);
@@ -33,5 +34,5 @@ public:
 
 private:
     VoxelWorld voxelWorld_;
-    ActorWorld actorWorld_;
+    ActorWorld actorWorld_{false};
 };

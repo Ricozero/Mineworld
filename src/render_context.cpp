@@ -38,6 +38,7 @@ constexpr bgfx::ViewId kImGuiView = 1;
 constexpr uint32_t kResetFlags = BGFX_RESET_VSYNC;
 constexpr size_t kBoxVertexCount = 24;
 constexpr size_t kBoxIndexCount = 36;
+constexpr int kMaxChunkMeshRebuildsPerFrame = 2;
 constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
 constexpr size_t kPlayerModelIndexCount = kBoxIndexCount * 2;
 constexpr size_t kMaxBatchVertices = UINT16_MAX;
@@ -112,7 +113,7 @@ uint32_t packColor(glm::vec3 color) {
 
 constexpr int kOppositeFace[6] = {1, 0, 3, 2, 5, 4};
 
-constexpr glm::ivec3 kFaceDir[6] = {
+constexpr glm::ivec3 kNeighborOffsets[6] = {
     {1, 0, 0},
     {-1, 0, 0},
     {0, 1, 0},
@@ -520,11 +521,17 @@ const ChunkMeshCache::Entry* ChunkMeshCache::get(glm::ivec3 chunkPos) const {
 void ChunkMeshCache::put(glm::ivec3 chunkPos, size_t blockCount, Entry entry) {
     blockCounts_[chunkPos] = blockCount;
     entries_[chunkPos] = std::move(entry);
+    dirtyChunks_.erase(chunkPos);
+}
+
+void ChunkMeshCache::markDirty(glm::ivec3 chunkPos) {
+    dirtyChunks_.insert(chunkPos);
 }
 
 void ChunkMeshCache::invalidate(glm::ivec3 chunkPos) {
     entries_.erase(chunkPos);
     blockCounts_.erase(chunkPos);
+    dirtyChunks_.erase(chunkPos);
 }
 
 void ChunkMeshCache::evictStale(const std::vector<glm::ivec3>& loadedChunks) {
@@ -539,23 +546,28 @@ void ChunkMeshCache::evictStale(const std::vector<glm::ivec3>& loadedChunks) {
     for (const glm::ivec3& pos : toRemove) {
         invalidate(pos);
     }
+
+    std::vector<glm::ivec3> dirtyToRemove;
+    dirtyToRemove.reserve(dirtyChunks_.size());
+    for (const glm::ivec3& pos : dirtyChunks_) {
+        if (!loadedSet.count(pos)) {
+            dirtyToRemove.push_back(pos);
+        }
+    }
+    for (const glm::ivec3& pos : dirtyToRemove) {
+        dirtyChunks_.erase(pos);
+    }
 }
 
-bool ChunkMeshCache::needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount,
-                                  const std::unordered_map<glm::ivec3, size_t>& currentCounts) const {
+bool ChunkMeshCache::needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount, const std::unordered_map<glm::ivec3, size_t>& currentCounts) const {
     auto countIt = blockCounts_.find(chunkPos);
+    if (dirtyChunks_.count(chunkPos) > 0) {
+        return true;
+    }
     if (countIt == blockCounts_.end() || countIt->second != currentBlockCount || !contains(chunkPos)) {
         return true;
     }
 
-    static const std::array<glm::ivec3, 6> kNeighborOffsets = {{
-        glm::ivec3(1, 0, 0),
-        glm::ivec3(-1, 0, 0),
-        glm::ivec3(0, 1, 0),
-        glm::ivec3(0, -1, 0),
-        glm::ivec3(0, 0, 1),
-        glm::ivec3(0, 0, -1),
-    }};
     for (const glm::ivec3& off : kNeighborOffsets) {
         const glm::ivec3 neighbor = chunkPos + off;
         auto prevIt = blockCounts_.find(neighbor);
@@ -1104,10 +1116,9 @@ RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
 void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
     MW_PROFILE_COUNTER("Client.Render.CacheInvalidations", 1);
 
-    static const std::array<glm::ivec3, 7> kInvalidateOffsets = {{glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(-1, 0, 0),
-                                                                  glm::ivec3(0, 1, 0), glm::ivec3(0, -1, 0), glm::ivec3(0, 0, 1), glm::ivec3(0, 0, -1)}};
-    for (const auto& off : kInvalidateOffsets) {
-        chunkMeshCache_.invalidate(chunkPos + off);
+    chunkMeshCache_.markDirty(chunkPos);
+    for (const glm::ivec3& off : kNeighborOffsets) {
+        chunkMeshCache_.markDirty(chunkPos + off);
     }
 }
 
@@ -1260,11 +1271,18 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             currentCounts[chunkPos] = voxelWorld.getChunk(chunkPos).getBlockCount();
         }
 
+        int meshRebuildsThisFrame = 0;
+        int meshRebuildBacklog = 0;
         for (const glm::ivec3& chunkPos : loadedChunks) {
             const size_t blockCount = currentCounts[chunkPos];
             if (chunkMeshCache_.needsRebuild(chunkPos, blockCount, currentCounts)) {
+                if (meshRebuildsThisFrame >= kMaxChunkMeshRebuildsPerFrame) {
+                    ++meshRebuildBacklog;
+                    continue;
+                }
                 ChunkMeshCache::Entry entry;
                 buildChunkMesh(world, chunkPos, entry);
+                ++meshRebuildsThisFrame;
                 MW_PROFILE_COUNTER("Client.Render.MeshRebuilds", 1);
                 MW_PROFILE_COUNTER("Client.Render.MeshBuildVertices", static_cast<int64_t>(entry.vertexCount));
                 MW_PROFILE_COUNTER("Client.Render.MeshBuildIndices", static_cast<int64_t>(entry.indices.size()));
@@ -1272,6 +1290,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             }
         }
         MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkMeshCache_.size()));
+        MW_PROFILE_GAUGE("Render.MeshRebuildBacklog", static_cast<double>(meshRebuildBacklog));
     }
 
     std::unordered_set<glm::ivec3> visibleChunks;
@@ -1336,7 +1355,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
 
             for (int outFace = 0; outFace < 6; ++outFace) {
                 if (node.inFace >= 0 && !faceConnected(conn, node.inFace, outFace)) continue;
-                enqueueChunk(node.pos + kFaceDir[outFace], kOppositeFace[outFace]);
+                enqueueChunk(node.pos + kNeighborOffsets[outFace], kOppositeFace[outFace]);
             }
         }
 

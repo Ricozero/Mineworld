@@ -1,8 +1,8 @@
 #include "game_client.h"
 
 #include <algorithm>
+#include <unordered_set>
 
-#include "chunk.h"
 #include "client_system.h"
 #include "entity.h"
 #include "log.h"
@@ -188,17 +188,10 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
 
     for (const auto& chunk : snapshot.chunks) {
         if (chunk.loaded) {
-            world_.loadChunk(chunk.chunkPos);
-            int i = 0;
-            for (int x = 0; x < Chunk::SIZE; ++x) {
-                for (int y = 0; y < Chunk::SIZE; ++y) {
-                    for (int z = 0; z < Chunk::SIZE; ++z, ++i) {
-                        if (i < static_cast<int>(chunk.blocks.size())) {
-                            const glm::ivec3 worldPos = chunk.chunkPos * Chunk::SIZE + glm::ivec3(x, y, z);
-                            world_.applyBlockSnapshot(worldPos, chunk.blocks[i]);
-                        }
-                    }
-                }
+            if (!world_.applyChunkSnapshot(chunk.chunkPos, chunk.blocks)) {
+                logging::warn("Ignoring malformed chunk snapshot at ({}, {}, {}) with {} blocks",
+                              chunk.chunkPos.x, chunk.chunkPos.y, chunk.chunkPos.z, chunk.blocks.size());
+                continue;
             }
         } else {
             world_.unloadChunk(chunk.chunkPos);
@@ -209,7 +202,10 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     }
 
     auto& registry = world_.getActorWorld().registry();
+    std::unordered_set<std::string> snapshotActorNames;
+    snapshotActorNames.reserve(snapshot.actors.size());
     for (const auto& actor : snapshot.actors) {
+        snapshotActorNames.insert(actor.name);
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {
             entity = actor.isPlayer
@@ -225,6 +221,21 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
             }
             queueRemoteActorSample(registry, entity, actor);
         }
+    }
+
+    std::vector<entt::entity> remoteActorsToDestroy;
+    auto actorView = registry.view<NameComponent, TransformComponent>();
+    for (auto entity : actorView) {
+        if (registry.all_of<SessionComponent>(entity)) {
+            continue;
+        }
+        const auto& name = registry.get<NameComponent>(entity);
+        if (snapshotActorNames.count(name.name) == 0) {
+            remoteActorsToDestroy.push_back(entity);
+        }
+    }
+    for (entt::entity entity : remoteActorsToDestroy) {
+        world_.destroyEntity(entity);
     }
 }
 

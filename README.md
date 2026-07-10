@@ -1,6 +1,11 @@
 # Mineworld
 
-## 开始
+## 功能
+
+- 基于区块和实体的体素引擎
+- 内置性能分析工具和Tracy接入
+
+## 开发
 
 - 已关闭cpptools提供的IntelliSense功能，因此c_cpp_properties.json已被弃用
 - 使用clangd代码高亮和格式化，需要手动安装
@@ -10,9 +15,10 @@
 ### 当前
 
 - 区块同步
-  - 远处长时间不卸载
-  - 同步时闪烁
-  - 跨区块后很卡，同步又久
+  - 服务器和客户端视野配置
+  - 客户端偶尔崩溃
+  - 快速移动，跨越区块边界后，所有区块全部变成空白只剩实体，等一会区块重新出现
+  - Robot的移动一卡一卡的
 - 渲染优化
 - 线框模式
 - 游戏内更改设置
@@ -33,6 +39,7 @@
 - 方块定义数据化
 - 地形生成：Perlin Noise，Simplex Noise，3D Noise，Wave Function Collapse
 - 寻路算法：NavMesh，Jump Point Search
+- 类似红石的门电路
 
 ### 网络
 

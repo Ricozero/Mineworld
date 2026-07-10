@@ -40,5 +40,5 @@ private:
     bool isBlockInBounds(glm::ivec3 worldPos) const;
 
     VoxelWorld voxelWorld_;
-    ActorWorld actorWorld_;
+    ActorWorld actorWorld_{true};
 };

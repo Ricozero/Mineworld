@@ -47,15 +47,16 @@ private:
         glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
         std::unordered_set<glm::ivec3> cachedVisibleChunks;
 
-        std::vector<NetChunkState> pendingChunkUpdates;
+        std::unordered_map<glm::ivec3, NetChunkState> pendingChunkUpdates;
 
         flatbuffers::FlatBufferBuilder snapshotBuilder{8192};
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
     NetSnapshot buildSnapshot(Session& session, bool forceFullChunkState);
-    void updateVisibleChunks();
+    void updateVisibleChunks(float deltaTime);
     void updateSessionVisibleChunks(Session& session);
+    void queueChunkUpdate(Session& session, NetChunkState chunkState);
 
     NetChunkState buildLoadedChunkState(glm::ivec3 chunkPos);
     void pumpNetwork();
@@ -73,5 +74,6 @@ private:
 
     std::unique_ptr<IPacketServer> server_;
     std::unordered_map<uint32_t, Session> sessions_;
+    std::unordered_map<glm::ivec3, float> chunkUnloadTimers_;
     uint32_t nextPlayerIndex_ = 0;
 };

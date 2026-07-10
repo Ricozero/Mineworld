@@ -12,6 +12,8 @@
 
 class ActorWorld {
 public:
+    ActorWorld(bool maintainChunkIndex);
+
     entt::registry& registry() { return registry_; }
     const entt::registry& registry() const { return registry_; }
 
@@ -36,6 +38,7 @@ private:
     void removeEntityFromChunk(entt::entity entity, glm::ivec3 chunkPos);
 
     entt::registry registry_;
+    bool maintainChunkIndex_ = false;
     std::unordered_map<std::string, entt::entity> nameToEntityMap_;
     std::unordered_map<glm::ivec3, std::vector<entt::entity>> chunkToEntities_;
     std::unordered_map<entt::entity, glm::ivec3> entityToChunk_;

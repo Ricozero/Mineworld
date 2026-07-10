@@ -65,7 +65,6 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
         common_system::applyControllerInput(registry, entity, deltaTime, false);
         common_system::simulateActorPhysics(world, registry, entity, deltaTime);
 
-        world.getActorWorld().updateEntityChunk(entity, transform.position);
         inputChanged_ = previousRotation != transform.rotation || previousMode != player.mode ||
                         previousInput.move != input.move || previousInput.jump != input.jump ||
                         previousInput.sprint != input.sprint;

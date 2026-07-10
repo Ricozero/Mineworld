@@ -16,12 +16,25 @@ bool ClientWorld::unloadChunk(glm::ivec3 chunkPos) {
     return voxelWorld_.unloadChunk(chunkPos);
 }
 
-void ClientWorld::applyBlockSnapshot(glm::ivec3 worldPos, BlockData blockData) {
-    const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
+bool ClientWorld::applyChunkSnapshot(glm::ivec3 chunkPos, const std::vector<BlockData>& blocks) {
+    if (blocks.size() != Chunk::SIZE * Chunk::SIZE * Chunk::SIZE) {
+        return false;
+    }
+
     if (!voxelWorld_.isChunkLoaded(chunkPos)) {
         voxelWorld_.loadChunk(chunkPos);
     }
-    voxelWorld_.setBlockIfChunkLoaded(worldPos, blockData);
+
+    Chunk& chunk = voxelWorld_.getChunk(chunkPos);
+    size_t i = 0;
+    for (int x = 0; x < Chunk::SIZE; ++x) {
+        for (int y = 0; y < Chunk::SIZE; ++y) {
+            for (int z = 0; z < Chunk::SIZE; ++z, ++i) {
+                chunk.setBlock({x, y, z}, blocks[i]);
+            }
+        }
+    }
+    return true;
 }
 
 entt::entity ClientWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
