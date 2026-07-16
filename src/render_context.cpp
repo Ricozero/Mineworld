@@ -23,6 +23,7 @@
 #include "client_world.h"
 #include "config.h"
 #include "entity.h"
+#include "helper.h"
 #include "log.h"
 #include "profiler.h"
 
@@ -1271,23 +1272,40 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             currentCounts[chunkPos] = voxelWorld.getChunk(chunkPos).getBlockCount();
         }
 
-        int meshRebuildsThisFrame = 0;
-        int meshRebuildBacklog = 0;
+        const glm::ivec3 cameraChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
+        std::vector<glm::ivec3> rebuildCandidates;
+        rebuildCandidates.reserve(loadedChunks.size());
         for (const glm::ivec3& chunkPos : loadedChunks) {
             const size_t blockCount = currentCounts[chunkPos];
             if (chunkMeshCache_.needsRebuild(chunkPos, blockCount, currentCounts)) {
-                if (meshRebuildsThisFrame >= kMaxChunkMeshRebuildsPerFrame) {
-                    ++meshRebuildBacklog;
-                    continue;
-                }
-                ChunkMeshCache::Entry entry;
-                buildChunkMesh(world, chunkPos, entry);
-                ++meshRebuildsThisFrame;
-                MW_PROFILE_COUNTER("Client.Render.MeshRebuilds", 1);
-                MW_PROFILE_COUNTER("Client.Render.MeshBuildVertices", static_cast<int64_t>(entry.vertexCount));
-                MW_PROFILE_COUNTER("Client.Render.MeshBuildIndices", static_cast<int64_t>(entry.indices.size()));
-                chunkMeshCache_.put(chunkPos, blockCount, std::move(entry));
+                rebuildCandidates.push_back(chunkPos);
             }
+        }
+
+        std::sort(rebuildCandidates.begin(), rebuildCandidates.end(), [&](glm::ivec3 a, glm::ivec3 b) {
+            const bool aMissing = !chunkMeshCache_.contains(a);
+            const bool bMissing = !chunkMeshCache_.contains(b);
+            if (aMissing != bMissing) {
+                return aMissing;
+            }
+            return ivec3DistanceSq(a, cameraChunk) < ivec3DistanceSq(b, cameraChunk);
+        });
+
+        int meshRebuildsThisFrame = 0;
+        int meshRebuildBacklog = 0;
+        for (const glm::ivec3& chunkPos : rebuildCandidates) {
+            const size_t blockCount = currentCounts[chunkPos];
+            if (meshRebuildsThisFrame >= kMaxChunkMeshRebuildsPerFrame) {
+                ++meshRebuildBacklog;
+                continue;
+            }
+            ChunkMeshCache::Entry entry;
+            buildChunkMesh(world, chunkPos, entry);
+            ++meshRebuildsThisFrame;
+            MW_PROFILE_COUNTER("Client.Render.MeshRebuilds", 1);
+            MW_PROFILE_COUNTER("Client.Render.MeshBuildVertices", static_cast<int64_t>(entry.vertexCount));
+            MW_PROFILE_COUNTER("Client.Render.MeshBuildIndices", static_cast<int64_t>(entry.indices.size()));
+            chunkMeshCache_.put(chunkPos, blockCount, std::move(entry));
         }
         MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkMeshCache_.size()));
         MW_PROFILE_GAUGE("Render.MeshRebuildBacklog", static_cast<double>(meshRebuildBacklog));
@@ -1315,6 +1333,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
 
         // Occlusion culling
         const glm::ivec3 cameraChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
+        const float chunkWorldSize = static_cast<float>(Chunk::SIZE);
 
         std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
 
@@ -1334,9 +1353,17 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             bfsQueue.push({pos, inFace});
         };
 
-        enqueueChunk(cameraChunk, -1);
-
-        const float chunkWorldSize = static_cast<float>(Chunk::SIZE);
+        if (loadedSet.count(cameraChunk)) {
+            enqueueChunk(cameraChunk, -1);
+        } else {
+            for (const glm::ivec3& chunkPos : loadedChunks) {
+                const glm::vec3 chunkMin = glm::vec3(chunkPos) * chunkWorldSize;
+                const glm::vec3 chunkMax = chunkMin + glm::vec3(chunkWorldSize);
+                if (frustum.testAABB(chunkMin, chunkMax)) {
+                    visibleChunks.insert(chunkPos);
+                }
+            }
+        }
 
         while (!bfsQueue.empty()) {
             const BfsNode node = bfsQueue.front();

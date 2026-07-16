@@ -8,6 +8,7 @@
 #include "chunk.h"
 #include "config.h"
 #include "entity.h"
+#include "helper.h"
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
@@ -17,11 +18,6 @@ namespace {
 
 constexpr int kMaxChunksPerSnapshot = 4;
 constexpr float kChunkUnloadDelaySeconds = 5.0f;
-
-int chunkDistanceSq(glm::ivec3 a, glm::ivec3 b) {
-    const glm::ivec3 d = a - b;
-    return d.x * d.x + d.y * d.y + d.z * d.z;
-}
 
 }  // namespace
 
@@ -249,17 +245,21 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
 
     std::sort(sendCandidates.begin(), sendCandidates.end(), [&](const NetChunkState* a, const NetChunkState* b) {
         if (a->loaded != b->loaded) {
-            return !a->loaded;
+            return a->loaded;
         }
-        return chunkDistanceSq(a->chunkPos, session.lastChunkPos) < chunkDistanceSq(b->chunkPos, session.lastChunkPos);
+        return ivec3DistanceSq(a->chunkPos, session.lastChunkPos) < ivec3DistanceSq(b->chunkPos, session.lastChunkPos);
     });
 
+    int loadedChunksSent = 0;
     for (const NetChunkState* chunkState : sendCandidates) {
-        if (static_cast<int>(snapshot.chunks.size()) >= kMaxChunksPerSnapshot) {
-            break;
+        if (chunkState->loaded && loadedChunksSent >= kMaxChunksPerSnapshot) {
+            continue;
         }
         snapshot.chunks.push_back(*chunkState);
         expiredChunks.push_back(chunkState->chunkPos);
+        if (chunkState->loaded) {
+            ++loadedChunksSent;
+        }
     }
 
     for (const glm::ivec3& chunkPos : expiredChunks) {
