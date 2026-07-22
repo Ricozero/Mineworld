@@ -123,9 +123,18 @@ constexpr glm::ivec3 kNeighborOffsets[6] = {
     {0, 0, -1},
 };
 
-inline int bitIndex(int from, int to) { return from * 6 + to; }
-inline bool faceConnected(ChunkFaceConnectivity mask, int from, int to) {
-    return (mask >> bitIndex(from, to)) & 1u;
+inline int bitIndex(int faceA, int faceB) {
+    if (faceA > faceB) {
+        std::swap(faceA, faceB);
+    }
+    return faceA * 6 + faceB;
+}
+
+inline bool faceConnected(ChunkFaceConnectivity mask, int faceA, int faceB) {
+    if (faceA == faceB) {
+        return false;
+    }
+    return (mask & (ChunkFaceConnectivity{1} << bitIndex(faceA, faceB))) != 0;
 }
 
 ChunkFaceConnectivity computeFaceConnectivity(const Chunk& chunk) {
@@ -197,10 +206,10 @@ ChunkFaceConnectivity computeFaceConnectivity(const Chunk& chunk) {
     }
 
     ChunkFaceConnectivity mask = 0;
-    for (int f = 0; f < 6; ++f)
-        for (int t = 0; t < 6; ++t)
-            if ((reachable[f] >> t) & 1)
-                mask |= (1u << bitIndex(f, t)) | (1u << bitIndex(t, f));
+    for (int from = 0; from < 6; ++from)
+        for (int to = from + 1; to < 6; ++to)
+            if ((reachable[from] >> to) & 1)
+                mask |= ChunkFaceConnectivity{1} << bitIndex(from, to);
     return mask;
 }
 
@@ -1343,6 +1352,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
         };
         std::queue<BfsNode> bfsQueue;
         std::unordered_map<glm::ivec3, uint8_t> visitedFaces;
+        std::unordered_set<glm::ivec3> reachableChunks;
 
         auto enqueueChunk = [&](glm::ivec3 pos, int inFace) {
             if (!loadedSet.count(pos)) return;
@@ -1369,11 +1379,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             const BfsNode node = bfsQueue.front();
             bfsQueue.pop();
 
-            const glm::vec3 chunkMin = glm::vec3(node.pos) * chunkWorldSize;
-            const glm::vec3 chunkMax = chunkMin + glm::vec3(chunkWorldSize);
-            if (!frustum.testAABB(chunkMin, chunkMax)) continue;
-
-            visibleChunks.insert(node.pos);
+            reachableChunks.insert(node.pos);
 
             ChunkFaceConnectivity conn = ~0u;
             if (const ChunkMeshCache::Entry* e = chunkMeshCache_.get(node.pos)) {
@@ -1383,6 +1389,14 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             for (int outFace = 0; outFace < 6; ++outFace) {
                 if (node.inFace >= 0 && !faceConnected(conn, node.inFace, outFace)) continue;
                 enqueueChunk(node.pos + kNeighborOffsets[outFace], kOppositeFace[outFace]);
+            }
+        }
+
+        for (const glm::ivec3& chunkPos : reachableChunks) {
+            const glm::vec3 chunkMin = glm::vec3(chunkPos) * chunkWorldSize;
+            const glm::vec3 chunkMax = chunkMin + glm::vec3(chunkWorldSize);
+            if (frustum.testAABB(chunkMin, chunkMax)) {
+                visibleChunks.insert(chunkPos);
             }
         }
 
