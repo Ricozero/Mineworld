@@ -48,6 +48,14 @@ glm::ivec3 fromFbIVec3(const mineworld::net::IVec3* value) {
     return glm::ivec3(value->x(), value->y(), value->z());
 }
 
+uint8_t toWireEntityType(EntityType type) {
+    return static_cast<uint8_t>(type);
+}
+
+EntityType fromWireEntityType(uint8_t type) {
+    return type == static_cast<uint8_t>(EntityType::Robot) ? EntityType::Robot : EntityType::Player;
+}
+
 uint8_t toWirePlayerMode(PlayerMode mode) {
     return static_cast<uint8_t>(mode);
 }
@@ -188,7 +196,7 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers:
             &velocity,
             actor.yaw,
             actor.pitch,
-            actor.isPlayer,
+            toWireEntityType(actor.entityType),
             toWirePlayerMode(actor.playerMode)));
     }
     const auto actorsVec = builder.CreateVector(actorOffsets);
@@ -261,7 +269,7 @@ bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapsho
                 fromFbVec3(actor->velocity()),
                 actor->yaw(),
                 actor->pitch(),
-                actor->is_player(),
+                fromWireEntityType(actor->entity_type()),
                 fromWirePlayerMode(actor->player_mode()),
             });
         }

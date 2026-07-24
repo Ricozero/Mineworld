@@ -45,7 +45,7 @@ table ActorState {
   velocity:Vec3;
   yaw:float;
   pitch:float;
-  is_player:bool = false;
+  entity_type:ubyte = 0;
   player_mode:ubyte = 0;
 }
 

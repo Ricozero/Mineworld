@@ -1,29 +1,10 @@
 #include "client_system.h"
 
-#include <cmath>
-
-#include "chunk.h"
 #include "client_world.h"
 #include "common_system.h"
 #include "entity.h"
 #include "profiler.h"
 #include "render_context.h"
-
-namespace {
-
-bool isInLoadedChunk(ClientWorld& world, entt::registry& registry, entt::entity entity) {
-    if (!registry.all_of<TransformComponent>(entity)) {
-        return false;
-    }
-    const glm::vec3& pos = registry.get<TransformComponent>(entity).position;
-    const glm::ivec3 chunk = Chunk::worldToChunk(glm::ivec3(
-        static_cast<int>(std::floor(pos.x)),
-        static_cast<int>(std::floor(pos.y)),
-        static_cast<int>(std::floor(pos.z))));
-    return world.getVoxelWorld().isChunkLoaded(chunk);
-}
-
-}  // namespace
 
 InputSystem::InputSystem(RenderContext* renderContext, uint32_t localSessionId)
     : renderContext_(renderContext), localSessionId_(localSessionId) {
@@ -47,17 +28,11 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
         auto& transform = registry.get<TransformComponent>(entity);
         auto& player = registry.get<PlayerComponent>(entity);
         auto& input = registry.get<ControllerInputComponent>(entity);
-        auto& physics = registry.get<PhysicsComponent>(entity);
         input.deltaTime = deltaTime;
         const glm::vec3 previousRotation = transform.rotation;
         const PlayerMode previousMode = player.mode;
         const ControllerInputComponent previousInput = input;
         renderContext_->processInput(deltaTime, transform.rotation, player, input);
-
-        if (!isInLoadedChunk(world, registry, entity)) {
-            physics.velocity = glm::vec3(0.0f);
-            continue;
-        }
 
         if (input.jump) {
             common_system::refreshGrounded(world, registry, entity);

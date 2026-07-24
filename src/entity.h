@@ -37,6 +37,11 @@ struct ControllerInputComponent {
     float deltaTime = 0.0f;
 };
 
+enum class EntityType : uint8_t {
+    Player = 0,
+    Robot = 1,
+};
+
 enum class PlayerMode : uint8_t {
     Survival = 0,
     Spectator = 1,
@@ -57,6 +62,8 @@ struct RandomMovementComponent {
     float changeDirectionTimer = 0.0f;
     float changeDirectionInterval = 2.0f;
     glm::vec3 targetDirection{0.0f};
+    float jumpTimer = 0.0f;
+    float jumpInterval = 0.0f;
 };
 
 struct MeshComponent {

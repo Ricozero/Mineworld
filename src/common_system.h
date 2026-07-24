@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "block.h"
+#include "chunk.h"
 #include "config.h"
 #include "entity.h"
 
@@ -129,6 +130,12 @@ void simulateActorPhysics(World& world, entt::registry& registry, entt::entity e
 
     auto& transform = registry.get<TransformComponent>(entity);
     auto& physics = registry.get<PhysicsComponent>(entity);
+
+    const glm::ivec3 chunkPos = Chunk::worldToChunk(glm::ivec3(glm::floor(transform.position)));
+    if (!world.getVoxelWorld().isChunkLoaded(chunkPos)) {
+        physics.velocity = glm::vec3(0.0f);
+        return;
+    }
     if (physics.useGravity && !physics.isGrounded) {
         physics.velocity.y -= AppConfig::instance().gravity * deltaTime;
         physics.velocity.y = std::max(physics.velocity.y, -AppConfig::instance().maxFallSpeed);

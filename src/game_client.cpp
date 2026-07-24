@@ -208,15 +208,20 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
         snapshotActorNames.insert(actor.name);
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {
-            entity = actor.isPlayer
-                         ? world_.createRemotePlayer(actor.name, actor.position, actor.playerMode)
-                         : world_.createRobot(actor.name, actor.position);
+            switch (actor.entityType) {
+                case EntityType::Player:
+                    entity = world_.createRemotePlayer(actor.name, actor.position, actor.playerMode);
+                    break;
+                case EntityType::Robot:
+                    entity = world_.createRobot(actor.name, actor.position);
+                    break;
+            }
         }
         if (entity == entt::null) {
             continue;
         }
         if (!registry.all_of<SessionComponent>(entity)) {
-            if (actor.isPlayer) {
+            if (actor.entityType == EntityType::Player) {
                 world_.getActorWorld().setPlayerMode(entity, actor.playerMode);
             }
             queueRemoteActorSample(registry, entity, actor);

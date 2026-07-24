@@ -16,8 +16,8 @@
 
 namespace {
 
-constexpr int kMaxChunksPerSnapshot = 4;
-constexpr float kChunkUnloadDelaySeconds = 5.0f;
+constexpr int kMaxChunksPerSnapshot = 9;
+constexpr float kChunkUnloadDelaySeconds = 3.0f;
 
 }  // namespace
 
@@ -206,15 +206,18 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
             if (registry.all_of<PhysicsComponent>(entity)) {
                 velocity = registry.get<PhysicsComponent>(entity).velocity;
             }
-            const bool isPlayer = registry.all_of<PlayerComponent>(entity);
-            const PlayerMode playerMode = isPlayer ? registry.get<PlayerComponent>(entity).mode : PlayerMode::Survival;
+            EntityType entityType;
+            if (registry.all_of<PlayerComponent>(entity)) entityType = EntityType::Player;
+            else if (registry.all_of<RobotComponent>(entity)) entityType = EntityType::Robot;
+            else continue;
+            const PlayerMode playerMode = entityType == EntityType::Player ? registry.get<PlayerComponent>(entity).mode : PlayerMode::Survival;
             snapshot.actors.push_back(NetActorState{
                 name.name,
                 transform.position,
                 velocity,
                 transform.rotation.y,
                 transform.rotation.x,
-                isPlayer,
+                entityType,
                 playerMode,
             });
         }
@@ -322,7 +325,6 @@ void GameServer::updateVisibleChunks(float deltaTime) {
         loadChunk(chunkPos);
     }
 
-    // Collect chunks to unload before mutating the map
     std::vector<glm::ivec3> chunksToUnload;
     world_.getVoxelWorld().forEachLoadedChunk([&](glm::ivec3 chunkPos) {
         if (desiredChunks.find(chunkPos) == desiredChunks.end()) {

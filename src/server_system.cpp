@@ -36,10 +36,14 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
             random.changeDirectionTimer = random.changeDirectionInterval;
             const float angle = (static_cast<float>(rand()) / RAND_MAX) * 2.0f * 3.14159265f;
             random.targetDirection = glm::vec3(std::cos(angle), 0.0f, std::sin(angle));
+            const bool willJump = (rand() % 3) == 0;
+            random.jumpInterval = willJump ? 1.0f + (static_cast<float>(rand()) / RAND_MAX) * 2.0f : 0.0f;
+            random.jumpTimer = random.jumpInterval;
         }
 
+        random.jumpTimer -= deltaTime;
         input.move = glm::vec3(0.0f, 0.0f, 1.0f);
-        input.jump = false;
+        input.jump = random.jumpTimer > 0.0f;
         input.sprint = false;
         if (glm::dot(random.targetDirection, random.targetDirection) > 0.0f) {
             transform.rotation.y = glm::degrees(std::atan2(random.targetDirection.z, random.targetDirection.x));
