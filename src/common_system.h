@@ -13,6 +13,13 @@
 
 namespace common_system {
 
+template <typename World>
+class BaseSystem {
+public:
+    virtual ~BaseSystem() = default;
+    virtual void update(World& world, float deltaTime) = 0;
+};
+
 inline bool isSpectatorPlayer(entt::registry& registry, entt::entity entity) {
     return registry.all_of<PlayerComponent>(entity) && registry.get<PlayerComponent>(entity).mode == PlayerMode::Spectator;
 }

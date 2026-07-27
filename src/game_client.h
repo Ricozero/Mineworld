@@ -11,7 +11,10 @@
 #include "net_channel.h"
 #include "net_protocol.h"
 
-class ClientSystem;
+namespace common_system {
+template <typename World>
+class BaseSystem;
+}
 class RenderContext;
 class InputSystem;
 
@@ -26,7 +29,7 @@ public:
     uint32_t localSessionId() const { return localSessionId_; }
     bool isSessionReady() const { return sessionReady_; }
 
-    void registerSystem(std::unique_ptr<ClientSystem> system);
+    void registerSystem(std::unique_ptr<common_system::BaseSystem<ClientWorld>> system);
     void update(float deltaTime);
     void disconnect();
 
@@ -40,7 +43,7 @@ private:
     void updateRemoteInterpolation(float deltaTime);
 
     ClientWorld world_;
-    std::vector<std::unique_ptr<ClientSystem>> systems_;
+    std::vector<std::unique_ptr<common_system::BaseSystem<ClientWorld>>> systems_;
     InputSystem* inputSystem_ = nullptr;
     uint32_t localSessionId_ = 0;
     bool sessionReady_ = false;

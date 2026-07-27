@@ -29,7 +29,7 @@ GameClient::GameClient(RenderContext* renderContext, std::string address, uint16
 
 GameClient::~GameClient() = default;
 
-void GameClient::registerSystem(std::unique_ptr<ClientSystem> system) {
+void GameClient::registerSystem(std::unique_ptr<common_system::BaseSystem<ClientWorld>> system) {
     systems_.push_back(std::move(system));
 }
 

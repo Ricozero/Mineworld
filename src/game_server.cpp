@@ -16,7 +16,7 @@
 
 namespace {
 
-constexpr int kMaxChunksPerSnapshot = 9;
+constexpr int kMaxChunksPerSnapshot = 4;
 constexpr float kChunkUnloadDelaySeconds = 3.0f;
 
 }  // namespace
@@ -41,7 +41,7 @@ GameServer::GameServer() {
 
 GameServer::~GameServer() = default;
 
-void GameServer::registerSystem(std::unique_ptr<ServerSystem> system) {
+void GameServer::registerSystem(std::unique_ptr<common_system::BaseSystem<ServerWorld>> system) {
     systems_.push_back(std::move(system));
 }
 

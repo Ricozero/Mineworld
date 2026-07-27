@@ -15,7 +15,10 @@
 #include "net_protocol.h"
 #include "server_world.h"
 
-class ServerSystem;
+namespace common_system {
+template <typename World>
+class BaseSystem;
+}
 
 class GameServer {
 public:
@@ -25,7 +28,7 @@ public:
     ServerWorld& world() { return world_; }
     const ServerWorld& world() const { return world_; }
 
-    void registerSystem(std::unique_ptr<ServerSystem> system);
+    void registerSystem(std::unique_ptr<common_system::BaseSystem<ServerWorld>> system);
     void update(float deltaTime);
 
     entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
@@ -68,7 +71,7 @@ private:
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
 
     ServerWorld world_;
-    std::vector<std::unique_ptr<ServerSystem>> systems_;
+    std::vector<std::unique_ptr<common_system::BaseSystem<ServerWorld>>> systems_;
 
     asio::io_context ioContext_;
 

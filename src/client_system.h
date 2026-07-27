@@ -3,16 +3,12 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include "common_system.h"
+
 class ClientWorld;
 class RenderContext;
 
-class ClientSystem {
-public:
-    virtual ~ClientSystem() = default;
-    virtual void update(ClientWorld& world, float deltaTime) = 0;
-};
-
-class InputSystem : public ClientSystem {
+class InputSystem : public common_system::BaseSystem<ClientWorld> {
 public:
     InputSystem(RenderContext* renderContext, uint32_t localSessionId);
     void update(ClientWorld& world, float deltaTime) override;
@@ -29,7 +25,7 @@ private:
     bool pendingInput_ = false;
 };
 
-class RenderSystem : public ClientSystem {
+class RenderSystem : public common_system::BaseSystem<ClientWorld> {
 public:
     RenderSystem(RenderContext* renderContext, uint32_t localSessionId);
     void update(ClientWorld& world, float deltaTime) override;

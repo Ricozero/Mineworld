@@ -3,15 +3,11 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include "common_system.h"
+
 class ServerWorld;
 
-class ServerSystem {
-public:
-    virtual ~ServerSystem() = default;
-    virtual void update(ServerWorld& world, float deltaTime) = 0;
-};
-
-class PhysicsSystem : public ServerSystem {
+class PhysicsSystem : public common_system::BaseSystem<ServerWorld> {
 public:
     void update(ServerWorld& world, float deltaTime) override;
 
