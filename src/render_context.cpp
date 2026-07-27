@@ -36,7 +36,6 @@ T cycleMode(T current) {
 
 constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
-constexpr uint32_t kResetFlags = BGFX_RESET_VSYNC;
 constexpr size_t kBoxVertexCount = 24;
 constexpr size_t kBoxIndexCount = 36;
 constexpr int kMaxChunkMeshRebuildsPerFrame = 2;
@@ -44,6 +43,10 @@ constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
 constexpr size_t kPlayerModelIndexCount = kBoxIndexCount * 2;
 constexpr size_t kMaxBatchVertices = UINT16_MAX;
 constexpr size_t kMaxBatchIndices = UINT16_MAX;
+
+uint32_t bgfxResetFlags() {
+    return AppConfig::instance().vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
+}
 
 struct PosColorVertex {
     float x;
@@ -624,7 +627,7 @@ bool RenderContext::initialize(int width, int height, const char* title) {
     init.platformData.nwh = glfwGetWin32Window(window_);
     init.resolution.width = static_cast<uint32_t>(framebufferWidth_);
     init.resolution.height = static_cast<uint32_t>(framebufferHeight_);
-    init.resolution.reset = kResetFlags;
+    init.resolution.reset = bgfxResetFlags();
     if (!bgfx::init(init)) {
         logging::error("Failed to initialize bgfx");
         glfwDestroyWindow(window_);
@@ -1029,7 +1032,7 @@ void RenderContext::render(const ClientWorld& world) {
     framebufferHeight = std::max(framebufferHeight, 1);
 
     if (framebufferWidth != framebufferWidth_ || framebufferHeight != framebufferHeight_) {
-        bgfx::reset(static_cast<uint32_t>(framebufferWidth), static_cast<uint32_t>(framebufferHeight), kResetFlags);
+        bgfx::reset(static_cast<uint32_t>(framebufferWidth), static_cast<uint32_t>(framebufferHeight), bgfxResetFlags());
     }
 
     framebufferWidth_ = framebufferWidth;
@@ -1579,9 +1582,6 @@ void RenderContext::renderProfilerOverlay() {
             ImGui::TableHeadersRow();
 
             for (const profiling::ScopeEntry& entry : snapshot.scopes) {
-                if (entry.name == "Frame.Total") {
-                    continue;
-                }
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(entry.name.c_str());

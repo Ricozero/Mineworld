@@ -82,12 +82,12 @@ int runServer(const std::string& dir) {
 
     logging::info("Dedicated server started");
     for (;;) {
-        MW_PROFILE_SCOPE("Frame.Total");
-
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
         previousTime = currentTime;
         server->update(elapsed.count());
+        const auto frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - currentTime).count();
+        profiling::Profiler::instance().finishFrame(frameMs);
     }
 }
 
@@ -143,8 +143,6 @@ int runClient(const std::string& dir) {
 
     auto previousTime = std::chrono::steady_clock::now();
     while (!renderContext->shouldClose()) {
-        MW_PROFILE_SCOPE("Frame.Total");
-
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
         previousTime = currentTime;
@@ -207,6 +205,8 @@ int runClient(const std::string& dir) {
                 }
                 break;
         }
+        const auto frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - currentTime).count();
+        profiling::Profiler::instance().finishFrame(frameMs);
     }
     stopClientSession(client, localServer, serverThread, stopServer);
     return 0;

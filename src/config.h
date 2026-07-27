@@ -111,6 +111,7 @@ struct AppConfig {
 
     // [render]
     std::string graphicsApi = "dx11";
+    bool vsync = true;
 
     // [server]
     uint16_t port = 40000;
@@ -143,6 +144,7 @@ struct AppConfig {
         windowWidth = cfg.getInt("window.width", windowWidth);
         windowHeight = cfg.getInt("window.height", windowHeight);
         graphicsApi = cfg.get("render.graphics_api", graphicsApi);
+        vsync = cfg.getBool("render.vsync", vsync);
         port = static_cast<uint16_t>(cfg.getInt("server.port", port));
         ticksPerSecond = cfg.getInt("server.ticks_per_second", ticksPerSecond);
         chunkViewRadius = cfg.getInt("server.chunk_view_radius", chunkViewRadius);

@@ -2,8 +2,6 @@
 
 #include <algorithm>
 #include <mutex>
-#include <unordered_map>
-#include <utility>
 
 namespace profiling {
 namespace {
@@ -42,61 +40,6 @@ double smooth(double current, double sample, double alpha) {
     return current == 0.0 ? sample : current * (1.0 - alpha) + sample * alpha;
 }
 
-#if defined(TRACY_ENABLE)
-struct TracySourceKey {
-    std::string name;
-    std::string file;
-    std::string function;
-    uint32_t line = 0;
-
-    bool operator==(const TracySourceKey& rhs) const {
-        return line == rhs.line && name == rhs.name && file == rhs.file && function == rhs.function;
-    }
-};
-
-struct TracySourceKeyHash {
-    size_t operator()(const TracySourceKey& key) const {
-        size_t seed = std::hash<std::string>{}(key.name);
-        seed ^= std::hash<std::string>{}(key.file) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-        seed ^= std::hash<std::string>{}(key.function) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-        seed ^= std::hash<uint32_t>{}(key.line) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-        return seed;
-    }
-};
-
-uint64_t tracySourceLocation(std::string_view name, const char* file, uint32_t line, const char* function) {
-    static std::mutex mutex;
-    static std::unordered_map<TracySourceKey, uint64_t, TracySourceKeyHash> cache;
-
-    TracySourceKey key{
-        std::string(name),
-        file ? file : "profiler.cpp",
-        function ? function : "profiling::ScopedTimer",
-        line,
-    };
-
-    std::lock_guard lock(mutex);
-    auto it = cache.find(key);
-    if (it != cache.end()) {
-        return it->second;
-    }
-
-    auto [insertedIt, _] = cache.emplace(std::move(key), 0);
-    const TracySourceKey& stored = insertedIt->first;
-    const uint64_t sourceLocation = ___tracy_alloc_srcloc_name(
-        stored.line,
-        stored.file.c_str(),
-        stored.file.size(),
-        stored.function.c_str(),
-        stored.function.size(),
-        stored.name.c_str(),
-        stored.name.size(),
-        0);
-    insertedIt->second = sourceLocation;
-    return sourceLocation;
-}
-#endif
-
 }  // namespace
 
 Profiler& Profiler::instance() {
@@ -109,10 +52,11 @@ void Profiler::recordScope(std::string_view name, double elapsedMs) {
 
     ScopeEntry& entry = findOrAddSorted(scopes_, name);
     entry.curMs += elapsedMs;
+}
 
-    if (name == "Frame.Total") {
-        finishFrameLocked(elapsedMs);
-    }
+void Profiler::finishFrame(double frameMs) {
+    std::lock_guard lock(profilerMutex());
+    finishFrameLocked(frameMs);
 }
 
 void Profiler::addCounter(std::string_view name, int64_t amount) {
@@ -182,17 +126,16 @@ void Profiler::finishFrameLocked(double frameMs) {
     }
 }
 
-ScopedTimer::ScopedTimer(std::string_view name, const char* file, uint32_t line, const char* function)
-    : name_(name), start_(std::chrono::steady_clock::now()) {
 #if defined(TRACY_ENABLE)
-    const uint64_t sourceLocation = tracySourceLocation(name_, file, line, function);
-    tracyCtx_ = ___tracy_emit_zone_begin_alloc_callstack(sourceLocation, TRACY_CALLSTACK, true);
-#else
-    (void)file;
-    (void)line;
-    (void)function;
-#endif
+ScopedTimer::ScopedTimer(std::string_view name, const ___tracy_source_location_data* sourceLocation)
+    : name_(name), start_(std::chrono::steady_clock::now()) {
+    tracyCtx_ = ___tracy_emit_zone_begin_callstack(sourceLocation, TRACY_CALLSTACK, true);
 }
+#else
+ScopedTimer::ScopedTimer(std::string_view name)
+    : name_(name), start_(std::chrono::steady_clock::now()) {
+}
+#endif
 
 ScopedTimer::~ScopedTimer() {
     const auto end = std::chrono::steady_clock::now();
