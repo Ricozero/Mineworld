@@ -138,13 +138,14 @@ void GameClient::sendInputToServer() {
     }
 
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent, ControllerInputComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent>();
     for (auto entity : view) {
-        const auto& session = registry.get<SessionComponent>(entity);
+        const auto& session = view.get<SessionComponent>(entity);
         if (session.sessionId != localSessionId_) {
             continue;
         }
-        const auto& transform = registry.get<TransformComponent>(entity);
+        const auto& transform = view.get<TransformComponent>(entity);
+        const auto& player = view.get<PlayerComponent>(entity);
         NetClientInput input;
         input.position = transform.position;
         if (registry.all_of<PhysicsComponent>(entity)) {
@@ -152,9 +153,7 @@ void GameClient::sendInputToServer() {
         }
         input.yaw = transform.rotation.y;
         input.pitch = transform.rotation.x;
-        if (registry.all_of<PlayerComponent>(entity)) {
-            input.playerMode = registry.get<PlayerComponent>(entity).mode;
-        }
+        input.playerMode = player.mode;
         input.sequence = nextInputSequence_++;
         channel_->sendReliable(serializeClientInput(input));
         break;
@@ -229,12 +228,9 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     }
 
     std::vector<entt::entity> remoteActorsToDestroy;
-    auto actorView = registry.view<NameComponent, TransformComponent>();
-    for (auto entity : actorView) {
-        if (registry.all_of<SessionComponent>(entity)) {
-            continue;
-        }
-        const auto& name = registry.get<NameComponent>(entity);
+    auto view = registry.view<NameComponent, TransformComponent>(entt::exclude<SessionComponent>);
+    for (auto entity : view) {
+        const auto& name = view.get<NameComponent>(entity);
         if (snapshotActorNames.count(name.name) == 0) {
             remoteActorsToDestroy.push_back(entity);
         }
@@ -271,13 +267,9 @@ void GameClient::updateRemoteInterpolation(float deltaTime) {
     constexpr double interpolationDelay = 0.10;
     const double renderTime = snapshotClock_ - interpolationDelay;
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<TransformComponent, InterpolationComponent>();
+    auto view = registry.view<TransformComponent, InterpolationComponent>(entt::exclude<SessionComponent>);
     for (auto entity : view) {
-        if (registry.all_of<SessionComponent>(entity)) {
-            continue;
-        }
-
-        auto& interpolation = registry.get<InterpolationComponent>(entity);
+        auto& interpolation = view.get<InterpolationComponent>(entity);
         auto& samples = interpolation.samples;
         if (samples.empty()) {
             continue;
@@ -287,7 +279,7 @@ void GameClient::updateRemoteInterpolation(float deltaTime) {
             samples.pop_front();
         }
 
-        auto& transform = registry.get<TransformComponent>(entity);
+        auto& transform = view.get<TransformComponent>(entity);
         if (samples.size() < 2 || renderTime <= samples.front().time) {
             const auto& sample = samples.front();
             transform.position = sample.position;

@@ -16,7 +16,7 @@ void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
 
     auto view = registry.view<TransformComponent, PhysicsComponent>();
     for (auto entity : view) {
-        auto& transform = registry.get<TransformComponent>(entity);
+        const auto& transform = view.get<TransformComponent>(entity);
         world.getActorWorld().updateEntityChunk(entity, transform.position);
     }
 }
@@ -27,9 +27,9 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
     // Update robot AI inputs
     auto robotView = registry.view<RobotComponent, RandomMovementComponent, TransformComponent, ControllerInputComponent>();
     for (auto entity : robotView) {
-        auto& random = registry.get<RandomMovementComponent>(entity);
-        auto& input = registry.get<ControllerInputComponent>(entity);
-        auto& transform = registry.get<TransformComponent>(entity);
+        auto& random = robotView.get<RandomMovementComponent>(entity);
+        auto& input = robotView.get<ControllerInputComponent>(entity);
+        auto& transform = robotView.get<TransformComponent>(entity);
 
         random.changeDirectionTimer -= deltaTime;
         if (random.changeDirectionTimer <= 0.0f) {
@@ -51,20 +51,14 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
     }
 
     // Apply input and step physics for non-player actors
-    auto actorView = registry.view<TransformComponent, PhysicsComponent, ControllerInputComponent>();
+    auto actorView = registry.view<TransformComponent, PhysicsComponent, ControllerInputComponent>(entt::exclude<SessionComponent>);
     for (auto entity : actorView) {
-        if (registry.all_of<SessionComponent>(entity)) {
-            continue;
-        }
-        auto& input = registry.get<ControllerInputComponent>(entity);
+        auto& input = actorView.get<ControllerInputComponent>(entity);
         if (input.jump) {
             common_system::refreshGrounded(world, registry, entity);
         }
         common_system::applyControllerInput(registry, entity, deltaTime, false);
         common_system::simulateActorPhysics(world, registry, entity, deltaTime);
-        if (registry.all_of<TransformComponent>(entity)) {
-            world.getActorWorld().updateEntityChunk(entity, registry.get<TransformComponent>(entity).position);
-        }
         input.jump = false;
     }
 }

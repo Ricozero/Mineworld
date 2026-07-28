@@ -1457,10 +1457,10 @@ void RenderContext::renderWorld(const ClientWorld& world) {
         MW_PROFILE_SCOPE("Client.Render.World.Entities");
 
         const auto& registry = world.getActorWorld().registry();
-        auto viewEntities = registry.view<TransformComponent, MeshComponent>();
-        MW_PROFILE_GAUGE("Render.VisibleEntities", static_cast<double>(viewEntities.size_hint()));
-        for (auto entity : viewEntities) {
-            const auto& meshComp = registry.get<MeshComponent>(entity);
+        auto view = registry.view<TransformComponent, MeshComponent>();
+        MW_PROFILE_GAUGE("Render.VisibleEntities", static_cast<double>(view.size_hint()));
+        for (auto entity : view) {
+            const auto& meshComp = view.get<MeshComponent>(entity);
             if (!meshComp.isVisible || shouldHideLocalPlayerModel(world, entity)) {
                 continue;
             }
@@ -1474,7 +1474,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
                 currentBatch.vertices.clear();
                 currentBatch.indices.clear();
             }
-            const auto& transform = registry.get<TransformComponent>(entity);
+            const auto& transform = view.get<TransformComponent>(entity);
             const glm::vec3 color(meshComp.color.r, meshComp.color.g, meshComp.color.b);
             if (actorModel) {
                 addPlayerModel(currentBatch, transform, color);

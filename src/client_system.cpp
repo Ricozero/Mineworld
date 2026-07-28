@@ -18,16 +18,16 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
     }
 
     auto& registry = world.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent, ControllerInputComponent, PhysicsComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent, ControllerInputComponent>();
     for (auto entity : view) {
-        const auto& session = registry.get<SessionComponent>(entity);
+        const auto& session = view.get<SessionComponent>(entity);
         if (session.sessionId != localSessionId_) {
             continue;
         }
 
-        auto& transform = registry.get<TransformComponent>(entity);
-        auto& player = registry.get<PlayerComponent>(entity);
-        auto& input = registry.get<ControllerInputComponent>(entity);
+        auto& transform = view.get<TransformComponent>(entity);
+        auto& player = view.get<PlayerComponent>(entity);
+        auto& input = view.get<ControllerInputComponent>(entity);
         input.deltaTime = deltaTime;
         const glm::vec3 previousRotation = transform.rotation;
         const PlayerMode previousMode = player.mode;
@@ -60,14 +60,14 @@ void RenderSystem::update(ClientWorld& world, float deltaTime) {
     }
 
     auto& registry = world.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent>();
     for (auto entity : view) {
-        const auto& session = registry.get<SessionComponent>(entity);
+        const auto& session = view.get<SessionComponent>(entity);
         if (session.sessionId != localSessionId_) {
             continue;
         }
-        const auto& transform = registry.get<TransformComponent>(entity);
-        const auto& player = registry.get<PlayerComponent>(entity);
+        const auto& transform = view.get<TransformComponent>(entity);
+        const auto& player = view.get<PlayerComponent>(entity);
         renderContext_->setCamera(transform.position, transform.rotation.y, transform.rotation.x, player.mode, localSessionId_);
         break;
     }

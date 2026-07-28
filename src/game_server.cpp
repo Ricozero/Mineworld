@@ -135,11 +135,11 @@ GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
 
 void GameServer::updateSessionVisibleChunks(Session& session) {
     auto& registry = world_.getActorWorld().registry();
-    auto sessionView = registry.view<SessionComponent, TransformComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent>();
 
     glm::ivec3 currentChunkPos{INT_MAX, INT_MAX, INT_MAX};
-    for (auto entity : sessionView) {
-        const auto& sessionComp = registry.get<SessionComponent>(entity);
+    for (auto entity : view) {
+        const auto& sessionComp = view.get<SessionComponent>(entity);
         if (sessionComp.sessionId != session.sessionId) {
             continue;
         }
@@ -439,18 +439,13 @@ void GameServer::onClientHello(uint32_t sessionId) {
     float spawnYaw = AppConfig::instance().spawnYaw;
     float spawnPitch = AppConfig::instance().spawnPitch;
 
-    createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
+    const entt::entity entity = createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
 
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent>();
-    for (auto entity : view) {
-        const auto& sessionComp = registry.get<SessionComponent>(entity);
-        if (sessionComp.sessionId == sessionId) {
-            auto& transform = registry.get<TransformComponent>(entity);
-            transform.rotation.y = spawnYaw;
-            transform.rotation.x = spawnPitch;
-            break;
-        }
+    if (registry.valid(entity) && registry.all_of<TransformComponent>(entity)) {
+        auto& transform = registry.get<TransformComponent>(entity);
+        transform.rotation.y = spawnYaw;
+        transform.rotation.x = spawnPitch;
     }
 
     NetServerHello hello;
@@ -472,14 +467,14 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
     }
 
     auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent>();
+    auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent>();
     for (auto entity : view) {
-        const auto& session = registry.get<SessionComponent>(entity);
+        const auto& session = view.get<SessionComponent>(entity);
         if (session.sessionId != sessionId) {
             continue;
         }
         world_.getActorWorld().setPlayerMode(entity, input.playerMode);
-        auto& transform = registry.get<TransformComponent>(entity);
+        auto& transform = view.get<TransformComponent>(entity);
         transform.position = input.position;
         transform.rotation.x = input.pitch;
         transform.rotation.y = input.yaw;
