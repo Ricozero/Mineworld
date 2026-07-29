@@ -59,6 +59,17 @@ BlockData VoxelWorld::getBlockOrAir(glm::ivec3 worldPos) const {
     return it->second->getBlock(localPos);
 }
 
+BlockQueryResult VoxelWorld::queryBlock(glm::ivec3 worldPos) const {
+    const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
+    auto it = chunks_.find(chunkPos);
+    if (it == chunks_.end()) {
+        return BlockQueryResult::Unknown;
+    }
+    return it->second->getBlock(Chunk::worldToLocal(worldPos)).type == BlockType::Air
+               ? BlockQueryResult::Empty
+               : BlockQueryResult::Solid;
+}
+
 void VoxelWorld::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
     auto& chunk = getChunk(Chunk::worldToChunk(worldPos));

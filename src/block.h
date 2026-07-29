@@ -29,3 +29,9 @@ struct BlockData {
     BlockData(BlockType t = BlockType::Air, BlockOrientation o = BlockOrientation::North)
         : type(t), orientation(o) {}
 };
+
+enum class BlockQueryResult : uint8_t {
+    Unknown,
+    Empty,
+    Solid,
+};

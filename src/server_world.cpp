@@ -102,6 +102,10 @@ BlockData ServerWorld::getBlock(glm::ivec3 worldPos) const {
     return voxelWorld_.getBlock(worldPos);
 }
 
+BlockQueryResult ServerWorld::queryBlock(glm::ivec3 worldPos) const {
+    return voxelWorld_.queryBlock(worldPos);
+}
+
 void ServerWorld::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     voxelWorld_.setBlock(worldPos, blockData);
 }

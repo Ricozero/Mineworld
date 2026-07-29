@@ -10,7 +10,7 @@
 namespace logging {
 namespace {
 
-std::shared_ptr<spdlog::logger> currentLogger_;
+thread_local std::shared_ptr<spdlog::logger> currentLogger_;
 
 const char* channelName(Channel channel) {
     switch (channel) {
@@ -60,13 +60,8 @@ std::shared_ptr<spdlog::logger> currentLogger() {
     return currentLogger_;
 }
 
-Scope::Scope(Channel channel)
-    : previous_(currentLogger()) {
+void setThreadChannel(Channel channel) {
     currentLogger_ = getLogger(channel);
-}
-
-Scope::~Scope() {
-    currentLogger_ = previous_;
 }
 
 }  // namespace logging

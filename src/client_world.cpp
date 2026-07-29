@@ -8,6 +8,10 @@ BlockData ClientWorld::getBlock(glm::ivec3 worldPos) const {
     return voxelWorld_.getBlockOrAir(worldPos);
 }
 
+BlockQueryResult ClientWorld::queryBlock(glm::ivec3 worldPos) const {
+    return voxelWorld_.queryBlock(worldPos);
+}
+
 bool ClientWorld::loadChunk(glm::ivec3 chunkPos) {
     return voxelWorld_.loadChunk(chunkPos);
 }

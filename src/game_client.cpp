@@ -12,8 +12,6 @@
 
 GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
     : renderContext_(renderContext) {
-    logging::Scope logScope(logging::Channel::Client);
-
     auto channel = std::make_unique<KcpChannel>(ioContext_, 0);
     asio::error_code addressError;
     asio::ip::address resolvedAddress = asio::ip::make_address(address, addressError);
@@ -34,7 +32,6 @@ void GameClient::registerSystem(std::unique_ptr<common_system::BaseSystem<Client
 }
 
 void GameClient::update(float deltaTime) {
-    logging::Scope logScope(logging::Channel::Client);
     MW_PROFILE_SCOPE("Client.Update");
 
     pumpNetwork();

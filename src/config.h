@@ -116,7 +116,8 @@ struct AppConfig {
     // [server]
     uint16_t port = 40000;
     int ticksPerSecond = 20;
-    int chunkViewRadius = 2;
+    int chunkViewRadiusHorizontal = 2;
+    int chunkViewRadiusVertical = 2;
 
     // [spawn]
     glm::vec3 spawnPosition{0.0f, 2.0f, 0.0f};
@@ -125,8 +126,6 @@ struct AppConfig {
 
     // [physics]
     float gravity = 9.8f;
-    float collisionEpsilon = 0.001f;
-    float groundProbeDistance = 0.05f;
     float jumpSpeed = 5.0f;
     float maxFallSpeed = 50.0f;
     float survivalSprintMultiplier = 1.6f;
@@ -147,15 +146,14 @@ struct AppConfig {
         vsync = cfg.getBool("render.vsync", vsync);
         port = static_cast<uint16_t>(cfg.getInt("server.port", port));
         ticksPerSecond = cfg.getInt("server.ticks_per_second", ticksPerSecond);
-        chunkViewRadius = cfg.getInt("server.chunk_view_radius", chunkViewRadius);
+        chunkViewRadiusHorizontal = cfg.getInt("server.chunk_view_radius_horizontal", chunkViewRadiusHorizontal);
+        chunkViewRadiusVertical = cfg.getInt("server.chunk_view_radius_vertical", chunkViewRadiusVertical);
         spawnPosition.x = cfg.getFloat("spawn.x", spawnPosition.x);
         spawnPosition.y = cfg.getFloat("spawn.y", spawnPosition.y);
         spawnPosition.z = cfg.getFloat("spawn.z", spawnPosition.z);
         spawnYaw = cfg.getFloat("spawn.yaw", spawnYaw);
         spawnPitch = cfg.getFloat("spawn.pitch", spawnPitch);
         gravity = cfg.getFloat("physics.gravity", gravity);
-        collisionEpsilon = cfg.getFloat("physics.collision_epsilon", collisionEpsilon);
-        groundProbeDistance = cfg.getFloat("physics.ground_probe_distance", groundProbeDistance);
         jumpSpeed = cfg.getFloat("physics.jump_speed", jumpSpeed);
         maxFallSpeed = cfg.getFloat("physics.max_fall_speed", maxFallSpeed);
         survivalSprintMultiplier = cfg.getFloat("physics.survival_sprint_multiplier", survivalSprintMultiplier);

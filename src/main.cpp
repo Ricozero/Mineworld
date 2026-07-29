@@ -51,7 +51,6 @@ RunMode parseRunMode(int argc, char* argv[]) {
 }
 
 bool initializeServer(std::unique_ptr<GameServer>& server) {
-    logging::Scope logScope(logging::Channel::Server);
     server = std::make_unique<GameServer>();
 
     server->createRobot("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
@@ -61,7 +60,6 @@ bool initializeServer(std::unique_ptr<GameServer>& server) {
 }
 
 bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext) {
-    logging::Scope logScope(logging::Channel::Client);
     renderContext = std::make_unique<RenderContext>();
     const AppConfig& cfg = AppConfig::instance();
     if (!renderContext->initialize(cfg.windowWidth, cfg.windowHeight, "Mineworld")) {
@@ -72,6 +70,7 @@ bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext) {
 
 int runServer(const std::string& dir) {
     profiling::Profiler::instance().setThreadName("ServerMain");
+    logging::setThreadChannel(logging::Channel::Server);
 
     AppConfig::instance().load(dir);
     std::unique_ptr<GameServer> server;
@@ -108,6 +107,7 @@ void stopClientSession(std::unique_ptr<GameClient>& client, std::unique_ptr<Game
 
 void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
     profiling::Profiler::instance().setThreadName("LocalServer");
+    logging::setThreadChannel(logging::Channel::Server);
     const auto kTickInterval = std::chrono::microseconds(1'000'000 / AppConfig::instance().ticksPerSecond);
     auto nextTick = std::chrono::steady_clock::now();
     auto previousTime = nextTick;
@@ -123,6 +123,7 @@ void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
 
 int runClient(const std::string& dir) {
     profiling::Profiler::instance().setThreadName("ClientMain");
+    logging::setThreadChannel(logging::Channel::Client);
 
     AppConfig::instance().load(dir);
     std::unique_ptr<RenderContext> renderContext;

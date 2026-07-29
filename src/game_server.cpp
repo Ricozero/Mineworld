@@ -18,12 +18,40 @@ namespace {
 
 constexpr int kMaxChunksPerSnapshot = 4;
 constexpr float kChunkUnloadDelaySeconds = 3.0f;
+constexpr int kRobotChunkViewRadius = 1;
+
+template <typename Func>
+void forEachPlayerViewChunk(glm::ivec3 center, Func&& func) {
+    const int horizontalRadius = AppConfig::instance().chunkViewRadiusHorizontal;
+    const int verticalRadius = AppConfig::instance().chunkViewRadiusVertical;
+    const int horizontalRadiusSq = horizontalRadius * horizontalRadius;
+
+    for (int dx = -horizontalRadius; dx <= horizontalRadius; ++dx) {
+        for (int dz = -horizontalRadius; dz <= horizontalRadius; ++dz) {
+            if (dx * dx + dz * dz > horizontalRadiusSq) {
+                continue;
+            }
+            for (int dy = -verticalRadius; dy <= verticalRadius; ++dy) {
+                func(center + glm::ivec3(dx, dy, dz));
+            }
+        }
+    }
+}
+
+template <typename Func>
+void forEachRobotViewChunk(glm::ivec3 center, Func&& func) {
+    for (int dx = -kRobotChunkViewRadius; dx <= kRobotChunkViewRadius; ++dx) {
+        for (int dy = -kRobotChunkViewRadius; dy <= kRobotChunkViewRadius; ++dy) {
+            for (int dz = -kRobotChunkViewRadius; dz <= kRobotChunkViewRadius; ++dz) {
+                func(center + glm::ivec3(dx, dy, dz));
+            }
+        }
+    }
+}
 
 }  // namespace
 
 GameServer::GameServer() {
-    logging::Scope logScope(logging::Channel::Server);
-
     auto kcpServer = std::make_unique<KcpServer>(ioContext_, AppConfig::instance().port);
     kcpServer->setOnConnect([this](uint32_t sessionId) {
         onSessionConnect(sessionId);
@@ -46,7 +74,6 @@ void GameServer::registerSystem(std::unique_ptr<common_system::BaseSystem<Server
 }
 
 void GameServer::update(float deltaTime) {
-    logging::Scope logScope(logging::Channel::Server);
     MW_PROFILE_SCOPE("Server.Update");
 
     pumpNetwork();
@@ -158,16 +185,11 @@ void GameServer::updateSessionVisibleChunks(Session& session) {
     session.lastChunkPos = currentChunkPos;
     std::unordered_set<glm::ivec3> nextVisibleChunks;
 
-    for (int dx = -AppConfig::instance().chunkViewRadius; dx <= AppConfig::instance().chunkViewRadius; ++dx) {
-        for (int dy = -AppConfig::instance().chunkViewRadius; dy <= AppConfig::instance().chunkViewRadius; ++dy) {
-            for (int dz = -AppConfig::instance().chunkViewRadius; dz <= AppConfig::instance().chunkViewRadius; ++dz) {
-                const glm::ivec3 chunkPos = currentChunkPos + glm::ivec3(dx, dy, dz);
-                if (world_.isChunkInBounds(chunkPos)) {
-                    nextVisibleChunks.insert(chunkPos);
-                }
-            }
+    forEachPlayerViewChunk(currentChunkPos, [&](glm::ivec3 chunkPos) {
+        if (world_.isChunkInBounds(chunkPos)) {
+            nextVisibleChunks.insert(chunkPos);
         }
-    }
+    });
 
     for (const glm::ivec3& chunkPos : session.cachedVisibleChunks) {
         if (nextVisibleChunks.count(chunkPos) == 0) {
@@ -289,16 +311,11 @@ void GameServer::updateVisibleChunks(float deltaTime) {
         for (auto entity : view) {
             const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
 
-            for (int dx = -AppConfig::instance().chunkViewRadius; dx <= AppConfig::instance().chunkViewRadius; ++dx) {
-                for (int dy = -AppConfig::instance().chunkViewRadius; dy <= AppConfig::instance().chunkViewRadius; ++dy) {
-                    for (int dz = -AppConfig::instance().chunkViewRadius; dz <= AppConfig::instance().chunkViewRadius; ++dz) {
-                        const glm::ivec3 chunkPos = entityChunk + glm::ivec3(dx, dy, dz);
-                        if (world_.isChunkInBounds(chunkPos)) {
-                            desiredChunks.insert(chunkPos);
-                        }
-                    }
+            forEachPlayerViewChunk(entityChunk, [&](glm::ivec3 chunkPos) {
+                if (world_.isChunkInBounds(chunkPos)) {
+                    desiredChunks.insert(chunkPos);
                 }
-            }
+            });
         }
     }
 
@@ -307,16 +324,11 @@ void GameServer::updateVisibleChunks(float deltaTime) {
         for (auto entity : view) {
             const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
 
-            for (int dx = -AppConfig::instance().chunkViewRadius; dx <= AppConfig::instance().chunkViewRadius; ++dx) {
-                for (int dy = -AppConfig::instance().chunkViewRadius; dy <= AppConfig::instance().chunkViewRadius; ++dy) {
-                    for (int dz = -AppConfig::instance().chunkViewRadius; dz <= AppConfig::instance().chunkViewRadius; ++dz) {
-                        const glm::ivec3 chunkPos = entityChunk + glm::ivec3(dx, dy, dz);
-                        if (world_.isChunkInBounds(chunkPos)) {
-                            desiredChunks.insert(chunkPos);
-                        }
-                    }
+            forEachRobotViewChunk(entityChunk, [&](glm::ivec3 chunkPos) {
+                if (world_.isChunkInBounds(chunkPos)) {
+                    desiredChunks.insert(chunkPos);
                 }
-            }
+            });
         }
     }
 

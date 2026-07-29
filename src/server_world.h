@@ -21,6 +21,7 @@ public:
 
     Chunk& getChunk(glm::ivec3 chunkPos);
     BlockData getBlock(glm::ivec3 worldPos) const;
+    BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
 
     bool loadChunk(glm::ivec3 chunkPos);

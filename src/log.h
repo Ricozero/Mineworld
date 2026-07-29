@@ -17,18 +17,7 @@ enum class Channel {
 void init(const std::string& dir);
 std::shared_ptr<spdlog::logger> getLogger(Channel channel);
 std::shared_ptr<spdlog::logger> currentLogger();
-
-class Scope {
-public:
-    explicit Scope(Channel channel);
-    ~Scope();
-
-    Scope(const Scope&) = delete;
-    Scope& operator=(const Scope&) = delete;
-
-private:
-    std::shared_ptr<spdlog::logger> previous_;
-};
+void setThreadChannel(Channel channel);
 
 template <typename... Args>
 void trace(fmt::format_string<Args...> fmt, Args&&... args) {
