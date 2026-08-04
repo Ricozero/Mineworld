@@ -19,11 +19,10 @@ namespace {
 constexpr int kMaxChunksPerSnapshot = 4;
 constexpr float kChunkUnloadDelaySeconds = 3.0f;
 constexpr int kRobotChunkViewRadius = 1;
+constexpr int kCoreChunkRadius = 1;
 
 template <typename Func>
-void forEachPlayerViewChunk(glm::ivec3 center, Func&& func) {
-    const int horizontalRadius = AppConfig::instance().chunkViewRadiusHorizontal;
-    const int verticalRadius = AppConfig::instance().chunkViewRadiusVertical;
+void forEachChunkInCylinder(glm::ivec3 center, int horizontalRadius, int verticalRadius, Func&& func) {
     const int horizontalRadiusSq = horizontalRadius * horizontalRadius;
 
     for (int dx = -horizontalRadius; dx <= horizontalRadius; ++dx) {
@@ -39,10 +38,10 @@ void forEachPlayerViewChunk(glm::ivec3 center, Func&& func) {
 }
 
 template <typename Func>
-void forEachRobotViewChunk(glm::ivec3 center, Func&& func) {
-    for (int dx = -kRobotChunkViewRadius; dx <= kRobotChunkViewRadius; ++dx) {
-        for (int dy = -kRobotChunkViewRadius; dy <= kRobotChunkViewRadius; ++dy) {
-            for (int dz = -kRobotChunkViewRadius; dz <= kRobotChunkViewRadius; ++dz) {
+void forEachChunkInBox(glm::ivec3 center, int radius, Func&& func) {
+    for (int dx = -radius; dx <= radius; ++dx) {
+        for (int dy = -radius; dy <= radius; ++dy) {
+            for (int dz = -radius; dz <= radius; ++dz) {
                 func(center + glm::ivec3(dx, dy, dz));
             }
         }
@@ -185,7 +184,7 @@ void GameServer::updateSessionVisibleChunks(Session& session) {
     session.lastChunkPos = currentChunkPos;
     std::unordered_set<glm::ivec3> nextVisibleChunks;
 
-    forEachPlayerViewChunk(currentChunkPos, [&](glm::ivec3 chunkPos) {
+    forEachChunkInCylinder(currentChunkPos, AppConfig::instance().chunkViewRadiusHorizontal, AppConfig::instance().chunkViewRadiusVertical, [&](glm::ivec3 chunkPos) {
         if (world_.isChunkInBounds(chunkPos)) {
             nextVisibleChunks.insert(chunkPos);
         }
@@ -311,7 +310,7 @@ void GameServer::updateVisibleChunks(float deltaTime) {
         for (auto entity : view) {
             const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
 
-            forEachPlayerViewChunk(entityChunk, [&](glm::ivec3 chunkPos) {
+            forEachChunkInCylinder(entityChunk, AppConfig::instance().chunkViewRadiusHorizontal, AppConfig::instance().chunkViewRadiusVertical, [&](glm::ivec3 chunkPos) {
                 if (world_.isChunkInBounds(chunkPos)) {
                     desiredChunks.insert(chunkPos);
                 }
@@ -324,7 +323,7 @@ void GameServer::updateVisibleChunks(float deltaTime) {
         for (auto entity : view) {
             const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
 
-            forEachRobotViewChunk(entityChunk, [&](glm::ivec3 chunkPos) {
+            forEachChunkInBox(entityChunk, kRobotChunkViewRadius, [&](glm::ivec3 chunkPos) {
                 if (world_.isChunkInBounds(chunkPos)) {
                     desiredChunks.insert(chunkPos);
                 }
@@ -419,10 +418,12 @@ bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>&
     using Payload = mineworld::net::NetMessagePayload;
     switch (getPacketType(packet)) {
         case Payload::ClientHello:
-            onClientHello(sessionId);
-            return true;
+            return onClientHello(sessionId);
         case Payload::ClientDisconnect:
             return false;
+        case Payload::ClientReady:
+            onClientReady(sessionId);
+            return true;
         case Payload::ClientInput: {
             NetClientInput input;
             if (deserializeClientInput(packet, input)) {
@@ -436,11 +437,11 @@ bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>&
     }
 }
 
-void GameServer::onClientHello(uint32_t sessionId) {
+bool GameServer::onClientHello(uint32_t sessionId) {
     auto& session = getOrCreateSession(sessionId);
     if (session.helloReceived) {
-        logging::warn("Duplicate ClientHello from session {}, ignoring", sessionId);
-        return;
+        logging::warn("Duplicate ClientHello from session {}", sessionId);
+        return true;
     }
     session.helloReceived = true;
 
@@ -454,11 +455,13 @@ void GameServer::onClientHello(uint32_t sessionId) {
     const entt::entity entity = createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
 
     auto& registry = world_.getActorWorld().registry();
-    if (registry.valid(entity) && registry.all_of<TransformComponent>(entity)) {
-        auto& transform = registry.get<TransformComponent>(entity);
-        transform.rotation.y = spawnYaw;
-        transform.rotation.x = spawnPitch;
+    if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
+        logging::error("Failed to create player for session {}", sessionId);
+        return false;
     }
+    auto& transform = registry.get<TransformComponent>(entity);
+    transform.rotation.y = spawnYaw;
+    transform.rotation.x = spawnPitch;
 
     NetServerHello hello;
     hello.sessionId = sessionId;
@@ -467,14 +470,42 @@ void GameServer::onClientHello(uint32_t sessionId) {
     hello.yaw = spawnYaw;
     hello.pitch = spawnPitch;
     hello.playerMode = PlayerMode::Survival;
+    const glm::ivec3 spawnChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(spawnPos)));
+    hello.coreChunks.reserve((kCoreChunkRadius * 2 + 1) * (kCoreChunkRadius * 2 + 1) * (kCoreChunkRadius * 2 + 1));
+    forEachChunkInBox(spawnChunk, kCoreChunkRadius, [&](glm::ivec3 chunkPos) {
+        if (!world_.isChunkInBounds(chunkPos)) {
+            return;
+        }
+        loadChunk(chunkPos);
+        hello.coreChunks.push_back(chunkPos);
+    });
     server_->sendTo(sessionId, serializeServerHello(hello));
 
     logging::info("Client hello from session {}, assigned actor '{}'", sessionId, actorName);
+    return true;
+}
+
+void GameServer::onClientReady(uint32_t sessionId) {
+    auto sessionIt = sessions_.find(sessionId);
+    if (sessionIt == sessions_.end() || !sessionIt->second.helloReceived) {
+        logging::warn("ClientReady from unknown session {}", sessionId);
+        return;
+    }
+    if (sessionIt->second.ready) {
+        logging::warn("Duplicate ClientReady from session {}", sessionId);
+        return;
+    }
+
+    sessionIt->second.ready = true;
+    logging::info("Session {} is ready", sessionId);
 }
 
 void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) {
     auto sessionIt = sessions_.find(sessionId);
-    if (sessionIt != sessions_.end() && input.sequence <= sessionIt->second.lastProcessedInputSequence) {
+    if (sessionIt == sessions_.end() || !sessionIt->second.ready) {
+        return;
+    }
+    if (input.sequence <= sessionIt->second.lastProcessedInputSequence) {
         return;
     }
 

@@ -32,6 +32,7 @@ public:
     };
 
     bool contains(glm::ivec3 chunkPos) const;
+    bool isReady(glm::ivec3 chunkPos) const;
     const Entry* get(glm::ivec3 chunkPos) const;
     void put(glm::ivec3 chunkPos, size_t blockCount, Entry entry);
     void markDirty(glm::ivec3 chunkPos);
@@ -68,7 +69,7 @@ public:
 
     // Menu screens — each call renders and presents a complete frame
     StartMenuAction renderStartMenu(char* addressBuffer, size_t addressBufferSize, int& port);
-    ConnectingAction renderConnecting(const std::string& address, uint16_t port);
+    ConnectingAction renderConnecting(const std::string& address, uint16_t port, const std::string& status, bool failed);
 
     // In-game loop — called every frame while a session is active
     bool shouldClose() const;
@@ -76,11 +77,13 @@ public:
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
     void render(const ClientWorld& world);
+    void updateCoreChunkMeshes(const ClientWorld& world, const std::vector<glm::ivec3>& coreChunks);
+    bool isChunkMeshReady(glm::ivec3 chunkPos) const;
 
     // In-game menu (ESC) control
     void captureMouse();
     void releaseMouse();
-    void closeInGameMenu();
+    void resetInGameMenu();
     InGameMenuAction consumeInGameMenuAction();
 
     // Called by GameClient when server pushes chunk updates
@@ -108,6 +111,7 @@ private:
     void destroyShaders();
     bool initializeImGui();
     void shutdownImGui();
+    void updateDisplayMetrics();
 
     // Per-frame render helpers (called within a single NewFrame/Render pair)
     void renderWorld(const ClientWorld& world);
@@ -148,7 +152,7 @@ private:
     double lastMouseX_ = 0.0;
     double lastMouseY_ = 0.0;
     bool hasMousePosition_ = false;
-    bool mouseCaptured_ = true;
+    bool mouseCaptured_ = false;
     bool prevEscapeDown_ = false;
     bool prevSpaceDown_ = false;
     bool prevF1Down_ = false;

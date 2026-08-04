@@ -29,9 +29,6 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
         auto& player = view.get<PlayerComponent>(entity);
         auto& input = view.get<ControllerInputComponent>(entity);
         input.deltaTime = deltaTime;
-        const glm::vec3 previousRotation = transform.rotation;
-        const PlayerMode previousMode = player.mode;
-        const ControllerInputComponent previousInput = input;
         renderContext_->processInput(deltaTime, transform.rotation, player, input);
 
         if (input.jump) {
@@ -39,11 +36,6 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
         }
         common_system::applyControllerInput(registry, entity, deltaTime, false);
         common_system::simulateActorPhysics(world, registry, entity, deltaTime);
-
-        inputChanged_ = previousRotation != transform.rotation || previousMode != player.mode ||
-                        previousInput.move != input.move || previousInput.jump != input.jump ||
-                        previousInput.sprint != input.sprint;
-        pendingInput_ = true;
         break;
     }
 }

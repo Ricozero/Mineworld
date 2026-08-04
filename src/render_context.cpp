@@ -526,6 +526,10 @@ bool ChunkMeshCache::contains(glm::ivec3 chunkPos) const {
     return entries_.count(chunkPos) > 0;
 }
 
+bool ChunkMeshCache::isReady(glm::ivec3 chunkPos) const {
+    return contains(chunkPos) && dirtyChunks_.count(chunkPos) == 0;
+}
+
 const ChunkMeshCache::Entry* ChunkMeshCache::get(glm::ivec3 chunkPos) const {
     auto it = entries_.find(chunkPos);
     return it != entries_.end() ? &it->second : nullptr;
@@ -660,7 +664,7 @@ bool RenderContext::initialize(int width, int height, const char* title) {
 
     glfwSetWindowUserPointer(window_, this);
     glfwSetScrollCallback(window_, RenderContext::handleScroll);
-    glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     logging::info("Renderer initialized with GLFW/bgfx ({})", bgfx::getRendererName(bgfx::getRendererType()));
     return true;
@@ -686,6 +690,31 @@ bool RenderContext::shouldClose() const {
     return !window_ || glfwWindowShouldClose(window_);
 }
 
+void RenderContext::updateDisplayMetrics() {
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+
+    windowWidth = std::max(windowWidth, 1);
+    windowHeight = std::max(windowHeight, 1);
+    framebufferWidth = std::max(framebufferWidth, 1);
+    framebufferHeight = std::max(framebufferHeight, 1);
+
+    if (framebufferWidth != framebufferWidth_ || framebufferHeight != framebufferHeight_) {
+        bgfx::reset(static_cast<uint32_t>(framebufferWidth), static_cast<uint32_t>(framebufferHeight), bgfxResetFlags());
+    }
+
+    windowWidth_ = windowWidth;
+    windowHeight_ = windowHeight;
+    framebufferWidth_ = framebufferWidth;
+    framebufferHeight_ = framebufferHeight;
+    framebufferScaleX_ = static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_);
+    framebufferScaleY_ = static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_);
+}
+
 RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffer, size_t addressBufferSize, int& port) {
     if (!window_ || !bgfxInitialized_) {
         return StartMenuAction::None;
@@ -693,18 +722,7 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
 
     releaseMouse();
 
-    int windowWidth = 0;
-    int windowHeight = 0;
-    int framebufferWidth = 0;
-    int framebufferHeight = 0;
-    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
-    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
-    windowWidth_ = std::max(windowWidth, 1);
-    windowHeight_ = std::max(windowHeight, 1);
-    framebufferWidth_ = std::max(framebufferWidth, 1);
-    framebufferHeight_ = std::max(framebufferHeight, 1);
-    framebufferScaleX_ = static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_);
-    framebufferScaleY_ = static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_);
+    updateDisplayMetrics();
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1b2533ff, 1.0f, 0);
     bgfx::touch(kMainView);
@@ -749,25 +767,14 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
     return action;
 }
 
-RenderContext::ConnectingAction RenderContext::renderConnecting(const std::string& address, uint16_t port) {
+RenderContext::ConnectingAction RenderContext::renderConnecting(const std::string& address, uint16_t port, const std::string& status, bool failed) {
     if (!window_ || !bgfxInitialized_) {
         return ConnectingAction::None;
     }
 
     releaseMouse();
 
-    int windowWidth = 0;
-    int windowHeight = 0;
-    int framebufferWidth = 0;
-    int framebufferHeight = 0;
-    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
-    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
-    windowWidth_ = std::max(windowWidth, 1);
-    windowHeight_ = std::max(windowHeight, 1);
-    framebufferWidth_ = std::max(framebufferWidth, 1);
-    framebufferHeight_ = std::max(framebufferHeight, 1);
-    framebufferScaleX_ = static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_);
-    framebufferScaleY_ = static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_);
+    updateDisplayMetrics();
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1b2533ff, 1.0f, 0);
     bgfx::touch(kMainView);
@@ -783,11 +790,11 @@ RenderContext::ConnectingAction RenderContext::renderConnecting(const std::strin
         ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_Always);
-        if (ImGui::Begin("Connecting", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+        if (ImGui::Begin("Connection", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
             ImGui::Text("Connecting to %s:%u", address.c_str(), static_cast<unsigned>(port));
-            ImGui::TextUnformatted("Waiting for server hello...");
+            ImGui::TextUnformatted(status.c_str());
             ImGui::Spacing();
-            if (ImGui::Button("Cancel", ImVec2(-1.0f, 36.0f))) {
+            if (ImGui::Button(failed ? "Back" : "Cancel", ImVec2(-1.0f, 36.0f))) {
                 action = ConnectingAction::Cancel;
             }
         }
@@ -838,14 +845,9 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
                          glfwGetKey(window_, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
 
     if (altHeld && mouseCaptured_) {
-        // Release mouse
-        mouseCaptured_ = false;
-        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        releaseMouse();
     } else if (!altHeld && !mouseCaptured_) {
-        // Recapture mouse
-        mouseCaptured_ = true;
-        glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        hasMousePosition_ = false;  // prevent camera jump on recapture
+        captureMouse();
     }
 
     // While mouse is released, only handle Escape and function keys
@@ -1019,28 +1021,7 @@ void RenderContext::render(const ClientWorld& world) {
     lastRenderTime_ = now;
     hasLastRenderTime_ = true;
 
-    int windowWidth = 0;
-    int windowHeight = 0;
-    int framebufferWidth = 0;
-    int framebufferHeight = 0;
-    glfwGetWindowSize(window_, &windowWidth, &windowHeight);
-    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
-
-    windowWidth = std::max(windowWidth, 1);
-    windowHeight = std::max(windowHeight, 1);
-    framebufferWidth = std::max(framebufferWidth, 1);
-    framebufferHeight = std::max(framebufferHeight, 1);
-
-    if (framebufferWidth != framebufferWidth_ || framebufferHeight != framebufferHeight_) {
-        bgfx::reset(static_cast<uint32_t>(framebufferWidth), static_cast<uint32_t>(framebufferHeight), bgfxResetFlags());
-    }
-
-    framebufferWidth_ = framebufferWidth;
-    framebufferHeight_ = framebufferHeight;
-    windowWidth_ = windowWidth;
-    windowHeight_ = windowHeight;
-    framebufferScaleX_ = static_cast<float>(framebufferWidth) / static_cast<float>(windowWidth);
-    framebufferScaleY_ = static_cast<float>(framebufferHeight) / static_cast<float>(windowHeight);
+    updateDisplayMetrics();
 
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x87bdf2ff, 1.0f, 0);
@@ -1097,7 +1078,7 @@ void RenderContext::render(const ClientWorld& world) {
 }
 
 void RenderContext::captureMouse() {
-    if (!window_) {
+    if (!window_ || mouseCaptured_) {
         return;
     }
     mouseCaptured_ = true;
@@ -1106,7 +1087,7 @@ void RenderContext::captureMouse() {
 }
 
 void RenderContext::releaseMouse() {
-    if (!window_) {
+    if (!window_ || !mouseCaptured_) {
         return;
     }
     mouseCaptured_ = false;
@@ -1114,10 +1095,9 @@ void RenderContext::releaseMouse() {
     hasMousePosition_ = false;
 }
 
-void RenderContext::closeInGameMenu() {
+void RenderContext::resetInGameMenu() {
     inGameMenuOpen_ = false;
     pendingInGameMenuAction_ = InGameMenuAction::None;
-    captureMouse();
 }
 
 RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
@@ -1133,6 +1113,41 @@ void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
     for (const glm::ivec3& off : kNeighborOffsets) {
         chunkMeshCache_.markDirty(chunkPos + off);
     }
+}
+
+void RenderContext::updateCoreChunkMeshes(const ClientWorld& world, const std::vector<glm::ivec3>& coreChunks) {
+    MW_PROFILE_SCOPE("Client.Render.BuildCoreChunkMeshes");
+
+    const VoxelWorld& voxelWorld = world.getVoxelWorld();
+    const auto loadedChunks = voxelWorld.getLoadedChunks();
+    chunkMeshCache_.evictStale(loadedChunks);
+
+    std::unordered_map<glm::ivec3, size_t> currentCounts;
+    currentCounts.reserve(loadedChunks.size());
+    for (const glm::ivec3& chunkPos : loadedChunks) {
+        currentCounts[chunkPos] = voxelWorld.getChunk(chunkPos).getBlockCount();
+    }
+
+    int meshRebuilds = 0;
+    for (const glm::ivec3& chunkPos : coreChunks) {
+        auto countIt = currentCounts.find(chunkPos);
+        if (countIt == currentCounts.end() || !chunkMeshCache_.needsRebuild(chunkPos, countIt->second, currentCounts)) {
+            continue;
+        }
+        if (meshRebuilds >= kMaxChunkMeshRebuildsPerFrame) {
+            break;
+        }
+
+        ChunkMeshCache::Entry entry;
+        buildChunkMesh(world, chunkPos, entry);
+        chunkMeshCache_.put(chunkPos, countIt->second, std::move(entry));
+        ++meshRebuilds;
+        MW_PROFILE_COUNTER("Client.Render.MeshRebuilds", 1);
+    }
+}
+
+bool RenderContext::isChunkMeshReady(glm::ivec3 chunkPos) const {
+    return chunkMeshCache_.isReady(chunkPos);
 }
 
 bool RenderContext::loadShaders() {
@@ -1653,9 +1668,12 @@ void RenderContext::renderInGameMenu() {
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("Game Menu", nullptr, flags)) {
         if (ImGui::Button("Resume", ImVec2(-1.0f, 36.0f))) {
-            closeInGameMenu();
+            inGameMenuOpen_ = false;
+            pendingInGameMenuAction_ = InGameMenuAction::None;
+            captureMouse();
         }
         if (ImGui::Button("Exit to Start", ImVec2(-1.0f, 36.0f))) {
+            inGameMenuOpen_ = false;
             pendingInGameMenuAction_ = InGameMenuAction::ReturnToStart;
         }
     }

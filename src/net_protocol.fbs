@@ -21,6 +21,9 @@ table ClientHello {
 table ClientDisconnect {
 }
 
+table ClientReady {
+}
+
 table ServerHello {
   session_id:uint;
   actor_name:string;
@@ -28,6 +31,7 @@ table ServerHello {
   yaw:float;
   pitch:float;
   player_mode:ubyte = 0;
+  core_chunks:[IVec3];
 }
 
 table ClientInput {
@@ -64,6 +68,7 @@ table Snapshot {
 union NetMessagePayload {
   ClientHello,
   ClientDisconnect,
+  ClientReady,
   ServerHello,
   ClientInput,
   Snapshot

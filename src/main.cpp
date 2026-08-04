@@ -24,7 +24,7 @@ enum class RunMode {
 
 enum class ClientState {
     StartMenu,
-    Connecting,
+    ConnectionScreen,
     InGame,
 };
 
@@ -90,8 +90,7 @@ int runServer(const std::string& dir) {
     }
 }
 
-void stopClientSession(std::unique_ptr<GameClient>& client, std::unique_ptr<GameServer>& localServer,
-                       std::thread& serverThread, std::atomic<bool>& stopServer) {
+void stopClientSession(std::unique_ptr<GameClient>& client, std::unique_ptr<GameServer>& localServer, std::thread& serverThread, std::atomic<bool>& stopServer) {
     if (client) {
         client->disconnect();
         client.reset();
@@ -111,6 +110,8 @@ void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
     const auto kTickInterval = std::chrono::microseconds(1'000'000 / AppConfig::instance().ticksPerSecond);
     auto nextTick = std::chrono::steady_clock::now();
     auto previousTime = nextTick;
+
+    logging::info("Local server started");
     while (!stopServer) {
         std::this_thread::sleep_until(nextTick);
         nextTick += kTickInterval;
@@ -172,19 +173,18 @@ int runClient(const std::string& dir) {
                         connectingPort = static_cast<uint16_t>(std::clamp(port, 1, 65535));
                     }
                     client = std::make_unique<GameClient>(renderContext.get(), connectingAddress, connectingPort);
-                    renderContext->captureMouse();
-                    state = ClientState::Connecting;
+                    state = ClientState::ConnectionScreen;
                 }
                 break;
             }
-            case ClientState::Connecting:
+            case ClientState::ConnectionScreen:
                 if (client) {
                     client->update(elapsed.count());
                     if (client->isSessionReady()) {
-                        renderContext->closeInGameMenu();
+                        renderContext->captureMouse();
                         state = ClientState::InGame;
                     } else {
-                        const RenderContext::ConnectingAction action = renderContext->renderConnecting(connectingAddress, connectingPort);
+                        const RenderContext::ConnectingAction action = renderContext->renderConnecting(connectingAddress, connectingPort, client->statusText(), client->hasFailed());
                         if (action == RenderContext::ConnectingAction::Cancel) {
                             stopClientSession(client, localServer, serverThread, stopServer);
                             stopServer = false;
@@ -197,6 +197,12 @@ int runClient(const std::string& dir) {
             case ClientState::InGame:
                 if (client) {
                     client->update(elapsed.count());
+                    if (client->hasFailed()) {
+                        renderContext->resetInGameMenu();
+                        renderContext->releaseMouse();
+                        state = ClientState::ConnectionScreen;
+                        break;
+                    }
                 }
                 if (renderContext->consumeInGameMenuAction() == RenderContext::InGameMenuAction::ReturnToStart) {
                     stopClientSession(client, localServer, serverThread, stopServer);

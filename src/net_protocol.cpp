@@ -98,10 +98,28 @@ std::vector<uint8_t> serializeClientDisconnect() {
     return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
 }
 
+std::vector<uint8_t> serializeClientReady() {
+    flatbuffers::FlatBufferBuilder builder;
+    const auto ready = mineworld::net::CreateClientReady(builder);
+    const auto msg = mineworld::net::CreateNetMessage(
+        builder,
+        mineworld::net::NetMessagePayload::ClientReady,
+        ready.Union());
+
+    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+}
+
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
     flatbuffers::FlatBufferBuilder builder;
     const auto nameOffset = builder.CreateString(hello.actorName);
     const mineworld::net::Vec3 position = toFbVec3(hello.position);
+    std::vector<mineworld::net::IVec3> coreChunks;
+    coreChunks.reserve(hello.coreChunks.size());
+    for (const glm::ivec3& chunkPos : hello.coreChunks) {
+        coreChunks.push_back(toFbIVec3(chunkPos));
+    }
+    const auto coreChunksOffset = builder.CreateVectorOfStructs(coreChunks);
     const auto helloOffset = mineworld::net::CreateServerHello(
         builder,
         hello.sessionId,
@@ -109,7 +127,8 @@ std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
         &position,
         hello.yaw,
         hello.pitch,
-        toWirePlayerMode(hello.playerMode));
+        toWirePlayerMode(hello.playerMode),
+        coreChunksOffset);
     const auto msg = mineworld::net::CreateNetMessage(
         builder,
         mineworld::net::NetMessagePayload::ServerHello,
@@ -136,6 +155,16 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
     outHello.yaw = fbHello->yaw();
     outHello.pitch = fbHello->pitch();
     outHello.playerMode = fromWirePlayerMode(fbHello->player_mode());
+    outHello.coreChunks.clear();
+    if (const auto* coreChunks = fbHello->core_chunks()) {
+        if (coreChunks->size() > kMaxChunks) {
+            return false;
+        }
+        outHello.coreChunks.reserve(coreChunks->size());
+        for (const mineworld::net::IVec3* chunkPos : *coreChunks) {
+            outHello.coreChunks.push_back(fromFbIVec3(chunkPos));
+        }
+    }
     return true;
 }
 

@@ -10,6 +10,12 @@
 #include "profiler.h"
 #include "render_context.h"
 
+namespace {
+
+constexpr float kConnectionTimeoutSeconds = 10.0f;
+
+}
+
 GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
     : renderContext_(renderContext) {
     auto channel = std::make_unique<KcpChannel>(ioContext_, 0);
@@ -34,9 +40,29 @@ void GameClient::registerSystem(std::unique_ptr<common_system::BaseSystem<Client
 void GameClient::update(float deltaTime) {
     MW_PROFILE_SCOPE("Client.Update");
 
-    pumpNetwork();
+    if (state_ == State::Failed || state_ == State::Disconnecting) {
+        return;
+    }
 
-    if (!sessionReady_) {
+    secondsSincePacket_ += deltaTime;
+    pumpNetwork();
+    if (secondsSincePacket_ >= kConnectionTimeoutSeconds) {
+        fail("Connection timed out");
+        return;
+    }
+
+    if (state_ != State::Loading && state_ != State::Running) {
+        return;
+    }
+
+    if (state_ == State::Loading) {
+        if (!areCoreChunksLoaded()) {
+            replaySnapshots();
+        }
+        if (renderContext_) {
+            renderContext_->updateCoreChunkMeshes(world_, coreChunks_);
+        }
+        tryEnterRunning();
         return;
     }
 
@@ -46,6 +72,24 @@ void GameClient::update(float deltaTime) {
         system->update(world_, deltaTime);
     }
     sendInputToServer();
+}
+
+std::string GameClient::statusText() const {
+    switch (state_) {
+        case State::Connecting:
+            return "Connecting transport...";
+        case State::Awaiting:
+            return "Waiting for ServerHello...";
+        case State::Loading:
+            return "Loading core chunks...";
+        case State::Running:
+            return "Running";
+        case State::Disconnecting:
+            return "Disconnecting...";
+        case State::Failed:
+            return failureReason_.empty() ? "Connection failed" : failureReason_;
+    }
+    return "Unknown state";
 }
 
 void GameClient::pumpNetwork() {
@@ -61,33 +105,40 @@ void GameClient::pumpNetwork() {
     if (helloPending_ && kcpChannel && kcpChannel->isReady()) {
         channel_->sendReliable(serializeClientHello());
         helloPending_ = false;
+        state_ = State::Awaiting;
+        secondsSincePacket_ = 0.0f;
     }
 
     std::vector<uint8_t> packet;
     while (channel_->popPacket(packet)) {
-        MW_PROFILE_COUNTER("Client.PacketsIn", 1);
-        MW_PROFILE_COUNTER("Client.BytesIn", static_cast<int64_t>(packet.size()));
+        secondsSincePacket_ = 0.0f;
+        onServerPacket(packet);
+    }
+}
 
-        using Payload = mineworld::net::NetMessagePayload;
-        switch (getPacketType(packet)) {
-            case Payload::ServerHello: {
-                NetServerHello hello;
-                if (deserializeServerHello(packet, hello)) {
-                    handleServerHello(hello);
-                }
-                break;
+void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
+    MW_PROFILE_COUNTER("Client.PacketsIn", 1);
+    MW_PROFILE_COUNTER("Client.BytesIn", static_cast<int64_t>(packet.size()));
+
+    using Payload = mineworld::net::NetMessagePayload;
+    switch (getPacketType(packet)) {
+        case Payload::ServerHello: {
+            NetServerHello hello;
+            if (deserializeServerHello(packet, hello)) {
+                handleServerHello(hello);
             }
-            case Payload::Snapshot: {
-                NetSnapshot snapshot;
-                if (deserializeSnapshot(packet, snapshot)) {
-                    snapshotBuffer_.push_back(std::move(snapshot));
-                }
-                break;
-            }
-            default:
-                logging::warn("Ignored unknown packet");
-                break;
+            break;
         }
+        case Payload::Snapshot: {
+            NetSnapshot snapshot;
+            if (deserializeSnapshot(packet, snapshot)) {
+                snapshotBuffer_.push_back(std::move(snapshot));
+            }
+            break;
+        }
+        default:
+            logging::warn("Ignored unknown server packet");
+            break;
     }
 }
 
@@ -99,38 +150,83 @@ void GameClient::disconnect() {
     channel_->sendReliable(serializeClientDisconnect());
     channel_->flush();
     disconnectSent_ = true;
+    state_ = State::Disconnecting;
+    logging::info("Requested disconnect from server");
 }
 
 void GameClient::handleServerHello(const NetServerHello& hello) {
-    if (sessionReady_) {
-        logging::warn("Received duplicate ServerHello, ignoring");
+    if (state_ != State::Awaiting) {
+        logging::warn("Ignored ServerHello while client state is {}", static_cast<int>(state_));
+        return;
+    }
+    if (hello.coreChunks.empty()) {
+        fail("ServerHello did not include core chunks");
         return;
     }
 
     localSessionId_ = hello.sessionId;
+    coreChunks_ = hello.coreChunks;
     logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
 
     entt::entity entity = world_.createLocalPlayer(hello.actorName, hello.sessionId, hello.position, hello.playerMode);
-    if (entity != entt::null) {
-        auto& registry = world_.getActorWorld().registry();
-        auto& transform = registry.get<TransformComponent>(entity);
-        transform.rotation.y = hello.yaw;
-        transform.rotation.x = hello.pitch;
+    auto& registry = world_.getActorWorld().registry();
+    if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
+        fail("Failed to create local player");
+        return;
+    }
+    auto& transform = registry.get<TransformComponent>(entity);
+    transform.rotation.y = hello.yaw;
+    transform.rotation.x = hello.pitch;
+
+    state_ = State::Loading;
+}
+
+void GameClient::tryEnterRunning() {
+    if (!areCoreChunksLoaded()) {
+        return;
     }
 
-    auto inputSystemPtr = std::make_unique<InputSystem>(renderContext_, localSessionId_);
-    inputSystem_ = inputSystemPtr.get();
-    registerSystem(std::move(inputSystemPtr));
+    for (const glm::ivec3& chunkPos : coreChunks_) {
+        if (renderContext_ && !renderContext_->isChunkMeshReady(chunkPos)) {
+            return;
+        }
+    }
+
+    channel_->sendReliable(serializeClientReady());
+    channel_->flush();
+
+    registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
     registerSystem(std::make_unique<RenderSystem>(renderContext_, localSessionId_));
 
-    sessionReady_ = true;
+    coreChunks_.clear();
+    state_ = State::Running;
+    logging::info("World is ready");
+}
+
+bool GameClient::areCoreChunksLoaded() const {
+    for (const glm::ivec3& chunkPos : coreChunks_) {
+        if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void GameClient::fail(std::string reason) {
+    if (state_ == State::Failed) {
+        return;
+    }
+    failureReason_ = std::move(reason);
+    state_ = State::Failed;
+    if (localSessionId_ != 0) {
+        logging::warn("Client disconnected from server (session {}): {}", localSessionId_, failureReason_);
+    } else {
+        logging::warn("Client connection failed: {}", failureReason_);
+    }
 }
 
 void GameClient::sendInputToServer() {
-    if (!channel_ || helloPending_ || !sessionReady_) {
-        return;
-    }
-    if (!inputSystem_ || !inputSystem_->hasPendingInput()) {
+    if (!channel_ || helloPending_ || state_ != State::Running) {
         return;
     }
 
@@ -155,9 +251,6 @@ void GameClient::sendInputToServer() {
         channel_->sendReliable(serializeClientInput(input));
         break;
     }
-
-    inputSystem_->clearPendingInput();
-    inputSystem_->clearInputChanged();
 }
 
 void GameClient::replaySnapshots() {

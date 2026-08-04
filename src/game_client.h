@@ -5,6 +5,7 @@
 #include <deque>
 #include <entt/entt.hpp>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "client_world.h"
@@ -16,10 +17,18 @@ template <typename World>
 class BaseSystem;
 }
 class RenderContext;
-class InputSystem;
 
 class GameClient {
 public:
+    enum class State {
+        Connecting,
+        Awaiting,
+        Loading,
+        Running,
+        Disconnecting,
+        Failed,
+    };
+
     GameClient(RenderContext* renderContext, std::string address, uint16_t port);
     ~GameClient();
 
@@ -27,7 +36,10 @@ public:
     const ClientWorld& world() const { return world_; }
 
     uint32_t localSessionId() const { return localSessionId_; }
-    bool isSessionReady() const { return sessionReady_; }
+    bool isSessionReady() const { return state_ == State::Running; }
+    bool hasFailed() const { return state_ == State::Failed; }
+    State state() const { return state_; }
+    std::string statusText() const;
 
     void registerSystem(std::unique_ptr<common_system::BaseSystem<ClientWorld>> system);
     void update(float deltaTime);
@@ -35,7 +47,11 @@ public:
 
 private:
     void pumpNetwork();
+    void onServerPacket(const std::vector<uint8_t>& packet);
     void handleServerHello(const NetServerHello& hello);
+    bool areCoreChunksLoaded() const;
+    void tryEnterRunning();
+    void fail(std::string reason);
     void sendInputToServer();
     void replaySnapshots();
     void applySnapshot(const NetSnapshot& snapshot);
@@ -44,9 +60,11 @@ private:
 
     ClientWorld world_;
     std::vector<std::unique_ptr<common_system::BaseSystem<ClientWorld>>> systems_;
-    InputSystem* inputSystem_ = nullptr;
     uint32_t localSessionId_ = 0;
-    bool sessionReady_ = false;
+    State state_ = State::Connecting;
+    std::string failureReason_;
+    std::vector<glm::ivec3> coreChunks_;
+    float secondsSincePacket_ = 0.0f;
 
     asio::io_context ioContext_;
     std::unique_ptr<IPacketChannel> channel_;

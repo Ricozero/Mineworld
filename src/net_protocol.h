@@ -50,6 +50,7 @@ struct NetServerHello {
     float yaw = 0.0f;
     float pitch = 0.0f;
     PlayerMode playerMode = PlayerMode::Survival;
+    std::vector<glm::ivec3> coreChunks;
 };
 
 mineworld::net::NetMessagePayload getPacketType(std::span<const uint8_t> bytes);
@@ -57,6 +58,8 @@ mineworld::net::NetMessagePayload getPacketType(std::span<const uint8_t> bytes);
 std::vector<uint8_t> serializeClientHello();
 
 std::vector<uint8_t> serializeClientDisconnect();
+
+std::vector<uint8_t> serializeClientReady();
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello);
 bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outHello);

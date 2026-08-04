@@ -44,6 +44,7 @@ private:
         float snapshotTimer = 0.0f;
         bool initialSnapshotSent = false;
         bool helloReceived = false;
+        bool ready = false;
         uint32_t lastProcessedInputSequence = 0;
         std::string actorName;
 
@@ -67,7 +68,8 @@ private:
     void onSessionConnect(uint32_t sessionId);
     void onSessionDisconnect(uint32_t sessionId);
     bool onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
-    void onClientHello(uint32_t sessionId);
+    bool onClientHello(uint32_t sessionId);
+    void onClientReady(uint32_t sessionId);
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
 
     ServerWorld world_;
@@ -78,5 +80,5 @@ private:
     std::unique_ptr<IPacketServer> server_;
     std::unordered_map<uint32_t, Session> sessions_;
     std::unordered_map<glm::ivec3, float> chunkUnloadTimers_;
-    uint32_t nextPlayerIndex_ = 0;
+    uint32_t nextPlayerIndex_ = 1;
 };
