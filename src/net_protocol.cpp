@@ -12,10 +12,19 @@ namespace {
 constexpr size_t kMaxActors = 2048;
 constexpr size_t kMaxChunks = 65536;
 
-flatbuffers::DetachedBuffer finish(flatbuffers::FlatBufferBuilder& builder,
-                                   flatbuffers::Offset<mineworld::net::NetMessage> message) {
+template <typename Payload>
+void finishMessage(flatbuffers::FlatBufferBuilder& builder, flatbuffers::Offset<Payload> payload) {
+    constexpr auto payloadType = mineworld::net::NetMessagePayloadTraits<Payload>::enum_value;
+    static_assert(payloadType != mineworld::net::NetMessagePayload::NONE);
+    const auto message = mineworld::net::CreateNetMessage(builder, payloadType, payload.Union());
     mineworld::net::FinishNetMessageBuffer(builder, message);
-    return builder.Release();
+}
+
+template <typename Payload>
+std::vector<uint8_t> finishDetachedMessage(flatbuffers::FlatBufferBuilder& builder, flatbuffers::Offset<Payload> payload) {
+    finishMessage(builder, payload);
+    flatbuffers::DetachedBuffer buffer = builder.Release();
+    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
 }
 
 const mineworld::net::NetMessage* tryGetMessage(std::span<const uint8_t> bytes) {
@@ -77,37 +86,19 @@ mineworld::net::NetMessagePayload getPacketType(std::span<const uint8_t> bytes) 
 std::vector<uint8_t> serializeClientHello() {
     flatbuffers::FlatBufferBuilder builder;
     const auto hello = mineworld::net::CreateClientHello(builder);
-    const auto msg = mineworld::net::CreateNetMessage(
-        builder,
-        mineworld::net::NetMessagePayload::ClientHello,
-        hello.Union());
-
-    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
-    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+    return finishDetachedMessage(builder, hello);
 }
 
 std::vector<uint8_t> serializeClientDisconnect() {
     flatbuffers::FlatBufferBuilder builder;
     const auto disconnect = mineworld::net::CreateClientDisconnect(builder);
-    const auto msg = mineworld::net::CreateNetMessage(
-        builder,
-        mineworld::net::NetMessagePayload::ClientDisconnect,
-        disconnect.Union());
-
-    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
-    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+    return finishDetachedMessage(builder, disconnect);
 }
 
 std::vector<uint8_t> serializeClientReady() {
     flatbuffers::FlatBufferBuilder builder;
     const auto ready = mineworld::net::CreateClientReady(builder);
-    const auto msg = mineworld::net::CreateNetMessage(
-        builder,
-        mineworld::net::NetMessagePayload::ClientReady,
-        ready.Union());
-
-    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
-    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+    return finishDetachedMessage(builder, ready);
 }
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
@@ -129,13 +120,7 @@ std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
         hello.pitch,
         toWirePlayerMode(hello.playerMode),
         coreChunksOffset);
-    const auto msg = mineworld::net::CreateNetMessage(
-        builder,
-        mineworld::net::NetMessagePayload::ServerHello,
-        helloOffset.Union());
-
-    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
-    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+    return finishDetachedMessage(builder, helloOffset);
 }
 
 bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outHello) {
@@ -180,13 +165,7 @@ std::vector<uint8_t> serializeClientInput(const NetClientInput& input) {
         input.pitch,
         toWirePlayerMode(input.playerMode),
         input.sequence);
-    const auto msg = mineworld::net::CreateNetMessage(
-        builder,
-        mineworld::net::NetMessagePayload::ClientInput,
-        inputOffset.Union());
-
-    flatbuffers::DetachedBuffer buffer = finish(builder, msg);
-    return std::vector<uint8_t>(buffer.data(), buffer.data() + buffer.size());
+    return finishDetachedMessage(builder, inputOffset);
 }
 
 bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outInput) {
@@ -258,12 +237,7 @@ std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers:
         actorsVec,
         chunksVec);
 
-    const auto msg = mineworld::net::CreateNetMessage(
-        builder,
-        mineworld::net::NetMessagePayload::Snapshot,
-        snapshotOffset.Union());
-
-    mineworld::net::FinishNetMessageBuffer(builder, msg);
+    finishMessage(builder, snapshotOffset);
     const uint8_t* bufPtr = builder.GetBufferPointer();
     const size_t bufSize = builder.GetSize();
     return std::vector<uint8_t>(bufPtr, bufPtr + bufSize);

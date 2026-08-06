@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "net_channel.h"
+#include "net_interface.h"
 #include "net_protocol.h"
 #include "server_world.h"
 
@@ -77,7 +77,7 @@ private:
 
     asio::io_context ioContext_;
 
-    std::unique_ptr<IPacketServer> server_;
+    std::unique_ptr<INetServer> netServer_;
     std::unordered_map<uint32_t, Session> sessions_;
     std::unordered_map<glm::ivec3, float> chunkUnloadTimers_;
     uint32_t nextPlayerIndex_ = 1;

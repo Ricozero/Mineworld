@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "client_world.h"
-#include "net_channel.h"
+#include "net_interface.h"
 #include "net_protocol.h"
 
 namespace common_system {
@@ -67,7 +67,7 @@ private:
     float secondsSincePacket_ = 0.0f;
 
     asio::io_context ioContext_;
-    std::unique_ptr<IPacketChannel> channel_;
+    std::unique_ptr<INetClient> netClient_;
     std::deque<NetSnapshot> snapshotBuffer_;
     uint32_t lastAppliedSnapshot_ = 0;
     RenderContext* renderContext_ = nullptr;

@@ -110,6 +110,8 @@ Loading 阶段优先处理核心区块，继续泵网络和渲染，但不运行
 - Snapshot 和输入都可能停止发送时，增加 KeepAlive
 - 区块压缩，palette + bit packing，RLE，zstd/lz4
 - 区块共享编码缓存，由容量上限和 LRU 策略回收
+- 考虑公网：三次握手，NAT
+- 增加服务器错误，当前handleHandshake和onClientHello等地方出错会等待超时
 
 ### 渲染
 

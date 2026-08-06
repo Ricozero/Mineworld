@@ -61,7 +61,7 @@ GameServer::GameServer() {
     kcpServer->setOnDisconnect([this](uint32_t sessionId) {
         onSessionDisconnect(sessionId);
     });
-    server_ = std::move(kcpServer);
+    netServer_ = std::move(kcpServer);
 
     registerSystem(std::make_unique<PhysicsSystem>());
 }
@@ -100,7 +100,7 @@ void GameServer::update(float deltaTime) {
         payload = serializeSnapshot(snapshot, session.snapshotBuilder);
         MW_PROFILE_COUNTER("Server.SnapshotsOut", 1);
         MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
-        server_->sendTo(sessionId, payload);
+        netServer_->sendTo(sessionId, payload);
     }
 }
 
@@ -381,11 +381,11 @@ NetChunkState GameServer::buildLoadedChunkState(glm::ivec3 chunkPos) {
 void GameServer::pumpNetwork() {
     MW_PROFILE_SCOPE("Server.PumpNetwork");
 
-    if (!server_) {
+    if (!netServer_) {
         return;
     }
 
-    server_->pump();
+    netServer_->pump();
 }
 
 void GameServer::onSessionConnect(uint32_t sessionId) {
@@ -479,7 +479,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
         loadChunk(chunkPos);
         hello.coreChunks.push_back(chunkPos);
     });
-    server_->sendTo(sessionId, serializeServerHello(hello));
+    netServer_->sendTo(sessionId, serializeServerHello(hello));
 
     logging::info("Client hello from session {}, assigned actor '{}'", sessionId, actorName);
     return true;

@@ -18,17 +18,16 @@ constexpr float kConnectionTimeoutSeconds = 10.0f;
 
 GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
     : renderContext_(renderContext) {
-    auto channel = std::make_unique<KcpChannel>(ioContext_, 0);
+    auto netClient = std::make_unique<KcpClient>(ioContext_, 0);
     asio::error_code addressError;
     asio::ip::address resolvedAddress = asio::ip::make_address(address, addressError);
     if (addressError) {
         logging::warn("Invalid server address '{}': {}", address, addressError.message());
         resolvedAddress = asio::ip::make_address("127.0.0.1");
     }
-    const auto serverEndpoint = IPacketChannel::Endpoint(resolvedAddress, port);
-    channel->setRemote(serverEndpoint);
-    channel->startHandshake();
-    channel_ = std::move(channel);
+    const auto serverEndpoint = INetClient::Endpoint(resolvedAddress, port);
+    netClient->connect(serverEndpoint);
+    netClient_ = std::move(netClient);
 }
 
 GameClient::~GameClient() = default;
@@ -95,22 +94,21 @@ std::string GameClient::statusText() const {
 void GameClient::pumpNetwork() {
     MW_PROFILE_SCOPE("Client.PumpNetwork");
 
-    if (!channel_) {
+    if (!netClient_) {
         return;
     }
-    channel_->pump();
+    netClient_->pump();
 
     // Send ClientHello once handshake is complete
-    auto* kcpChannel = dynamic_cast<KcpChannel*>(channel_.get());
-    if (helloPending_ && kcpChannel && kcpChannel->isReady()) {
-        channel_->sendReliable(serializeClientHello());
+    if (helloPending_ && netClient_->isReady()) {
+        netClient_->sendReliable(serializeClientHello());
         helloPending_ = false;
         state_ = State::Awaiting;
         secondsSincePacket_ = 0.0f;
     }
 
     std::vector<uint8_t> packet;
-    while (channel_->popPacket(packet)) {
+    while (netClient_->popPacket(packet)) {
         secondsSincePacket_ = 0.0f;
         onServerPacket(packet);
     }
@@ -143,12 +141,12 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
 }
 
 void GameClient::disconnect() {
-    if (disconnectSent_ || !channel_ || helloPending_) {
+    if (disconnectSent_ || !netClient_ || helloPending_) {
         return;
     }
 
-    channel_->sendReliable(serializeClientDisconnect());
-    channel_->flush();
+    netClient_->sendReliable(serializeClientDisconnect());
+    netClient_->flush();
     disconnectSent_ = true;
     state_ = State::Disconnecting;
     logging::info("Requested disconnect from server");
@@ -192,8 +190,8 @@ void GameClient::tryEnterRunning() {
         }
     }
 
-    channel_->sendReliable(serializeClientReady());
-    channel_->flush();
+    netClient_->sendReliable(serializeClientReady());
+    netClient_->flush();
 
     registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
     registerSystem(std::make_unique<RenderSystem>(renderContext_, localSessionId_));
@@ -226,7 +224,7 @@ void GameClient::fail(std::string reason) {
 }
 
 void GameClient::sendInputToServer() {
-    if (!channel_ || helloPending_ || state_ != State::Running) {
+    if (!netClient_ || helloPending_ || state_ != State::Running) {
         return;
     }
 
@@ -248,7 +246,7 @@ void GameClient::sendInputToServer() {
         input.pitch = transform.rotation.x;
         input.playerMode = player.mode;
         input.sequence = nextInputSequence_++;
-        channel_->sendReliable(serializeClientInput(input));
+        netClient_->sendReliable(serializeClientInput(input));
         break;
     }
 }

@@ -4,53 +4,49 @@
 
 #include <asio.hpp>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
-#include "net_channel.h"
+#include "net_interface.h"
 
-class KcpChannel : public IPacketChannel {
+class KcpClient final : public INetClient {
 public:
     using Udp = asio::ip::udp;
 
-    KcpChannel(asio::io_context& ioContext, uint16_t localPort);
-    ~KcpChannel() override;
+    KcpClient(asio::io_context& ioContext, uint16_t localPort);
+    ~KcpClient() override;
 
-    void setRemote(const Endpoint& endpoint) override;
-    bool hasRemote() const override { return remote_.has_value(); }
-
+    void connect(const Endpoint& endpoint) override;
+    bool isReady() const override { return kcp_ != nullptr; }
     void sendReliable(const std::vector<uint8_t>& payload) override;
     void flush() override;
     void pump() override;
     bool popPacket(std::vector<uint8_t>& outPacket) override;
 
-    /// Initiate handshake with remote server
-    void startHandshake();
-    /// Returns true once the handshake is complete and KCP is ready
-    bool isReady() const { return kcp_ != nullptr; }
-
 private:
+    void reset();
     void initKcp(uint32_t conv);
-    void sendHandshakeRequest();
+    void sendHandshakeRequest(uint32_t now);
 
     static int kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user);
     int sendRaw(const char* data, size_t size);
     uint32_t nowMs() const;
 
-    asio::io_context& ioContext_;
     Udp::socket socket_;
     ikcpcb* kcp_ = nullptr;
 
     std::optional<Endpoint> remote_;
+    std::deque<std::vector<uint8_t>> recvPackets_;
     std::vector<uint8_t> recvBuffer_;
-    std::vector<std::vector<uint8_t>> recvPackets_;
-    bool handshakeComplete_ = false;
+    uint64_t handshakeNonce_ = 0;
+    uint32_t lastHandshakeSendMs_ = 0;
+    bool handshakeStarted_ = false;
+    bool versionMismatchLogged_ = false;
 };
 
-// A KCP-based server that manages multiple sessions over a single UDP port.
-// Each session gets a unique conv (= sessionId) for identification.
-class KcpServer : public IPacketServer {
+class KcpServer final : public INetServer {
 public:
     using Udp = asio::ip::udp;
     using Endpoint = asio::ip::udp::endpoint;
@@ -67,39 +63,52 @@ public:
     std::vector<uint32_t> getSessionIds() const override;
 
 private:
-    struct SessionState {
-        uint32_t sessionId = 0;
-        Endpoint remote;
-        ikcpcb* kcp = nullptr;
-        std::vector<std::vector<uint8_t>> recvPackets;
-        uint32_t lastReceiveMs = 0;
-        bool pendingDisconnect = false;
-    };
-
-    SessionState* findSessionByConv(uint32_t conv);
-    SessionState* findSessionByEndpoint(const Endpoint& endpoint);
-    SessionState& createSession(const Endpoint& endpoint);
-    void processReceivedPackets(SessionState& session);
-    void handleHandshake(const Endpoint& sender);
-    void destroySession(uint32_t sessionId, bool notify);
-    void removeTimedOutSessions(uint32_t now);
-
-    static int kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user);
-    int sendRawTo(const char* data, size_t size, const Endpoint& endpoint);
-    uint32_t nowMs() const;
-
     struct KcpOutputContext {
         KcpServer* server = nullptr;
         uint32_t sessionId = 0;
     };
 
-    asio::io_context& ioContext_;
+    struct SessionState {
+        uint32_t sessionId = 0;
+        Endpoint remote;
+        uint64_t handshakeNonce = 0;
+        ikcpcb* kcp = nullptr;
+        uint32_t lastReceiveMs = 0;
+        bool pendingDisconnect = false;
+        KcpOutputContext outputContext;
+    };
+
+    struct HandshakeRateState {
+        uint32_t windowStartMs = 0;
+        uint32_t attempts = 0;
+        uint32_t lastSeenMs = 0;
+    };
+
+    std::optional<uint32_t> allocateSessionId();
+    SessionState* findSessionByConv(uint32_t conv);
+    SessionState* findSessionByEndpoint(const Endpoint& endpoint);
+    SessionState* createSession(const Endpoint& endpoint, uint64_t handshakeNonce);
+    void processReceivedPackets(SessionState& session);
+    void handleHandshake(const Endpoint& sender, uint64_t handshakeNonce, uint32_t now);
+    void sendHandshakeResponse(const SessionState& session);
+    void destroySession(uint32_t sessionId, bool notify);
+    void removeTimedOutSessions(uint32_t now);
+    bool allowHandshake(const Endpoint& sender, uint32_t now);
+    void cleanupHandshakeRateLimits(uint32_t now);
+    void evictStalestHandshakeRateState();
+
+    static int kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user);
+    int sendRawTo(const char* data, size_t size, const Endpoint& endpoint);
+    uint32_t nowMs() const;
+
     Udp::socket socket_;
     std::vector<uint8_t> recvBuffer_;
 
     uint32_t nextSessionId_ = 1;
     std::unordered_map<uint32_t, SessionState> sessions_;
-    std::unordered_map<uint32_t, KcpOutputContext> outputContexts_;
+    std::unordered_map<Endpoint, uint32_t> endpointSessions_;
+    std::unordered_map<asio::ip::address, HandshakeRateState> handshakeRateStates_;
+    uint32_t lastRateLimitCleanupMs_ = 0;
 
     SessionConnectCallback onConnect_;
     SessionPacketCallback onPacket_;

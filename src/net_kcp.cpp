@@ -1,82 +1,148 @@
 #include "net_kcp.h"
 
+#include <array>
 #include <chrono>
-#include <cstring>
+#include <limits>
+#include <random>
 
-#include "helper.h"
 #include "log.h"
 
 namespace {
 
 constexpr int kRecvMtu = 1400;
 constexpr uint32_t kMagic = 0x4B435048;
-constexpr size_t kRequestSize = 4;
-constexpr size_t kResponseSize = 8;
+constexpr uint32_t kProtocolVersion = 1;
+constexpr size_t kRequestSize = 16;
+constexpr size_t kResponseSize = 20;
+constexpr uint32_t kHandshakeRetryMs = 500;
 constexpr uint32_t kSessionTimeoutMs = 10'000;
+constexpr uint32_t kSessionReplaceGraceMs = 3'000;
+constexpr size_t kMaxSessions = 1024;
+constexpr uint32_t kHandshakeRateWindowMs = 1000;
+constexpr uint32_t kMaxHandshakesPerWindow = 20;
+constexpr uint32_t kHandshakeRateRetentionMs = 10'000;
+constexpr size_t kMaxHandshakeRateStates = 4096;
+constexpr uint32_t kRateLimitCleanupIntervalMs = 1000;
 
 bool isUdpPeerReset(asio::error_code ec) {
     return ec == asio::error::connection_reset;
 }
 
+void encodeUint32Be(uint8_t* output, uint32_t value) {
+    output[0] = static_cast<uint8_t>(value >> 24);
+    output[1] = static_cast<uint8_t>(value >> 16);
+    output[2] = static_cast<uint8_t>(value >> 8);
+    output[3] = static_cast<uint8_t>(value);
+}
+
+uint32_t decodeUint32Be(const uint8_t* input) {
+    return (static_cast<uint32_t>(input[0]) << 24) |
+           (static_cast<uint32_t>(input[1]) << 16) |
+           (static_cast<uint32_t>(input[2]) << 8) |
+           static_cast<uint32_t>(input[3]);
+}
+
+uint32_t decodeUint32Le(const uint8_t* input) {
+    return static_cast<uint32_t>(input[0]) |
+           (static_cast<uint32_t>(input[1]) << 8) |
+           (static_cast<uint32_t>(input[2]) << 16) |
+           (static_cast<uint32_t>(input[3]) << 24);
+}
+
+void encodeUint64Be(uint8_t* output, uint64_t value) {
+    for (int index = 7; index >= 0; --index) {
+        output[index] = static_cast<uint8_t>(value);
+        value >>= 8;
+    }
+}
+
+uint64_t decodeUint64Be(const uint8_t* input) {
+    uint64_t value = 0;
+    for (int index = 0; index < 8; ++index) {
+        value = (value << 8) | input[index];
+    }
+    return value;
+}
+
+uint64_t generateHandshakeNonce() {
+    std::random_device randomDevice;
+    uint64_t nonce = (static_cast<uint64_t>(randomDevice()) << 32) ^ randomDevice();
+    nonce ^= static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+    return nonce == 0 ? 1 : nonce;
+}
+
 }  // namespace
 
-// ============================================================
-// KcpChannel (client-side, single connection)
-// ============================================================
-
-KcpChannel::KcpChannel(asio::io_context& ioContext, uint16_t localPort)
-    : ioContext_(ioContext), socket_(ioContext, Udp::endpoint(Udp::v4(), localPort)), recvBuffer_(kRecvMtu) {
+KcpClient::KcpClient(asio::io_context& ioContext, uint16_t localPort)
+    : socket_(ioContext, Udp::endpoint(Udp::v4(), localPort)), recvBuffer_(kRecvMtu) {
     socket_.non_blocking(true);
 }
 
-KcpChannel::~KcpChannel() {
+KcpClient::~KcpClient() {
+    reset();
+}
+
+void KcpClient::connect(const Endpoint& endpoint) {
+    reset();
+    remote_ = endpoint;
+    handshakeNonce_ = generateHandshakeNonce();
+    handshakeStarted_ = true;
+    sendHandshakeRequest(nowMs());
+}
+
+void KcpClient::reset() {
     if (kcp_) {
         ikcp_release(kcp_);
         kcp_ = nullptr;
     }
+    remote_.reset();
+    recvPackets_.clear();
+    handshakeNonce_ = 0;
+    lastHandshakeSendMs_ = 0;
+    handshakeStarted_ = false;
+    versionMismatchLogged_ = false;
 }
 
-void KcpChannel::setRemote(const Endpoint& endpoint) {
-    remote_ = endpoint;
-}
-
-void KcpChannel::startHandshake() {
-    if (!remote_) {
-        logging::warn("Cannot start handshake: no remote set");
+void KcpClient::sendHandshakeRequest(uint32_t now) {
+    if (!remote_ || !handshakeStarted_) {
         return;
     }
-    sendHandshakeRequest();
-}
 
-void KcpChannel::sendHandshakeRequest() {
-    uint8_t buf[kRequestSize];
-    uint32_t magic = kMagic;
-    std::memcpy(buf, &magic, 4);
+    std::array<uint8_t, kRequestSize> buffer{};
+    encodeUint32Be(buffer.data(), kMagic);
+    encodeUint32Be(buffer.data() + 4, kProtocolVersion);
+    encodeUint64Be(buffer.data() + 8, handshakeNonce_);
+    lastHandshakeSendMs_ = now;
 
-    asio::error_code ec;
-    socket_.send_to(asio::buffer(buf, sizeof(buf)), *remote_, 0, ec);
-    if (ec) {
-        logging::warn("Failed to send handshake request: {}", ec.message());
+    asio::error_code error;
+    socket_.send_to(asio::buffer(buffer), *remote_, 0, error);
+    if (error) {
+        logging::warn("Failed to send handshake request: {}", error.message());
     }
 }
 
-void KcpChannel::initKcp(uint32_t conv) {
+void KcpClient::initKcp(uint32_t conv) {
+    if (kcp_ || conv == 0) {
+        return;
+    }
+
     kcp_ = ikcp_create(conv, this);
     if (!kcp_) {
-        crash("ikcp_create failed");
+        logging::error("ikcp_create failed for client");
+        return;
     }
 
-    ikcp_setoutput(kcp_, &KcpChannel::kcpOutput);
+    ikcp_setoutput(kcp_, &KcpClient::kcpOutput);
     ikcp_nodelay(kcp_, 1, 10, 2, 1);
     ikcp_wndsize(kcp_, 256, 256);
     ikcp_setmtu(kcp_, 1200);
     kcp_->rx_minrto = 10;
 
-    handshakeComplete_ = true;
+    handshakeStarted_ = false;
     logging::info("Handshake complete, conv = {}", conv);
 }
 
-void KcpChannel::sendReliable(const std::vector<uint8_t>& payload) {
+void KcpClient::sendReliable(const std::vector<uint8_t>& payload) {
     if (!kcp_ || !remote_) {
         return;
     }
@@ -86,7 +152,7 @@ void KcpChannel::sendReliable(const std::vector<uint8_t>& payload) {
     }
 }
 
-void KcpChannel::flush() {
+void KcpClient::flush() {
     if (!kcp_) {
         return;
     }
@@ -94,43 +160,41 @@ void KcpChannel::flush() {
     ikcp_flush(kcp_);
 }
 
-void KcpChannel::pump() {
+void KcpClient::pump() {
     for (;;) {
         Udp::endpoint sender;
-        asio::error_code ec;
-        const auto received = socket_.receive_from(asio::buffer(recvBuffer_), sender, 0, ec);
-        if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        asio::error_code error;
+        const auto received = socket_.receive_from(asio::buffer(recvBuffer_), sender, 0, error);
+        if (error == asio::error::would_block || error == asio::error::try_again) {
             break;
         }
-        if (isUdpPeerReset(ec)) {
+        if (isUdpPeerReset(error)) {
             break;
         }
-        if (ec) {
-            logging::warn("UDP receive error: {}", ec.message());
+        if (error) {
+            logging::warn("UDP receive error: {}", error.message());
             break;
         }
-        if (!remote_) {
-            remote_ = sender;
-        }
-        if (*remote_ != sender) {
+        if (!remote_ || *remote_ != sender) {
             continue;
         }
 
-        // Check if this is a handshake response
-        if (!handshakeComplete_ && received == kResponseSize) {
-            uint32_t magic = 0;
-            uint32_t conv = 0;
-            std::memcpy(&magic, recvBuffer_.data(), 4);
-            std::memcpy(&conv, recvBuffer_.data() + 4, 4);
-            if (magic == kMagic) {
+        if (received == kResponseSize && decodeUint32Be(recvBuffer_.data()) == kMagic) {
+            const uint32_t version = decodeUint32Be(recvBuffer_.data() + 4);
+            const uint64_t nonce = decodeUint64Be(recvBuffer_.data() + 8);
+            const uint32_t conv = decodeUint32Be(recvBuffer_.data() + 16);
+            if (version != kProtocolVersion) {
+                if (!versionMismatchLogged_) {
+                    versionMismatchLogged_ = true;
+                    logging::error("Server protocol version {} does not match client version {}", version, kProtocolVersion);
+                }
+            } else if (nonce == handshakeNonce_ && conv != 0) {
                 initKcp(conv);
-                continue;
             }
+            continue;
         }
 
         if (!kcp_) {
-            // Not yet initialized, resend handshake
-            sendHandshakeRequest();
             continue;
         }
 
@@ -140,11 +204,15 @@ void KcpChannel::pump() {
         }
     }
 
+    const uint32_t now = nowMs();
     if (!kcp_) {
+        if (handshakeStarted_ && now - lastHandshakeSendMs_ >= kHandshakeRetryMs) {
+            sendHandshakeRequest(now);
+        }
         return;
     }
 
-    ikcp_update(kcp_, nowMs());
+    ikcp_update(kcp_, now);
 
     for (;;) {
         const int packetSize = ikcp_peeksize(kcp_);
@@ -161,51 +229,45 @@ void KcpChannel::pump() {
     }
 }
 
-bool KcpChannel::popPacket(std::vector<uint8_t>& outPacket) {
+bool KcpClient::popPacket(std::vector<uint8_t>& outPacket) {
     if (recvPackets_.empty()) {
         return false;
     }
     outPacket = std::move(recvPackets_.front());
-    recvPackets_.erase(recvPackets_.begin());
+    recvPackets_.pop_front();
     return true;
 }
 
-int KcpChannel::kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user) {
-    auto* self = static_cast<KcpChannel*>(user);
-    return self->sendRaw(buf, static_cast<size_t>(len));
+int KcpClient::kcpOutput(const char* buffer, int length, ikcpcb*, void* user) {
+    auto* self = static_cast<KcpClient*>(user);
+    return self->sendRaw(buffer, static_cast<size_t>(length));
 }
 
-int KcpChannel::sendRaw(const char* data, size_t size) {
+int KcpClient::sendRaw(const char* data, size_t size) {
     if (!remote_) {
         return -1;
     }
-    asio::error_code ec;
-    socket_.send_to(asio::buffer(data, size), *remote_, 0, ec);
-    if (ec) {
-        logging::warn("UDP send error: {}", ec.message());
+    asio::error_code error;
+    socket_.send_to(asio::buffer(data, size), *remote_, 0, error);
+    if (error) {
+        logging::warn("UDP send error: {}", error.message());
         return -1;
     }
     return 0;
 }
 
-uint32_t KcpChannel::nowMs() const {
+uint32_t KcpClient::nowMs() const {
     using namespace std::chrono;
     return static_cast<uint32_t>(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
 }
 
-// ============================================================
-// KcpServer (server-side, multiple sessions over single socket)
-// ============================================================
-
 KcpServer::KcpServer(asio::io_context& ioContext, uint16_t localPort)
-    : ioContext_(ioContext),
-      socket_(ioContext, Udp::endpoint(Udp::v4(), localPort)),
-      recvBuffer_(kRecvMtu) {
+    : socket_(ioContext, Udp::endpoint(Udp::v4(), localPort)), recvBuffer_(kRecvMtu) {
     socket_.non_blocking(true);
 }
 
 KcpServer::~KcpServer() {
-    for (auto& [id, session] : sessions_) {
+    for (auto& [sessionId, session] : sessions_) {
         if (session.kcp) {
             ikcp_release(session.kcp);
             session.kcp = nullptr;
@@ -227,69 +289,53 @@ void KcpServer::setOnDisconnect(SessionDisconnectCallback callback) {
 
 void KcpServer::sendTo(uint32_t sessionId, const std::vector<uint8_t>& payload) {
     auto it = sessions_.find(sessionId);
-    if (it == sessions_.end()) {
+    if (it == sessions_.end() || !it->second.kcp) {
         return;
     }
-    auto& session = it->second;
-    if (!session.kcp) {
-        return;
-    }
-    const int result = ikcp_send(session.kcp, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
+    const int result = ikcp_send(it->second.kcp, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
     if (result < 0) {
         logging::warn("ikcp_send to session {} failed: {}", sessionId, result);
     }
 }
 
 void KcpServer::pump() {
-    // Receive all UDP packets and dispatch to sessions
     for (;;) {
         Udp::endpoint sender;
-        asio::error_code ec;
-        const auto received = socket_.receive_from(asio::buffer(recvBuffer_), sender, 0, ec);
-        if (ec == asio::error::would_block || ec == asio::error::try_again) {
+        asio::error_code error;
+        const auto received = socket_.receive_from(asio::buffer(recvBuffer_), sender, 0, error);
+        if (error == asio::error::would_block || error == asio::error::try_again) {
             break;
         }
-        if (isUdpPeerReset(ec)) {
+        if (isUdpPeerReset(error)) {
             break;
         }
-        if (ec) {
-            logging::warn("UDP receive error: {}", ec.message());
+        if (error) {
+            logging::warn("UDP receive error: {}", error.message());
             break;
         }
 
-        // Check if this is a handshake request
-        if (received == kRequestSize) {
-            uint32_t magic = 0;
-            std::memcpy(&magic, recvBuffer_.data(), 4);
-            if (magic == kMagic) {
-                handleHandshake(sender);
-                continue;
+        const uint32_t receiveTime = nowMs();
+        if (received == kRequestSize && decodeUint32Be(recvBuffer_.data()) == kMagic) {
+            const uint32_t version = decodeUint32Be(recvBuffer_.data() + 4);
+            const uint64_t nonce = decodeUint64Be(recvBuffer_.data() + 8);
+            if (version == kProtocolVersion && nonce != 0 && allowHandshake(sender, receiveTime)) {
+                handleHandshake(sender, nonce, receiveTime);
             }
+            continue;
         }
 
-        // Extract conv from KCP packet header (first 4 bytes)
         if (received < 4) {
             continue;
         }
-        uint32_t conv = 0;
-        std::memcpy(&conv, recvBuffer_.data(), 4);
-
+        const uint32_t conv = decodeUint32Le(recvBuffer_.data());
         SessionState* session = findSessionByConv(conv);
         if (!session) {
-            // Unknown conv, ignore
-            logging::warn("Received packet with unknown conv {}", conv);
             continue;
         }
-
-        // Update remote endpoint if it changed (connection migration)
         if (session->remote != sender) {
-            logging::info("Session {} migrated from {}:{} to {}:{}",
-                          session->sessionId,
-                          session->remote.address().to_string(), session->remote.port(),
-                          sender.address().to_string(), sender.port());
-            session->remote = sender;
+            logging::warn("Rejected packet for session {} from unexpected endpoint {}:{}", session->sessionId, sender.address().to_string(), sender.port());
+            continue;
         }
-        session->lastReceiveMs = nowMs();
 
         const int inputResult = ikcp_input(
             session->kcp,
@@ -297,20 +343,21 @@ void KcpServer::pump() {
             static_cast<long>(received));
         if (inputResult < 0) {
             logging::warn("ikcp_input for session {} failed: {}", session->sessionId, inputResult);
+            continue;
         }
+        session->lastReceiveMs = receiveTime;
     }
 
-    // Update all KCP instances and collect received application packets
     const uint32_t now = nowMs();
     std::vector<uint32_t> disconnectedSessions;
-    for (auto& [id, session] : sessions_) {
+    for (auto& [sessionId, session] : sessions_) {
         if (!session.kcp) {
             continue;
         }
         ikcp_update(session.kcp, now);
         processReceivedPackets(session);
         if (session.pendingDisconnect) {
-            disconnectedSessions.push_back(id);
+            disconnectedSessions.push_back(sessionId);
         }
     }
     for (uint32_t sessionId : disconnectedSessions) {
@@ -318,6 +365,7 @@ void KcpServer::pump() {
         destroySession(sessionId, true);
     }
     removeTimedOutSessions(now);
+    cleanupHandshakeRateLimits(now);
 }
 
 bool KcpServer::hasSession(uint32_t sessionId) const {
@@ -325,72 +373,74 @@ bool KcpServer::hasSession(uint32_t sessionId) const {
 }
 
 std::vector<uint32_t> KcpServer::getSessionIds() const {
-    std::vector<uint32_t> ids;
-    ids.reserve(sessions_.size());
-    for (const auto& [id, session] : sessions_) {
-        ids.push_back(id);
+    std::vector<uint32_t> sessionIds;
+    sessionIds.reserve(sessions_.size());
+    for (const auto& [sessionId, session] : sessions_) {
+        sessionIds.push_back(sessionId);
     }
-    return ids;
+    return sessionIds;
+}
+
+std::optional<uint32_t> KcpServer::allocateSessionId() {
+    if (sessions_.size() >= kMaxSessions) {
+        return std::nullopt;
+    }
+
+    const uint32_t firstCandidate = nextSessionId_ == 0 ? 1 : nextSessionId_;
+    uint32_t candidate = firstCandidate;
+    do {
+        nextSessionId_ = candidate == std::numeric_limits<uint32_t>::max() ? 1 : candidate + 1;
+        if (sessions_.find(candidate) == sessions_.end()) {
+            return candidate;
+        }
+        candidate = nextSessionId_;
+    } while (candidate != firstCandidate);
+
+    return std::nullopt;
 }
 
 KcpServer::SessionState* KcpServer::findSessionByConv(uint32_t conv) {
-    auto it = sessions_.find(conv);  // conv == sessionId
-    if (it != sessions_.end()) {
-        return &it->second;
-    }
-    return nullptr;
+    auto it = sessions_.find(conv);
+    return it == sessions_.end() ? nullptr : &it->second;
 }
 
 KcpServer::SessionState* KcpServer::findSessionByEndpoint(const Endpoint& endpoint) {
-    for (auto& [id, session] : sessions_) {
-        if (session.remote == endpoint) {
-            return &session;
-        }
+    auto endpointIt = endpointSessions_.find(endpoint);
+    if (endpointIt == endpointSessions_.end()) {
+        return nullptr;
     }
-    return nullptr;
+    auto sessionIt = sessions_.find(endpointIt->second);
+    if (sessionIt == sessions_.end()) {
+        endpointSessions_.erase(endpointIt);
+        return nullptr;
+    }
+    return &sessionIt->second;
 }
 
-void KcpServer::handleHandshake(const Endpoint& sender) {
-    // Check if this endpoint already has a session
-    SessionState* existing = findSessionByEndpoint(sender);
-    if (existing) {
-        // Resend handshake response (client may not have received it)
-        uint8_t buf[kResponseSize];
-        uint32_t magic = kMagic;
-        uint32_t conv = existing->sessionId;
-        std::memcpy(buf, &magic, 4);
-        std::memcpy(buf + 4, &conv, 4);
-        sendRawTo(reinterpret_cast<const char*>(buf), sizeof(buf), sender);
-        return;
+KcpServer::SessionState* KcpServer::createSession(const Endpoint& endpoint, uint64_t handshakeNonce) {
+    const std::optional<uint32_t> sessionId = allocateSessionId();
+    if (!sessionId) {
+        logging::warn("Rejected connection from {}:{}: session limit reached",
+                      endpoint.address().to_string(), endpoint.port());
+        return nullptr;
     }
 
-    // Create new session
-    auto& session = createSession(sender);
+    auto [it, inserted] = sessions_.try_emplace(*sessionId);
+    if (!inserted) {
+        return nullptr;
+    }
 
-    // Send handshake response with assigned conv
-    uint8_t buf[kResponseSize];
-    uint32_t magic = kMagic;
-    uint32_t conv = session.sessionId;
-    std::memcpy(buf, &magic, 4);
-    std::memcpy(buf + 4, &conv, 4);
-    sendRawTo(reinterpret_cast<const char*>(buf), sizeof(buf), sender);
-}
-
-KcpServer::SessionState& KcpServer::createSession(const Endpoint& endpoint) {
-    const uint32_t sessionId = nextSessionId_++;
-
-    SessionState session;
-    session.sessionId = sessionId;
+    SessionState& session = it->second;
+    session.sessionId = *sessionId;
     session.remote = endpoint;
+    session.handshakeNonce = handshakeNonce;
     session.lastReceiveMs = nowMs();
-
-    // Create KCP output context (must remain stable in memory)
-    outputContexts_[sessionId] = KcpOutputContext{this, sessionId};
-
-    // Use sessionId as conv — each session has a unique conv
-    session.kcp = ikcp_create(sessionId, &outputContexts_[sessionId]);
+    session.outputContext = KcpOutputContext{this, *sessionId};
+    session.kcp = ikcp_create(*sessionId, &session.outputContext);
     if (!session.kcp) {
-        crash("ikcp_create failed for session {}", sessionId);
+        logging::error("ikcp_create failed for session {}", *sessionId);
+        sessions_.erase(it);
+        return nullptr;
     }
 
     ikcp_setoutput(session.kcp, &KcpServer::kcpOutput);
@@ -399,29 +449,60 @@ KcpServer::SessionState& KcpServer::createSession(const Endpoint& endpoint) {
     ikcp_setmtu(session.kcp, 1200);
     session.kcp->rx_minrto = 10;
 
-    auto [it, inserted] = sessions_.emplace(sessionId, std::move(session));
-
-    logging::info("New session {} from {}:{}", sessionId, endpoint.address().to_string(), endpoint.port());
-
+    endpointSessions_[endpoint] = *sessionId;
+    logging::info("New session {} from {}:{}", *sessionId, endpoint.address().to_string(), endpoint.port());
     if (onConnect_) {
-        onConnect_(sessionId);
+        onConnect_(*sessionId);
+    }
+    return &session;
+}
+
+void KcpServer::handleHandshake(const Endpoint& sender, uint64_t handshakeNonce, uint32_t now) {
+    SessionState* existing = findSessionByEndpoint(sender);
+    if (existing && existing->handshakeNonce == handshakeNonce) {
+        existing->lastReceiveMs = now;
+        sendHandshakeResponse(*existing);
+        return;
+    }
+    if (existing) {
+        if (now - existing->lastReceiveMs < kSessionReplaceGraceMs) {
+            logging::warn("Ignored conflicting handshake for live session {} from {}:{}", existing->sessionId, sender.address().to_string(), sender.port());
+            return;
+        }
+        logging::info("Replacing stale session {} after reconnect from {}:{}", existing->sessionId, sender.address().to_string(), sender.port());
+        destroySession(existing->sessionId, true);
     }
 
-    return it->second;
+    SessionState* session = createSession(sender, handshakeNonce);
+    if (session) {
+        sendHandshakeResponse(*session);
+    }
+}
+
+void KcpServer::sendHandshakeResponse(const SessionState& session) {
+    std::array<uint8_t, kResponseSize> buffer{};
+    encodeUint32Be(buffer.data(), kMagic);
+    encodeUint32Be(buffer.data() + 4, kProtocolVersion);
+    encodeUint64Be(buffer.data() + 8, session.handshakeNonce);
+    encodeUint32Be(buffer.data() + 16, session.sessionId);
+    sendRawTo(reinterpret_cast<const char*>(buffer.data()), buffer.size(), session.remote);
 }
 
 void KcpServer::destroySession(uint32_t sessionId, bool notify) {
-    auto it = sessions_.find(sessionId);
-    if (it == sessions_.end()) {
+    auto sessionIt = sessions_.find(sessionId);
+    if (sessionIt == sessions_.end()) {
         return;
     }
 
-    if (it->second.kcp) {
-        ikcp_release(it->second.kcp);
-        it->second.kcp = nullptr;
+    auto endpointIt = endpointSessions_.find(sessionIt->second.remote);
+    if (endpointIt != endpointSessions_.end() && endpointIt->second == sessionId) {
+        endpointSessions_.erase(endpointIt);
     }
-    sessions_.erase(it);
-    outputContexts_.erase(sessionId);
+    if (sessionIt->second.kcp) {
+        ikcp_release(sessionIt->second.kcp);
+        sessionIt->second.kcp = nullptr;
+    }
+    sessions_.erase(sessionIt);
 
     if (notify && onDisconnect_) {
         onDisconnect_(sessionId);
@@ -430,15 +511,64 @@ void KcpServer::destroySession(uint32_t sessionId, bool notify) {
 
 void KcpServer::removeTimedOutSessions(uint32_t now) {
     std::vector<uint32_t> timedOutSessions;
-    for (const auto& [id, session] : sessions_) {
+    for (const auto& [sessionId, session] : sessions_) {
         if (now - session.lastReceiveMs >= kSessionTimeoutMs) {
-            timedOutSessions.push_back(id);
+            timedOutSessions.push_back(sessionId);
         }
     }
 
     for (uint32_t sessionId : timedOutSessions) {
         logging::info("Session {} timed out", sessionId);
         destroySession(sessionId, true);
+    }
+}
+
+bool KcpServer::allowHandshake(const Endpoint& sender, uint32_t now) {
+    auto it = handshakeRateStates_.find(sender.address());
+    if (it == handshakeRateStates_.end()) {
+        if (handshakeRateStates_.size() >= kMaxHandshakeRateStates) {
+            evictStalestHandshakeRateState();
+        }
+        it = handshakeRateStates_.emplace(sender.address(), HandshakeRateState{now, 0, now}).first;
+    }
+
+    HandshakeRateState& state = it->second;
+    if (now - state.windowStartMs >= kHandshakeRateWindowMs) {
+        state.windowStartMs = now;
+        state.attempts = 0;
+    }
+    if (state.attempts >= kMaxHandshakesPerWindow) {
+        return false;
+    }
+    state.lastSeenMs = now;
+    ++state.attempts;
+    return true;
+}
+
+void KcpServer::evictStalestHandshakeRateState() {
+    auto stalest = handshakeRateStates_.begin();
+    for (auto it = handshakeRateStates_.begin(); it != handshakeRateStates_.end(); ++it) {
+        if (it->second.lastSeenMs < stalest->second.lastSeenMs) {
+            stalest = it;
+        }
+    }
+    if (stalest != handshakeRateStates_.end()) {
+        handshakeRateStates_.erase(stalest);
+    }
+}
+
+void KcpServer::cleanupHandshakeRateLimits(uint32_t now) {
+    if (now - lastRateLimitCleanupMs_ < kRateLimitCleanupIntervalMs) {
+        return;
+    }
+    lastRateLimitCleanupMs_ = now;
+
+    for (auto it = handshakeRateStates_.begin(); it != handshakeRateStates_.end();) {
+        if (now - it->second.lastSeenMs >= kHandshakeRateRetentionMs) {
+            it = handshakeRateStates_.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
@@ -462,20 +592,20 @@ void KcpServer::processReceivedPackets(SessionState& session) {
     }
 }
 
-int KcpServer::kcpOutput(const char* buf, int len, ikcpcb* kcp, void* user) {
-    auto* ctx = static_cast<KcpOutputContext*>(user);
-    auto it = ctx->server->sessions_.find(ctx->sessionId);
-    if (it == ctx->server->sessions_.end()) {
+int KcpServer::kcpOutput(const char* buffer, int length, ikcpcb*, void* user) {
+    auto* context = static_cast<KcpOutputContext*>(user);
+    auto sessionIt = context->server->sessions_.find(context->sessionId);
+    if (sessionIt == context->server->sessions_.end()) {
         return -1;
     }
-    return ctx->server->sendRawTo(buf, static_cast<size_t>(len), it->second.remote);
+    return context->server->sendRawTo(buffer, static_cast<size_t>(length), sessionIt->second.remote);
 }
 
 int KcpServer::sendRawTo(const char* data, size_t size, const Endpoint& endpoint) {
-    asio::error_code ec;
-    socket_.send_to(asio::buffer(data, size), endpoint, 0, ec);
-    if (ec) {
-        logging::warn("UDP send error: {}", ec.message());
+    asio::error_code error;
+    socket_.send_to(asio::buffer(data, size), endpoint, 0, error);
+    if (error) {
+        logging::warn("UDP send error: {}", error.message());
         return -1;
     }
     return 0;
