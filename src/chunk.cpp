@@ -4,41 +4,41 @@
 
 #include "log.h"
 
-Chunk::Chunk(glm::ivec3 chunkPos) : chunkPosition_(chunkPos) {
-    for (int x = 0; x < SIZE; ++x) {
-        for (int y = 0; y < SIZE; ++y) {
-            for (int z = 0; z < SIZE; ++z) {
-                blocks_[x][y][z] = BlockData{BlockType::Air, BlockOrientation::North};
-            }
-        }
-    }
+size_t ChunkData::blockIndex(glm::ivec3 localPos) {
+    return (static_cast<size_t>(localPos.x) * SIZE + static_cast<size_t>(localPos.y)) * SIZE + static_cast<size_t>(localPos.z);
+}
+
+Chunk::Chunk(glm::ivec3 chunkPos) {
+    data_.chunkPos = chunkPos;
 }
 
 bool Chunk::isValidLocalPosition(glm::ivec3 pos) {
-    return pos.x >= 0 && pos.x < SIZE && pos.y >= 0 && pos.y < SIZE && pos.z >= 0 && pos.z < SIZE;
+    return pos.x >= 0 && pos.x < ChunkData::SIZE &&
+           pos.y >= 0 && pos.y < ChunkData::SIZE &&
+           pos.z >= 0 && pos.z < ChunkData::SIZE;
 }
 
 glm::ivec3 Chunk::worldToChunk(glm::ivec3 worldPos) {
     auto floorDiv = [](int value) {
-        return value >= 0 ? value / SIZE : (value - SIZE + 1) / SIZE;
+        return value >= 0 ? value / ChunkData::SIZE : (value - ChunkData::SIZE + 1) / ChunkData::SIZE;
     };
     return glm::ivec3(floorDiv(worldPos.x), floorDiv(worldPos.y), floorDiv(worldPos.z));
 }
 
 glm::ivec3 Chunk::worldToLocal(glm::ivec3 worldPos) {
     const glm::ivec3 chunkPos = worldToChunk(worldPos);
-    return worldPos - chunkPos * SIZE;
+    return worldPos - chunkPos * ChunkData::SIZE;
 }
 
 glm::ivec3 Chunk::localToWorld(glm::ivec3 localPos) const {
-    return glm::ivec3(chunkPosition_.x * SIZE + localPos.x,
-                      chunkPosition_.y * SIZE + localPos.y,
-                      chunkPosition_.z * SIZE + localPos.z);
+    return glm::ivec3(data_.chunkPos.x * ChunkData::SIZE + localPos.x,
+                      data_.chunkPos.y * ChunkData::SIZE + localPos.y,
+                      data_.chunkPos.z * ChunkData::SIZE + localPos.z);
 }
 
 BlockData Chunk::getBlock(glm::ivec3 localPos) const {
     if (isValidLocalPosition(localPos)) {
-        return blocks_[localPos.x][localPos.y][localPos.z];
+        return data_.blocks[ChunkData::blockIndex(localPos)];
     } else {
         return BlockData{BlockType::Air, BlockOrientation::North};
     }
@@ -46,7 +46,11 @@ BlockData Chunk::getBlock(glm::ivec3 localPos) const {
 
 void Chunk::setBlock(glm::ivec3 localPos, BlockData blockData) {
     if (isValidLocalPosition(localPos)) {
-        blocks_[localPos.x][localPos.y][localPos.z] = blockData;
+        BlockData& current = data_.blocks[ChunkData::blockIndex(localPos)];
+        if (current.type != blockData.type || current.orientation != blockData.orientation) {
+            current = blockData;
+            ++data_.revision;
+        }
     } else {
         logging::error("Attempted to set block at {}", glm::to_string(localToWorld(localPos)));
     }
@@ -54,21 +58,29 @@ void Chunk::setBlock(glm::ivec3 localPos, BlockData blockData) {
 
 void Chunk::clearBlock(glm::ivec3 localPos) {
     if (isValidLocalPosition(localPos)) {
-        blocks_[localPos.x][localPos.y][localPos.z] = BlockData{BlockType::Air, BlockOrientation::North};
+        setBlock(localPos, BlockData{BlockType::Air, BlockOrientation::North});
     } else {
         logging::error("Attempted to clear block at {}", glm::to_string(localToWorld(localPos)));
     }
 }
 
+bool Chunk::applyData(const ChunkData& data) {
+    if (data.chunkPos != data_.chunkPos || data.revision < data_.revision) {
+        return false;
+    }
+    data_ = data;
+    return true;
+}
+
+ChunkData Chunk::buildData() const {
+    return data_;
+}
+
 size_t Chunk::getBlockCount() const {
     size_t count = 0;
-    for (int x = 0; x < SIZE; ++x) {
-        for (int y = 0; y < SIZE; ++y) {
-            for (int z = 0; z < SIZE; ++z) {
-                if (blocks_[x][y][z].type != BlockType::Air) {
-                    count++;
-                }
-            }
+    for (const BlockData& block : data_.blocks) {
+        if (block.type != BlockType::Air) {
+            ++count;
         }
     }
     return count;

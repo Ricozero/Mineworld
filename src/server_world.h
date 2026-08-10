@@ -36,10 +36,6 @@ public:
     entt::entity getEntityByName(const std::string& name) const;
 
 private:
-    void generateChunk(Chunk& chunk) const;
-    BlockData generateBlock(glm::ivec3 worldPos) const;
-    bool isBlockInBounds(glm::ivec3 worldPos) const;
-
     VoxelWorld voxelWorld_;
     ActorWorld actorWorld_{true};
 };

@@ -141,7 +141,7 @@ inline bool faceConnected(ChunkFaceConnectivity mask, int faceA, int faceB) {
 }
 
 ChunkFaceConnectivity computeFaceConnectivity(const Chunk& chunk) {
-    constexpr int S = Chunk::SIZE;
+    constexpr int S = ChunkData::SIZE;
 
     std::array<uint8_t, S * S * S> air{};
     for (int x = 0; x < S; ++x)
@@ -1360,7 +1360,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
 
         // Occlusion culling
         const glm::ivec3 cameraChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
-        const float chunkWorldSize = static_cast<float>(Chunk::SIZE);
+        const float chunkWorldSize = static_cast<float>(ChunkData::SIZE);
 
         std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
 
@@ -1509,8 +1509,8 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             MeshBuilder lineBatch;
             const glm::vec3 boundColor(1.0f, 0.92f, 0.25f);
             for (const glm::ivec3& chunkPos : loadedChunks) {
-                const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(Chunk::SIZE);
-                const glm::vec3 max = min + glm::vec3(static_cast<float>(Chunk::SIZE));
+                const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkData::SIZE);
+                const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkData::SIZE));
                 addLineBox(lineBatch, min, max, boundColor);
             }
             submitLineBatch(lineBatch, worldShader_.program);
@@ -1819,9 +1819,9 @@ void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos
     vertices.reserve(1024);
     indices.reserve(1536);
 
-    for (int x = 0; x < Chunk::SIZE; ++x) {
-        for (int y = 0; y < Chunk::SIZE; ++y) {
-            for (int z = 0; z < Chunk::SIZE; ++z) {
+    for (int x = 0; x < ChunkData::SIZE; ++x) {
+        for (int y = 0; y < ChunkData::SIZE; ++y) {
+            for (int z = 0; z < ChunkData::SIZE; ++z) {
                 const glm::ivec3 localPos(x, y, z);
                 const BlockData block = chunk.getBlock(localPos);
                 if (block.type == BlockType::Air) {

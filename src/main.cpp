@@ -53,8 +53,8 @@ RunMode parseRunMode(int argc, char* argv[]) {
 bool initializeServer(std::unique_ptr<GameServer>& server) {
     server = std::make_unique<GameServer>();
 
-    server->createRobot("Steve", glm::vec3(8.0f, 1.0f, 8.0f));
-    server->createRobot("Alice", glm::vec3(12.0f, 1.0f, 12.0f));
+    server->createRobot("Steve", glm::vec3(8.0f, 10.0f, 8.0f));
+    server->createRobot("Alice", glm::vec3(12.0f, 10.0f, 12.0f));
 
     return true;
 }

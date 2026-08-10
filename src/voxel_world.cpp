@@ -41,6 +41,23 @@ bool VoxelWorld::unloadChunk(glm::ivec3 chunkPos) {
     return true;
 }
 
+bool VoxelWorld::applyChunkData(const ChunkData& data) {
+    auto it = chunks_.find(data.chunkPos);
+    if (it == chunks_.end()) {
+        auto chunk = std::make_unique<Chunk>(data.chunkPos);
+        if (!chunk->applyData(data)) {
+            return false;
+        }
+        chunks_.emplace(data.chunkPos, std::move(chunk));
+        return true;
+    }
+    return it->second->applyData(data);
+}
+
+ChunkData VoxelWorld::buildChunkData(glm::ivec3 chunkPos) const {
+    return getChunk(chunkPos).buildData();
+}
+
 BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
     auto it = chunks_.find(Chunk::worldToChunk(worldPos));

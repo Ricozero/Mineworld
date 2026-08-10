@@ -53,16 +53,21 @@ table ActorState {
   player_mode:ubyte = 0;
 }
 
-table ChunkState {
-  chunk_pos:IVec3;
-  loaded:bool;
-  blocks:[ubyte];
+enum ChunkOperation : ubyte {
+  Upsert,
+  Unload
 }
 
-table Snapshot {
+table EntitySnapshot {
   sequence:uint;
   actors:[ActorState];
-  chunks:[ChunkState];
+}
+
+table ChunkUpdate {
+  chunk_pos:IVec3;
+  revision:uint;
+  operation:ChunkOperation = Upsert;
+  blocks:[ubyte];
 }
 
 union NetMessagePayload {
@@ -71,7 +76,8 @@ union NetMessagePayload {
   ClientReady,
   ServerHello,
   ClientInput,
-  Snapshot
+  EntitySnapshot,
+  ChunkUpdate
 }
 
 table NetMessage {

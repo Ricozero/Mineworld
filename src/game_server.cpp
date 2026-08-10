@@ -16,7 +16,7 @@
 
 namespace {
 
-constexpr int kMaxChunksPerSnapshot = 4;
+constexpr int kMaxChunkUpdatesPerTick = 4;
 constexpr float kChunkUnloadDelaySeconds = 3.0f;
 constexpr int kRobotChunkViewRadius = 1;
 constexpr int kCoreChunkRadius = 1;
@@ -81,26 +81,23 @@ void GameServer::update(float deltaTime) {
     }
     updateVisibleChunks(deltaTime);
 
-    const float snapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
+    const float entitySnapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
     for (auto& [sessionId, session] : sessions_) {
         if (!session.helloReceived) {
             continue;
         }
-        session.snapshotTimer += deltaTime;
-        if (session.snapshotTimer < snapshotInterval) {
+        session.entitySnapshotTimer += deltaTime;
+        if (session.entitySnapshotTimer < entitySnapshotInterval) {
             continue;
         }
-        session.snapshotTimer -= snapshotInterval;
+        session.entitySnapshotTimer -= entitySnapshotInterval;
 
-        NetSnapshot snapshot;
-        snapshot = buildSnapshot(session, !session.initialSnapshotSent);
-        session.initialSnapshotSent = true;
-
-        std::vector<uint8_t> payload;
-        payload = serializeSnapshot(snapshot, session.snapshotBuilder);
-        MW_PROFILE_COUNTER("Server.SnapshotsOut", 1);
+        const NetEntitySnapshot snapshot = buildEntitySnapshot(session);
+        std::vector<uint8_t> payload = serializeEntitySnapshot(snapshot, session.entitySnapshotBuilder);
+        MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
         MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
         netServer_->sendTo(sessionId, payload);
+        sendPendingChunkUpdates(session);
     }
 }
 
@@ -122,23 +119,25 @@ bool GameServer::loadChunk(glm::ivec3 chunkPos) {
     }
 
     for (auto& [sessionId, session] : sessions_) {
-        if (session.initialSnapshotSent) {
-            if (session.cachedVisibleChunks.count(chunkPos) > 0) {
-                queueChunkUpdate(session, buildLoadedChunkState(chunkPos));
-            }
+        if (session.helloReceived && session.cachedVisibleChunks.count(chunkPos) > 0) {
+            queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
         }
     }
     return true;
 }
 
 bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
+    if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
+        return false;
+    }
+    const uint32_t revision = world_.getChunk(chunkPos).getRevision();
     if (!world_.unloadChunk(chunkPos)) {
         return false;
     }
 
     for (auto& [sessionId, session] : sessions_) {
-        if (session.initialSnapshotSent) {
-            queueChunkUpdate(session, NetChunkState{chunkPos, false});
+        if (session.helloReceived) {
+            queueChunkUpdate(session, buildUnloadChunkUpdate(chunkPos, revision));
         }
     }
     return true;
@@ -146,6 +145,12 @@ bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
 
 void GameServer::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     world_.setBlock(worldPos, blockData);
+    const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
+    for (auto& [sessionId, session] : sessions_) {
+        if (session.helloReceived && session.cachedVisibleChunks.count(chunkPos) > 0) {
+            queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
+        }
+    }
 }
 
 GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
@@ -189,27 +194,31 @@ void GameServer::updateSessionVisibleChunks(Session& session) {
             nextVisibleChunks.insert(chunkPos);
         }
     });
+    if (!session.ready) {
+        nextVisibleChunks.insert(session.coreChunks.begin(), session.coreChunks.end());
+    }
 
     for (const glm::ivec3& chunkPos : session.cachedVisibleChunks) {
         if (nextVisibleChunks.count(chunkPos) == 0) {
-            queueChunkUpdate(session, NetChunkState{chunkPos, false});
+            const uint32_t revision = world_.getVoxelWorld().isChunkLoaded(chunkPos) ? world_.getChunk(chunkPos).getRevision() : 0;
+            queueChunkUpdate(session, buildUnloadChunkUpdate(chunkPos, revision));
         }
     }
 
     for (const glm::ivec3& chunkPos : nextVisibleChunks) {
         if (session.cachedVisibleChunks.count(chunkPos) == 0 && world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-            queueChunkUpdate(session, buildLoadedChunkState(chunkPos));
+            queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
         }
     }
 
     session.cachedVisibleChunks = std::move(nextVisibleChunks);
 }
 
-NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState) {
-    MW_PROFILE_SCOPE("Server.BuildSnapshot");
+NetEntitySnapshot GameServer::buildEntitySnapshot(Session& session) {
+    MW_PROFILE_SCOPE("Server.BuildEntitySnapshot");
 
-    NetSnapshot snapshot;
-    snapshot.sequence = ++session.snapshotSequence;
+    NetEntitySnapshot snapshot;
+    snapshot.sequence = ++session.entitySnapshotSequence;
 
     updateSessionVisibleChunks(session);
     const auto& visibleChunks = session.cachedVisibleChunks;
@@ -244,58 +253,46 @@ NetSnapshot GameServer::buildSnapshot(Session& session, bool forceFullChunkState
         }
     }
 
-    if (forceFullChunkState) {
-        for (const auto& chunkPos : visibleChunks) {
-            if (world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-                queueChunkUpdate(session, buildLoadedChunkState(chunkPos));
-            }
-        }
-    }
+    return snapshot;
+}
 
-    std::vector<glm::ivec3> expiredChunks;
-    std::vector<NetChunkState*> sendCandidates;
-    expiredChunks.reserve(session.pendingChunkUpdates.size());
-    sendCandidates.reserve(session.pendingChunkUpdates.size());
-    for (auto& [chunkPos, chunkState] : session.pendingChunkUpdates) {
-        if (chunkState.loaded && visibleChunks.count(chunkPos) == 0) {
-            expiredChunks.push_back(chunkPos);
+void GameServer::sendPendingChunkUpdates(Session& session) {
+    std::vector<NetChunkUpdate*> candidates;
+    candidates.reserve(session.pendingChunkUpdates.size());
+    for (auto& [chunkPos, update] : session.pendingChunkUpdates) {
+        if (update.operation == NetChunkOperation::Upsert && (session.cachedVisibleChunks.count(chunkPos) == 0 || !world_.getVoxelWorld().isChunkLoaded(chunkPos))) {
             continue;
         }
-        if (chunkState.loaded && !world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-            continue;
-        }
-        sendCandidates.push_back(&chunkState);
+        candidates.push_back(&update);
     }
 
-    std::sort(sendCandidates.begin(), sendCandidates.end(), [&](const NetChunkState* a, const NetChunkState* b) {
-        if (a->loaded != b->loaded) {
-            return a->loaded;
+    std::sort(candidates.begin(), candidates.end(), [&](const NetChunkUpdate* a, const NetChunkUpdate* b) {
+        if (a->operation != b->operation) {
+            return a->operation == NetChunkOperation::Upsert;
         }
         return ivec3DistanceSq(a->chunkPos, session.lastChunkPos) < ivec3DistanceSq(b->chunkPos, session.lastChunkPos);
     });
 
-    int loadedChunksSent = 0;
-    for (const NetChunkState* chunkState : sendCandidates) {
-        if (chunkState->loaded && loadedChunksSent >= kMaxChunksPerSnapshot) {
-            continue;
-        }
-        snapshot.chunks.push_back(*chunkState);
-        expiredChunks.push_back(chunkState->chunkPos);
-        if (chunkState->loaded) {
-            ++loadedChunksSent;
-        }
+    std::vector<glm::ivec3> sent;
+    const size_t count = std::min(candidates.size(), static_cast<size_t>(kMaxChunkUpdatesPerTick));
+    sent.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        NetChunkUpdate& update = *candidates[i];
+        std::vector<uint8_t> payload = serializeChunkUpdate(update, session.chunkUpdateBuilder);
+        MW_PROFILE_COUNTER("Server.ChunkUpdatesOut", 1);
+        MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
+        netServer_->sendTo(session.sessionId, payload);
+        sent.push_back(update.chunkPos);
     }
-
-    for (const glm::ivec3& chunkPos : expiredChunks) {
+    for (const glm::ivec3& chunkPos : sent) {
         session.pendingChunkUpdates.erase(chunkPos);
     }
-
-    return snapshot;
+    MW_PROFILE_GAUGE("Server.PendingChunkUpdates", static_cast<double>(session.pendingChunkUpdates.size()));
 }
 
-void GameServer::queueChunkUpdate(Session& session, NetChunkState chunkState) {
-    const glm::ivec3 chunkPos = chunkState.chunkPos;
-    session.pendingChunkUpdates[chunkPos] = std::move(chunkState);
+void GameServer::queueChunkUpdate(Session& session, NetChunkUpdate update) {
+    const glm::ivec3 chunkPos = update.chunkPos;
+    session.pendingChunkUpdates[chunkPos] = std::move(update);
 }
 
 void GameServer::updateVisibleChunks(float deltaTime) {
@@ -362,20 +359,22 @@ void GameServer::updateVisibleChunks(float deltaTime) {
     MW_PROFILE_GAUGE("Server.PendingUnloadChunks", static_cast<double>(chunkUnloadTimers_.size()));
 }
 
-NetChunkState GameServer::buildLoadedChunkState(glm::ivec3 chunkPos) {
-    NetChunkState state;
-    state.chunkPos = chunkPos;
-    state.loaded = true;
-    const Chunk& chunk = world_.getChunk(chunkPos);
-    state.blocks.reserve(Chunk::SIZE * Chunk::SIZE * Chunk::SIZE);
-    for (int x = 0; x < Chunk::SIZE; ++x) {
-        for (int y = 0; y < Chunk::SIZE; ++y) {
-            for (int z = 0; z < Chunk::SIZE; ++z) {
-                state.blocks.push_back(chunk.getBlock({x, y, z}));
-            }
-        }
-    }
-    return state;
+NetChunkUpdate GameServer::buildUpsertChunkUpdate(glm::ivec3 chunkPos) {
+    const ChunkData data = world_.getVoxelWorld().buildChunkData(chunkPos);
+    NetChunkUpdate update;
+    update.chunkPos = data.chunkPos;
+    update.revision = data.revision;
+    update.operation = NetChunkOperation::Upsert;
+    update.blocks.assign(data.blocks.begin(), data.blocks.end());
+    return update;
+}
+
+NetChunkUpdate GameServer::buildUnloadChunkUpdate(glm::ivec3 chunkPos, uint32_t revision) {
+    NetChunkUpdate update;
+    update.chunkPos = chunkPos;
+    update.revision = revision;
+    update.operation = NetChunkOperation::Unload;
+    return update;
 }
 
 void GameServer::pumpNetwork() {
@@ -478,6 +477,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
         }
         loadChunk(chunkPos);
         hello.coreChunks.push_back(chunkPos);
+        session.coreChunks.insert(chunkPos);
     });
     netServer_->sendTo(sessionId, serializeServerHello(hello));
 
@@ -497,6 +497,8 @@ void GameServer::onClientReady(uint32_t sessionId) {
     }
 
     sessionIt->second.ready = true;
+    sessionIt->second.coreChunks.clear();
+    sessionIt->second.lastChunkPos = glm::ivec3(INT_MAX, INT_MAX, INT_MAX);
     logging::info("Session {} is ready", sessionId);
 }
 

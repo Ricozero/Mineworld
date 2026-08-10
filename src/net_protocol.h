@@ -2,6 +2,7 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
@@ -22,16 +23,25 @@ struct NetActorState {
     PlayerMode playerMode = PlayerMode::Survival;
 };
 
-struct NetChunkState {
-    glm::ivec3 chunkPos{0};
-    bool loaded = false;
-    std::vector<BlockData> blocks;
-};
-
-struct NetSnapshot {
+struct NetEntitySnapshot {
     uint32_t sequence = 0;
     std::vector<NetActorState> actors;
-    std::vector<NetChunkState> chunks;
+};
+
+enum class NetChunkOperation : uint8_t {
+    Upsert,
+    Unload,
+};
+
+struct NetChunkUpdate {
+    static constexpr size_t BLOCK_TYPE_OFFSET = 0;
+    static constexpr size_t BLOCK_ORIENTATION_OFFSET = BLOCK_TYPE_OFFSET + sizeof(BlockType);
+    static constexpr size_t SERIALIZED_BLOCK_SIZE = sizeof(BlockType) + sizeof(BlockOrientation);
+
+    glm::ivec3 chunkPos{0};
+    uint32_t revision = 0;
+    NetChunkOperation operation = NetChunkOperation::Upsert;
+    std::vector<BlockData> blocks;
 };
 
 struct NetClientInput {
@@ -56,9 +66,7 @@ struct NetServerHello {
 mineworld::net::NetMessagePayload getPacketType(std::span<const uint8_t> bytes);
 
 std::vector<uint8_t> serializeClientHello();
-
 std::vector<uint8_t> serializeClientDisconnect();
-
 std::vector<uint8_t> serializeClientReady();
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello);
@@ -67,5 +75,8 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
 std::vector<uint8_t> serializeClientInput(const NetClientInput& input);
 bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outInput);
 
-std::vector<uint8_t> serializeSnapshot(const NetSnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder);
-bool deserializeSnapshot(std::span<const uint8_t> bytes, NetSnapshot& outSnapshot);
+std::vector<uint8_t> serializeEntitySnapshot(const NetEntitySnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder);
+bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot& outSnapshot);
+
+std::vector<uint8_t> serializeChunkUpdate(const NetChunkUpdate& update, flatbuffers::FlatBufferBuilder& builder);
+bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outUpdate);

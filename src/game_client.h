@@ -4,8 +4,10 @@
 #include <cstdint>
 #include <deque>
 #include <entt/entt.hpp>
+#include <glm/gtx/hash.hpp>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "client_world.h"
@@ -53,8 +55,11 @@ private:
     void tryEnterRunning();
     void fail(std::string reason);
     void sendInputToServer();
-    void replaySnapshots();
-    void applySnapshot(const NetSnapshot& snapshot);
+    void replayEntitySnapshots();
+    void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
+    void queueChunkUpdate(NetChunkUpdate update);
+    void applyPendingChunkUpdates();
+    bool isCoreChunk(glm::ivec3 chunkPos) const;
     void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
 
@@ -68,8 +73,9 @@ private:
 
     asio::io_context ioContext_;
     std::unique_ptr<INetClient> netClient_;
-    std::deque<NetSnapshot> snapshotBuffer_;
-    uint32_t lastAppliedSnapshot_ = 0;
+    std::deque<NetEntitySnapshot> entitySnapshotBuffer_;
+    std::unordered_map<glm::ivec3, NetChunkUpdate> pendingChunkUpdates_;
+    uint32_t lastAppliedEntitySnapshot_ = 0;
     RenderContext* renderContext_ = nullptr;
     bool helloPending_ = true;
     bool disconnectSent_ = false;

@@ -40,9 +40,8 @@ public:
 private:
     struct Session {
         uint32_t sessionId = 0;
-        uint32_t snapshotSequence = 0;
-        float snapshotTimer = 0.0f;
-        bool initialSnapshotSent = false;
+        uint32_t entitySnapshotSequence = 0;
+        float entitySnapshotTimer = 0.0f;
         bool helloReceived = false;
         bool ready = false;
         uint32_t lastProcessedInputSequence = 0;
@@ -50,19 +49,23 @@ private:
 
         glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
         std::unordered_set<glm::ivec3> cachedVisibleChunks;
+        std::unordered_set<glm::ivec3> coreChunks;
 
-        std::unordered_map<glm::ivec3, NetChunkState> pendingChunkUpdates;
+        std::unordered_map<glm::ivec3, NetChunkUpdate> pendingChunkUpdates;
 
-        flatbuffers::FlatBufferBuilder snapshotBuilder{8192};
+        flatbuffers::FlatBufferBuilder entitySnapshotBuilder{8192};
+        flatbuffers::FlatBufferBuilder chunkUpdateBuilder{ChunkData::BLOCK_COUNT * NetChunkUpdate::SERIALIZED_BLOCK_SIZE + 256};
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
-    NetSnapshot buildSnapshot(Session& session, bool forceFullChunkState);
+    NetEntitySnapshot buildEntitySnapshot(Session& session);
+    void sendPendingChunkUpdates(Session& session);
     void updateVisibleChunks(float deltaTime);
     void updateSessionVisibleChunks(Session& session);
-    void queueChunkUpdate(Session& session, NetChunkState chunkState);
+    void queueChunkUpdate(Session& session, NetChunkUpdate update);
 
-    NetChunkState buildLoadedChunkState(glm::ivec3 chunkPos);
+    NetChunkUpdate buildUpsertChunkUpdate(glm::ivec3 chunkPos);
+    static NetChunkUpdate buildUnloadChunkUpdate(glm::ivec3 chunkPos, uint32_t revision);
     void pumpNetwork();
 
     void onSessionConnect(uint32_t sessionId);

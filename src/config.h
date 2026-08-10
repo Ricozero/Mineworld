@@ -120,7 +120,7 @@ struct AppConfig {
     int chunkViewRadiusVertical = 2;
 
     // [spawn]
-    glm::vec3 spawnPosition{0.0f, 2.0f, 0.0f};
+    glm::vec3 spawnPosition{0.0f, 10.0f, 0.0f};
     float spawnYaw = -90.0f;
     float spawnPitch = -12.0f;
 

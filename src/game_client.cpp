@@ -1,10 +1,12 @@
 #include "game_client.h"
 
 #include <algorithm>
+#include <chrono>
 #include <unordered_set>
 
 #include "client_system.h"
 #include "entity.h"
+#include "helper.h"
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
@@ -13,8 +15,10 @@
 namespace {
 
 constexpr float kConnectionTimeoutSeconds = 10.0f;
+constexpr int kMaxChunkUpdatesPerFrame = 2;
+constexpr double kChunkApplyBudgetMilliseconds = 2.0;
 
-}
+}  // namespace
 
 GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
     : renderContext_(renderContext) {
@@ -55,9 +59,8 @@ void GameClient::update(float deltaTime) {
     }
 
     if (state_ == State::Loading) {
-        if (!areCoreChunksLoaded()) {
-            replaySnapshots();
-        }
+        replayEntitySnapshots();
+        applyPendingChunkUpdates();
         if (renderContext_) {
             renderContext_->updateCoreChunkMeshes(world_, coreChunks_);
         }
@@ -65,7 +68,8 @@ void GameClient::update(float deltaTime) {
         return;
     }
 
-    replaySnapshots();
+    replayEntitySnapshots();
+    applyPendingChunkUpdates();
     updateRemoteInterpolation(deltaTime);
     for (auto& system : systems_) {
         system->update(world_, deltaTime);
@@ -127,10 +131,17 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
             }
             break;
         }
-        case Payload::Snapshot: {
-            NetSnapshot snapshot;
-            if (deserializeSnapshot(packet, snapshot)) {
-                snapshotBuffer_.push_back(std::move(snapshot));
+        case Payload::EntitySnapshot: {
+            NetEntitySnapshot snapshot;
+            if (deserializeEntitySnapshot(packet, snapshot)) {
+                entitySnapshotBuffer_.push_back(std::move(snapshot));
+            }
+            break;
+        }
+        case Payload::ChunkUpdate: {
+            NetChunkUpdate update;
+            if (deserializeChunkUpdate(packet, update)) {
+                queueChunkUpdate(std::move(update));
             }
             break;
         }
@@ -251,48 +262,32 @@ void GameClient::sendInputToServer() {
     }
 }
 
-void GameClient::replaySnapshots() {
-    MW_PROFILE_SCOPE("Client.ReplaySnapshots");
+void GameClient::replayEntitySnapshots() {
+    MW_PROFILE_SCOPE("Client.ReplayEntitySnapshots");
 
-    if (snapshotBuffer_.empty()) {
+    if (entitySnapshotBuffer_.empty()) {
         return;
     }
 
-    NetSnapshot snapshot = std::move(snapshotBuffer_.front());
-    snapshotBuffer_.pop_front();
-    if (snapshot.sequence <= lastAppliedSnapshot_) {
+    NetEntitySnapshot snapshot = std::move(entitySnapshotBuffer_.front());
+    entitySnapshotBuffer_.pop_front();
+    if (snapshot.sequence <= lastAppliedEntitySnapshot_) {
         return;
     }
 
-    applySnapshot(snapshot);
-    lastAppliedSnapshot_ = snapshot.sequence;
+    applyEntitySnapshot(snapshot);
+    lastAppliedEntitySnapshot_ = snapshot.sequence;
 }
 
-void GameClient::applySnapshot(const NetSnapshot& snapshot) {
-    MW_PROFILE_SCOPE("Client.ApplySnapshot");
-    MW_PROFILE_COUNTER("Client.SnapshotChunks", static_cast<int64_t>(snapshot.chunks.size()));
-    MW_PROFILE_COUNTER("Client.SnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
-
-    for (const auto& chunk : snapshot.chunks) {
-        if (chunk.loaded) {
-            if (!world_.applyChunkSnapshot(chunk.chunkPos, chunk.blocks)) {
-                logging::warn("Ignoring malformed chunk snapshot at ({}, {}, {}) with {} blocks",
-                              chunk.chunkPos.x, chunk.chunkPos.y, chunk.chunkPos.z, chunk.blocks.size());
-                continue;
-            }
-        } else {
-            world_.unloadChunk(chunk.chunkPos);
-        }
-        if (renderContext_) {
-            renderContext_->invalidateChunkCache(chunk.chunkPos);
-        }
-    }
+void GameClient::applyEntitySnapshot(const NetEntitySnapshot& snapshot) {
+    MW_PROFILE_SCOPE("Client.ApplyEntitySnapshot");
+    MW_PROFILE_COUNTER("Client.EntitySnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
 
     auto& registry = world_.getActorWorld().registry();
-    std::unordered_set<std::string> snapshotActorNames;
-    snapshotActorNames.reserve(snapshot.actors.size());
+    std::unordered_set<std::string> entityNames;
+    entityNames.reserve(snapshot.actors.size());
     for (const auto& actor : snapshot.actors) {
-        snapshotActorNames.insert(actor.name);
+        entityNames.insert(actor.name);
         entt::entity entity = world_.getEntityByName(actor.name);
         if (entity == entt::null) {
             switch (actor.entityType) {
@@ -319,13 +314,97 @@ void GameClient::applySnapshot(const NetSnapshot& snapshot) {
     auto view = registry.view<NameComponent, TransformComponent>(entt::exclude<SessionComponent>);
     for (auto entity : view) {
         const auto& name = view.get<NameComponent>(entity);
-        if (snapshotActorNames.count(name.name) == 0) {
+        if (entityNames.count(name.name) == 0) {
             remoteActorsToDestroy.push_back(entity);
         }
     }
     for (entt::entity entity : remoteActorsToDestroy) {
         world_.destroyEntity(entity);
     }
+}
+
+void GameClient::queueChunkUpdate(NetChunkUpdate update) {
+    auto it = pendingChunkUpdates_.find(update.chunkPos);
+    if (it != pendingChunkUpdates_.end() &&
+        update.operation == NetChunkOperation::Upsert &&
+        it->second.operation == NetChunkOperation::Upsert &&
+        update.revision < it->second.revision) {
+        return;
+    }
+    pendingChunkUpdates_[update.chunkPos] = std::move(update);
+    MW_PROFILE_GAUGE("Client.PendingChunkUpdates", static_cast<double>(pendingChunkUpdates_.size()));
+}
+
+void GameClient::applyPendingChunkUpdates() {
+    MW_PROFILE_SCOPE("Client.ApplyChunkUpdates");
+    if (pendingChunkUpdates_.empty()) {
+        return;
+    }
+
+    std::vector<NetChunkUpdate*> candidates;
+    candidates.reserve(pendingChunkUpdates_.size());
+    for (auto& [chunkPos, update] : pendingChunkUpdates_) {
+        candidates.push_back(&update);
+    }
+
+    glm::ivec3 centerChunk{0};
+    auto& registry = world_.getActorWorld().registry();
+    auto localPlayers = registry.view<SessionComponent, TransformComponent>();
+    for (entt::entity entity : localPlayers) {
+        if (localPlayers.get<SessionComponent>(entity).sessionId == localSessionId_) {
+            centerChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(localPlayers.get<TransformComponent>(entity).position)));
+            break;
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](const NetChunkUpdate* a, const NetChunkUpdate* b) {
+        const bool aCore = isCoreChunk(a->chunkPos);
+        const bool bCore = isCoreChunk(b->chunkPos);
+        if (aCore != bCore) {
+            return aCore;
+        }
+        return ivec3DistanceSq(a->chunkPos, centerChunk) < ivec3DistanceSq(b->chunkPos, centerChunk);
+    });
+
+    const auto start = std::chrono::steady_clock::now();
+    std::vector<glm::ivec3> applied;
+    applied.reserve(kMaxChunkUpdatesPerFrame);
+    for (NetChunkUpdate* update : candidates) {
+        if (applied.size() >= static_cast<size_t>(kMaxChunkUpdatesPerFrame)) {
+            break;
+        }
+        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        if (!applied.empty() && elapsedMs >= kChunkApplyBudgetMilliseconds) {
+            break;
+        }
+
+        bool changed = false;
+        bool handled = false;
+        if (update->operation == NetChunkOperation::Unload) {
+            changed = world_.unloadChunk(update->chunkPos);
+            handled = true;
+        } else if (update->blocks.size() == ChunkData::BLOCK_COUNT) {
+            ChunkData data;
+            data.chunkPos = update->chunkPos;
+            data.revision = update->revision;
+            std::copy(update->blocks.begin(), update->blocks.end(), data.blocks.begin());
+            changed = world_.applyChunkData(data);
+            handled = changed;
+        }
+
+        if (handled && renderContext_) {
+            renderContext_->invalidateChunkCache(update->chunkPos);
+        }
+        applied.push_back(update->chunkPos);
+        MW_PROFILE_COUNTER("Client.ChunkUpdatesApplied", 1);
+    }
+    for (const glm::ivec3& chunkPos : applied) {
+        pendingChunkUpdates_.erase(chunkPos);
+    }
+    MW_PROFILE_GAUGE("Client.PendingChunkUpdates", static_cast<double>(pendingChunkUpdates_.size()));
+}
+
+bool GameClient::isCoreChunk(glm::ivec3 chunkPos) const {
+    return std::find(coreChunks_.begin(), coreChunks_.end(), chunkPos) != coreChunks_.end();
 }
 
 void GameClient::queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor) {
