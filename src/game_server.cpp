@@ -1,11 +1,14 @@
 #include "game_server.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <glm/gtx/hash.hpp>
+#include <optional>
 #include <unordered_set>
 #include <utility>
 
 #include "chunk.h"
+#include "chunk_generator.h"
 #include "config.h"
 #include "entity.h"
 #include "helper.h"
@@ -17,7 +20,8 @@
 namespace {
 
 constexpr int kMaxChunkUpdatesPerTick = 4;
-constexpr float kChunkUnloadDelaySeconds = 3.0f;
+constexpr int kMaxChunkGenerationsPerTick = 8;
+constexpr double kChunkGenerationTimeBudgetMs = 25.0;
 constexpr int kRobotChunkViewRadius = 1;
 constexpr int kCoreChunkRadius = 1;
 
@@ -42,6 +46,25 @@ void forEachChunkInBox(glm::ivec3 center, int radius, Func&& func) {
     for (int dx = -radius; dx <= radius; ++dx) {
         for (int dy = -radius; dy <= radius; ++dy) {
             for (int dz = -radius; dz <= radius; ++dz) {
+                func(center + glm::ivec3(dx, dy, dz));
+            }
+        }
+    }
+}
+
+template <typename Func>
+void forEachChunkInRing(glm::ivec3 center, int horizontalRadius, int verticalRadius, Func&& func) {
+    const int innerRadiusSq = horizontalRadius * horizontalRadius;
+    const int outerRadius = horizontalRadius + 1;
+    const int outerRadiusSq = outerRadius * outerRadius;
+
+    for (int dx = -outerRadius; dx <= outerRadius; ++dx) {
+        for (int dz = -outerRadius; dz <= outerRadius; ++dz) {
+            const int distanceSq = dx * dx + dz * dz;
+            if (distanceSq <= innerRadiusSq || distanceSq > outerRadiusSq) {
+                continue;
+            }
+            for (int dy = -verticalRadius; dy <= verticalRadius; ++dy) {
                 func(center + glm::ivec3(dx, dy, dz));
             }
         }
@@ -79,7 +102,7 @@ void GameServer::update(float deltaTime) {
     for (auto& system : systems_) {
         system->update(world_, deltaTime);
     }
-    updateVisibleChunks(deltaTime);
+    updateChunks();
 
     const float entitySnapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
     for (auto& [sessionId, session] : sessions_) {
@@ -102,45 +125,11 @@ void GameServer::update(float deltaTime) {
 }
 
 entt::entity GameServer::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
-    entt::entity entity = world_.createLocalPlayer(name, sessionId, position, mode);
-    updateVisibleChunks(0.0f);
-    return entity;
+    return world_.createLocalPlayer(name, sessionId, position, mode);
 }
 
 entt::entity GameServer::createRobot(const std::string& name, glm::vec3 position) {
-    entt::entity entity = world_.createRobot(name, position);
-    updateVisibleChunks(0.0f);
-    return entity;
-}
-
-bool GameServer::loadChunk(glm::ivec3 chunkPos) {
-    if (!world_.loadChunk(chunkPos)) {
-        return false;
-    }
-
-    for (auto& [sessionId, session] : sessions_) {
-        if (session.helloReceived && session.cachedVisibleChunks.count(chunkPos) > 0) {
-            queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
-        }
-    }
-    return true;
-}
-
-bool GameServer::unloadChunk(glm::ivec3 chunkPos) {
-    if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-        return false;
-    }
-    const uint32_t revision = world_.getChunk(chunkPos).getRevision();
-    if (!world_.unloadChunk(chunkPos)) {
-        return false;
-    }
-
-    for (auto& [sessionId, session] : sessions_) {
-        if (session.helloReceived) {
-            queueChunkUpdate(session, buildUnloadChunkUpdate(chunkPos, revision));
-        }
-    }
-    return true;
+    return world_.createRobot(name, position);
 }
 
 void GameServer::setBlock(glm::ivec3 worldPos, BlockData blockData) {
@@ -164,42 +153,36 @@ GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
     return inserted->second;
 }
 
-void GameServer::updateSessionVisibleChunks(Session& session) {
-    auto& registry = world_.getActorWorld().registry();
-    auto view = registry.view<SessionComponent, TransformComponent>();
-
-    glm::ivec3 currentChunkPos{INT_MAX, INT_MAX, INT_MAX};
-    for (auto entity : view) {
-        const auto& sessionComp = view.get<SessionComponent>(entity);
-        if (sessionComp.sessionId != session.sessionId) {
-            continue;
-        }
-        currentChunkPos = world_.getActorWorld().getEntityChunk(entity);
-        break;
-    }
-
-    if (currentChunkPos.x == INT_MAX) {
-        return;
-    }
-
-    if (currentChunkPos == session.lastChunkPos && !session.cachedVisibleChunks.empty()) {
-        return;
-    }
-
+void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ChunkManager::DemandMap& demands) {
     session.lastChunkPos = currentChunkPos;
     std::unordered_set<glm::ivec3> nextVisibleChunks;
+    std::unordered_set<glm::ivec3> nextRetentionChunks;
+    const int horizontalRadius = AppConfig::instance().chunkViewRadiusHorizontal;
+    const int verticalRadius = AppConfig::instance().chunkViewRadiusVertical;
 
-    forEachChunkInCylinder(currentChunkPos, AppConfig::instance().chunkViewRadiusHorizontal, AppConfig::instance().chunkViewRadiusVertical, [&](glm::ivec3 chunkPos) {
+    forEachChunkInCylinder(currentChunkPos, horizontalRadius, verticalRadius, [&](glm::ivec3 chunkPos) {
         if (world_.isChunkInBounds(chunkPos)) {
             nextVisibleChunks.insert(chunkPos);
+        }
+    });
+    forEachChunkInRing(currentChunkPos, horizontalRadius, verticalRadius, [&](glm::ivec3 chunkPos) {
+        if (world_.isChunkInBounds(chunkPos)) {
+            nextRetentionChunks.insert(chunkPos);
         }
     });
     if (!session.ready) {
         nextVisibleChunks.insert(session.coreChunks.begin(), session.coreChunks.end());
     }
 
+    for (const glm::ivec3& chunkPos : nextVisibleChunks) {
+        if (session.cachedVisibleChunks.count(chunkPos) == 0) {
+            session.newlyVisibleChunks.insert(chunkPos);
+        }
+    }
+
     for (const glm::ivec3& chunkPos : session.cachedVisibleChunks) {
         if (nextVisibleChunks.count(chunkPos) == 0) {
+            session.newlyVisibleChunks.erase(chunkPos);
             const uint32_t revision = world_.getVoxelWorld().isChunkLoaded(chunkPos) ? world_.getChunk(chunkPos).getRevision() : 0;
             queueChunkUpdate(session, buildUnloadChunkUpdate(chunkPos, revision));
         }
@@ -209,6 +192,22 @@ void GameServer::updateSessionVisibleChunks(Session& session) {
         if (session.cachedVisibleChunks.count(chunkPos) == 0 && world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
             queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
         }
+
+        const glm::ivec3 offset = chunkPos - currentChunkPos;
+        ChunkPriorityClass priorityClass = ChunkPriorityClass::PlayerVisible;
+        if (!session.ready && session.coreChunks.count(chunkPos) > 0) {
+            priorityClass = ChunkPriorityClass::LoadingCore;
+        } else if (session.newlyVisibleChunks.count(chunkPos) > 0) {
+            priorityClass = ChunkPriorityClass::PlayerNew;
+        }
+        demands[chunkPos].addRequester(ChunkPriority{
+            priorityClass,
+            offset.x * offset.x + offset.z * offset.z,
+            std::abs(offset.y),
+        });
+    }
+    for (const glm::ivec3& chunkPos : nextRetentionChunks) {
+        demands[chunkPos].addRetention();
     }
 
     session.cachedVisibleChunks = std::move(nextVisibleChunks);
@@ -220,7 +219,6 @@ NetEntitySnapshot GameServer::buildEntitySnapshot(Session& session) {
     NetEntitySnapshot snapshot;
     snapshot.sequence = ++session.entitySnapshotSequence;
 
-    updateSessionVisibleChunks(session);
     const auto& visibleChunks = session.cachedVisibleChunks;
 
     auto& registry = world_.getActorWorld().registry();
@@ -292,71 +290,113 @@ void GameServer::sendPendingChunkUpdates(Session& session) {
 
 void GameServer::queueChunkUpdate(Session& session, NetChunkUpdate update) {
     const glm::ivec3 chunkPos = update.chunkPos;
+    if (update.operation == NetChunkOperation::Upsert) {
+        session.newlyVisibleChunks.erase(chunkPos);
+    }
     session.pendingChunkUpdates[chunkPos] = std::move(update);
 }
 
-void GameServer::updateVisibleChunks(float deltaTime) {
-    MW_PROFILE_SCOPE("Server.UpdateVisibleChunks");
+void GameServer::updateChunks() {
+    MW_PROFILE_SCOPE("Server.UpdateChunks");
 
-    std::unordered_set<glm::ivec3> desiredChunks;
-
+    ChunkManager::DemandMap demands;
     auto& registry = world_.getActorWorld().registry();
 
-    {
-        auto view = registry.view<SessionComponent, TransformComponent>();
-        for (auto entity : view) {
-            const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
-
-            forEachChunkInCylinder(entityChunk, AppConfig::instance().chunkViewRadiusHorizontal, AppConfig::instance().chunkViewRadiusVertical, [&](glm::ivec3 chunkPos) {
-                if (world_.isChunkInBounds(chunkPos)) {
-                    desiredChunks.insert(chunkPos);
-                }
-            });
+    auto playerView = registry.view<SessionComponent, TransformComponent>();
+    for (auto entity : playerView) {
+        const uint32_t sessionId = playerView.get<SessionComponent>(entity).sessionId;
+        auto sessionIt = sessions_.find(sessionId);
+        if (sessionIt == sessions_.end() || !sessionIt->second.helloReceived) {
+            continue;
         }
+        updateSessionChunkDemand(sessionIt->second, world_.getActorWorld().getEntityChunk(entity), demands);
     }
 
-    {
-        auto view = registry.view<RobotComponent, TransformComponent>();
-        for (auto entity : view) {
-            const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
-
-            forEachChunkInBox(entityChunk, kRobotChunkViewRadius, [&](glm::ivec3 chunkPos) {
-                if (world_.isChunkInBounds(chunkPos)) {
-                    desiredChunks.insert(chunkPos);
-                }
-            });
-        }
-    }
-
-    for (const glm::ivec3& chunkPos : desiredChunks) {
-        chunkUnloadTimers_.erase(chunkPos);
-        loadChunk(chunkPos);
-    }
-
-    std::vector<glm::ivec3> chunksToUnload;
-    world_.getVoxelWorld().forEachLoadedChunk([&](glm::ivec3 chunkPos) {
-        if (desiredChunks.find(chunkPos) == desiredChunks.end()) {
-            float& timer = chunkUnloadTimers_[chunkPos];
-            timer += deltaTime;
-            if (timer >= kChunkUnloadDelaySeconds) {
-                chunksToUnload.push_back(chunkPos);
+    auto robotView = registry.view<RobotComponent, TransformComponent>();
+    for (auto entity : robotView) {
+        const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
+        forEachChunkInBox(entityChunk, kRobotChunkViewRadius, [&](glm::ivec3 chunkPos) {
+            if (!world_.isChunkInBounds(chunkPos)) {
+                return;
             }
-        }
-    });
-
-    for (const glm::ivec3& chunkPos : chunksToUnload) {
-        chunkUnloadTimers_.erase(chunkPos);
-        unloadChunk(chunkPos);
+            const glm::ivec3 offset = chunkPos - entityChunk;
+            demands[chunkPos].addRequester(ChunkPriority{
+                ChunkPriorityClass::Robot,
+                offset.x * offset.x + offset.z * offset.z,
+                std::abs(offset.y),
+            });
+        });
     }
 
-    size_t loadedChunkCount = 0;
-    world_.getVoxelWorld().forEachLoadedChunk([&](glm::ivec3) {
-        ++loadedChunkCount;
-    });
+    const ChunkManager::TimePoint now = ChunkManager::Clock::now();
+    chunkManager_.updateDemands(demands, now);
+    processQueuedChunks();
+    processPendingUnloads(now);
 
+    const size_t loadedChunkCount = chunkManager_.stateCount(ChunkState::Loaded) + chunkManager_.stateCount(ChunkState::UnloadPending);
     MW_PROFILE_GAUGE("Server.LoadedChunks", static_cast<double>(loadedChunkCount));
-    MW_PROFILE_GAUGE("Server.DesiredChunks", static_cast<double>(desiredChunks.size()));
-    MW_PROFILE_GAUGE("Server.PendingUnloadChunks", static_cast<double>(chunkUnloadTimers_.size()));
+    MW_PROFILE_GAUGE("Server.QueuedChunks", static_cast<double>(chunkManager_.stateCount(ChunkState::Queued)));
+    MW_PROFILE_GAUGE("Server.RequestedChunks", static_cast<double>(chunkManager_.requestedChunkCount()));
+    MW_PROFILE_GAUGE("Server.PendingUnloadChunks", static_cast<double>(chunkManager_.stateCount(ChunkState::UnloadPending)));
+}
+
+void GameServer::processQueuedChunks() {
+    const std::vector<glm::ivec3> queuedChunks = chunkManager_.queuedChunks();
+
+    const auto timeBudget = std::chrono::duration<double, std::milli>(kChunkGenerationTimeBudgetMs);
+    const ChunkManager::TimePoint startTime = ChunkManager::Clock::now();
+    int generatedCount = 0;
+
+    for (const glm::ivec3& chunkPos : queuedChunks) {
+        if (generatedCount >= kMaxChunkGenerationsPerTick || ChunkManager::Clock::now() - startTime >= timeBudget) {
+            break;
+        }
+
+        const std::optional<uint64_t> generationId = chunkManager_.beginGeneration(chunkPos);
+        if (!generationId) {
+            continue;
+        }
+
+        ChunkData data = ChunkGenerator::generate(chunkPos);
+        if (!chunkManager_.finishGeneration(chunkPos, *generationId)) {
+            continue;
+        }
+        if (!commitChunkLoad(data, *generationId)) {
+            chunkManager_.failGeneration(chunkPos, *generationId);
+        }
+    }
+}
+
+void GameServer::processPendingUnloads(ChunkManager::TimePoint now) {
+    for (const glm::ivec3& chunkPos : chunkManager_.chunksReadyToUnload(now)) {
+        if (!commitChunkUnload(chunkPos)) {
+            chunkManager_.restoreLoaded(chunkPos);
+        }
+    }
+}
+
+bool GameServer::commitChunkLoad(const ChunkData& data, uint64_t generationId) {
+    if (!world_.loadChunk(data)) {
+        return false;
+    }
+    if (!chunkManager_.commitLoaded(data.chunkPos, generationId)) {
+        world_.unloadChunk(data.chunkPos);
+        return false;
+    }
+
+    for (auto& [sessionId, session] : sessions_) {
+        if (session.helloReceived && session.cachedVisibleChunks.count(data.chunkPos) > 0) {
+            queueChunkUpdate(session, buildUpsertChunkUpdate(data.chunkPos));
+        }
+    }
+    return true;
+}
+
+bool GameServer::commitChunkUnload(glm::ivec3 chunkPos) {
+    if (!chunkManager_.markUnloaded(chunkPos)) {
+        return false;
+    }
+    return !world_.getVoxelWorld().isChunkLoaded(chunkPos) || world_.unloadChunk(chunkPos);
 }
 
 NetChunkUpdate GameServer::buildUpsertChunkUpdate(glm::ivec3 chunkPos) {
@@ -407,7 +447,6 @@ void GameServer::onSessionDisconnect(uint32_t sessionId) {
 
     logging::info("Session {} disconnected", sessionId);
     sessions_.erase(sessionIt);
-    updateVisibleChunks(0.0f);
 }
 
 bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet) {
@@ -475,7 +514,6 @@ bool GameServer::onClientHello(uint32_t sessionId) {
         if (!world_.isChunkInBounds(chunkPos)) {
             return;
         }
-        loadChunk(chunkPos);
         hello.coreChunks.push_back(chunkPos);
         session.coreChunks.insert(chunkPos);
     });
@@ -498,7 +536,6 @@ void GameServer::onClientReady(uint32_t sessionId) {
 
     sessionIt->second.ready = true;
     sessionIt->second.coreChunks.clear();
-    sessionIt->second.lastChunkPos = glm::ivec3(INT_MAX, INT_MAX, INT_MAX);
     logging::info("Session {} is ready", sessionId);
 }
 

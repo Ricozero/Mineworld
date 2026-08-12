@@ -12,16 +12,12 @@ BlockQueryResult ClientWorld::queryBlock(glm::ivec3 worldPos) const {
     return voxelWorld_.queryBlock(worldPos);
 }
 
-bool ClientWorld::loadChunk(glm::ivec3 chunkPos) {
-    return voxelWorld_.loadChunk(chunkPos);
+bool ClientWorld::loadChunk(const ChunkData& data) {
+    return voxelWorld_.loadChunk(data);
 }
 
 bool ClientWorld::unloadChunk(glm::ivec3 chunkPos) {
     return voxelWorld_.unloadChunk(chunkPos);
-}
-
-bool ClientWorld::applyChunkData(const ChunkData& data) {
-    return voxelWorld_.applyChunkData(data);
 }
 
 entt::entity ClientWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {

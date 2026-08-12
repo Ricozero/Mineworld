@@ -387,7 +387,7 @@ void GameClient::applyPendingChunkUpdates() {
             data.chunkPos = update->chunkPos;
             data.revision = update->revision;
             std::copy(update->blocks.begin(), update->blocks.end(), data.blocks.begin());
-            changed = world_.applyChunkData(data);
+            changed = world_.loadChunk(data);
             handled = changed;
         }
 

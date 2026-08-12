@@ -24,11 +24,17 @@ bool VoxelWorld::isChunkLoaded(glm::ivec3 chunkPos) const {
     return chunks_.find(chunkPos) != chunks_.end();
 }
 
-bool VoxelWorld::loadChunk(glm::ivec3 chunkPos) {
-    if (isChunkLoaded(chunkPos)) {
+bool VoxelWorld::loadChunk(const ChunkData& data) {
+    auto it = chunks_.find(data.chunkPos);
+    if (it != chunks_.end()) {
+        return it->second->applyData(data);
+    }
+
+    auto chunk = std::make_unique<Chunk>(data.chunkPos);
+    if (!chunk->applyData(data)) {
         return false;
     }
-    chunks_[chunkPos] = std::make_unique<Chunk>(chunkPos);
+    chunks_.emplace(data.chunkPos, std::move(chunk));
     return true;
 }
 
@@ -39,19 +45,6 @@ bool VoxelWorld::unloadChunk(glm::ivec3 chunkPos) {
     }
     chunks_.erase(it);
     return true;
-}
-
-bool VoxelWorld::applyChunkData(const ChunkData& data) {
-    auto it = chunks_.find(data.chunkPos);
-    if (it == chunks_.end()) {
-        auto chunk = std::make_unique<Chunk>(data.chunkPos);
-        if (!chunk->applyData(data)) {
-            return false;
-        }
-        chunks_.emplace(data.chunkPos, std::move(chunk));
-        return true;
-    }
-    return it->second->applyData(data);
 }
 
 ChunkData VoxelWorld::buildChunkData(glm::ivec3 chunkPos) const {

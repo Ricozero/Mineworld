@@ -24,7 +24,7 @@ public:
     BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
 
-    bool loadChunk(glm::ivec3 chunkPos);
+    bool loadChunk(const ChunkData& data);
     bool unloadChunk(glm::ivec3 chunkPos);
     bool isChunkInBounds(glm::ivec3 chunkPos) const;
 

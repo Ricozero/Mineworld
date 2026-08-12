@@ -15,9 +15,8 @@ public:
     const Chunk& getChunk(glm::ivec3 chunkPos) const;
     bool isChunkLoaded(glm::ivec3 chunkPos) const;
 
-    bool loadChunk(glm::ivec3 chunkPos);
+    bool loadChunk(const ChunkData& data);
     bool unloadChunk(glm::ivec3 chunkPos);
-    bool applyChunkData(const ChunkData& data);
     ChunkData buildChunkData(glm::ivec3 chunkPos) const;
 
     BlockData getBlock(glm::ivec3 worldPos) const;

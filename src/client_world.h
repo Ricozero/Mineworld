@@ -22,9 +22,8 @@ public:
     BlockData getBlock(glm::ivec3 worldPos) const;
     BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
 
-    bool loadChunk(glm::ivec3 chunkPos);
+    bool loadChunk(const ChunkData& data);
     bool unloadChunk(glm::ivec3 chunkPos);
-    bool applyChunkData(const ChunkData& data);
 
     entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
     entt::entity createRemotePlayer(const std::string& name, glm::vec3 position, PlayerMode mode);

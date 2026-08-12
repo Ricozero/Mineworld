@@ -18,14 +18,15 @@ void ServerWorld::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     voxelWorld_.setBlock(worldPos, blockData);
 }
 
-bool ServerWorld::loadChunk(glm::ivec3 chunkPos) {
-    if (!isChunkInBounds(chunkPos) || voxelWorld_.isChunkLoaded(chunkPos)) {
+bool ServerWorld::loadChunk(const ChunkData& data) {
+    if (!isChunkInBounds(data.chunkPos) || voxelWorld_.isChunkLoaded(data.chunkPos) || !voxelWorld_.loadChunk(data)) {
         return false;
     }
-    if (!actorWorld_.loadEntitiesInChunk(chunkPos)) {
+    if (!actorWorld_.loadEntitiesInChunk(data.chunkPos)) {
+        voxelWorld_.unloadChunk(data.chunkPos);
         return false;
     }
-    return voxelWorld_.applyChunkData(ChunkGenerator::generate(chunkPos));
+    return true;
 }
 
 bool ServerWorld::unloadChunk(glm::ivec3 chunkPos) {
