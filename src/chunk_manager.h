@@ -20,8 +20,7 @@ enum class ChunkState : uint8_t {
 
 enum class ChunkPriorityClass : uint8_t {
     LoadingCore,
-    PlayerNew,
-    PlayerVisible,
+    Player,
     Robot,
 };
 

@@ -19,9 +19,10 @@
 
 namespace {
 
-constexpr int kMaxChunkUpdatesPerTick = 4;
-constexpr int kMaxChunkGenerationsPerTick = 8;
-constexpr double kChunkGenerationTimeBudgetMs = 25.0;
+constexpr size_t kMaxChunkUpsertsPerTick = 4;
+constexpr size_t kMaxChunkUpsertBytesPerTick = 64 * 1024;
+constexpr size_t kMaxChunkGenerationsPerTick = 8;
+constexpr double kMaxChunkGenerationTimePerTick = 25.0;
 constexpr int kRobotChunkViewRadius = 1;
 constexpr int kCoreChunkRadius = 1;
 
@@ -105,23 +106,25 @@ void GameServer::update(float deltaTime) {
     updateChunks();
 
     const float entitySnapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
+    size_t pendingChunkUpdateCount = 0;
     for (auto& [sessionId, session] : sessions_) {
         if (!session.helloReceived) {
             continue;
         }
         session.entitySnapshotTimer += deltaTime;
-        if (session.entitySnapshotTimer < entitySnapshotInterval) {
-            continue;
-        }
-        session.entitySnapshotTimer -= entitySnapshotInterval;
+        if (session.entitySnapshotTimer >= entitySnapshotInterval) {
+            session.entitySnapshotTimer -= entitySnapshotInterval;
 
-        const NetEntitySnapshot snapshot = buildEntitySnapshot(session);
-        std::vector<uint8_t> payload = serializeEntitySnapshot(snapshot, session.entitySnapshotBuilder);
-        MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
-        MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
-        netServer_->sendTo(sessionId, payload);
-        sendPendingChunkUpdates(session);
+            const NetEntitySnapshot snapshot = buildEntitySnapshot(session);
+            std::vector<uint8_t> payload = serializeEntitySnapshot(snapshot, session.entitySnapshotBuilder);
+            MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
+            MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
+            netServer_->sendTo(sessionId, payload);
+        }
+        sendChunkUpdates(session);
+        pendingChunkUpdateCount += session.pendingChunkUpdates.size();
     }
+    MW_PROFILE_GAUGE("Server.PendingChunkUpdates", static_cast<double>(pendingChunkUpdateCount));
 }
 
 entt::entity GameServer::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
@@ -174,15 +177,8 @@ void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentCh
         nextVisibleChunks.insert(session.coreChunks.begin(), session.coreChunks.end());
     }
 
-    for (const glm::ivec3& chunkPos : nextVisibleChunks) {
-        if (session.cachedVisibleChunks.count(chunkPos) == 0) {
-            session.newlyVisibleChunks.insert(chunkPos);
-        }
-    }
-
     for (const glm::ivec3& chunkPos : session.cachedVisibleChunks) {
         if (nextVisibleChunks.count(chunkPos) == 0) {
-            session.newlyVisibleChunks.erase(chunkPos);
             const uint32_t revision = world_.getVoxelWorld().isChunkLoaded(chunkPos) ? world_.getChunk(chunkPos).getRevision() : 0;
             queueChunkUpdate(session, buildUnloadChunkUpdate(chunkPos, revision));
         }
@@ -194,11 +190,9 @@ void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentCh
         }
 
         const glm::ivec3 offset = chunkPos - currentChunkPos;
-        ChunkPriorityClass priorityClass = ChunkPriorityClass::PlayerVisible;
+        ChunkPriorityClass priorityClass = ChunkPriorityClass::Player;
         if (!session.ready && session.coreChunks.count(chunkPos) > 0) {
             priorityClass = ChunkPriorityClass::LoadingCore;
-        } else if (session.newlyVisibleChunks.count(chunkPos) > 0) {
-            priorityClass = ChunkPriorityClass::PlayerNew;
         }
         demands[chunkPos].addRequester(ChunkPriority{
             priorityClass,
@@ -254,7 +248,9 @@ NetEntitySnapshot GameServer::buildEntitySnapshot(Session& session) {
     return snapshot;
 }
 
-void GameServer::sendPendingChunkUpdates(Session& session) {
+void GameServer::sendChunkUpdates(Session& session) {
+    MW_PROFILE_SCOPE("Server.SendChunkUpdates");
+
     std::vector<NetChunkUpdate*> candidates;
     candidates.reserve(session.pendingChunkUpdates.size());
     for (auto& [chunkPos, update] : session.pendingChunkUpdates) {
@@ -264,36 +260,60 @@ void GameServer::sendPendingChunkUpdates(Session& session) {
         candidates.push_back(&update);
     }
 
-    std::sort(candidates.begin(), candidates.end(), [&](const NetChunkUpdate* a, const NetChunkUpdate* b) {
-        if (a->operation != b->operation) {
-            return a->operation == NetChunkOperation::Upsert;
+    const auto priority = [&](const NetChunkUpdate& update) {
+        if (session.coreChunks.count(update.chunkPos) > 0) {
+            return 0;
         }
-        return ivec3DistanceSq(a->chunkPos, session.lastChunkPos) < ivec3DistanceSq(b->chunkPos, session.lastChunkPos);
+        if (update.operation == NetChunkOperation::Unload) {
+            return 1;
+        }
+        return 2;
+    };
+
+    std::sort(candidates.begin(), candidates.end(), [&](const NetChunkUpdate* a, const NetChunkUpdate* b) {
+        const int aPriority = priority(*a);
+        const int bPriority = priority(*b);
+        if (aPriority != bPriority) {
+            return aPriority < bPriority;
+        }
+        const int aDistance = ivec3DistanceSq(a->chunkPos, session.lastChunkPos);
+        const int bDistance = ivec3DistanceSq(b->chunkPos, session.lastChunkPos);
+        return aDistance < bDistance;
     });
 
-    std::vector<glm::ivec3> sent;
-    const size_t count = std::min(candidates.size(), static_cast<size_t>(kMaxChunkUpdatesPerTick));
-    sent.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        NetChunkUpdate& update = *candidates[i];
+    std::vector<glm::ivec3> sentChunks;
+    sentChunks.reserve(candidates.size());
+    size_t upsertCount = 0;
+    size_t upsertBytes = 0;
+    for (NetChunkUpdate* candidate : candidates) {
+        NetChunkUpdate& update = *candidate;
+        const bool isUpsert = update.operation == NetChunkOperation::Upsert;
+        if (isUpsert && upsertCount >= kMaxChunkUpsertsPerTick) {
+            continue;
+        }
+
         std::vector<uint8_t> payload = serializeChunkUpdate(update, session.chunkUpdateBuilder);
+        if (isUpsert && upsertBytes + payload.size() > kMaxChunkUpsertBytesPerTick) {
+            continue;
+        }
+
         MW_PROFILE_COUNTER("Server.ChunkUpdatesOut", 1);
+        MW_PROFILE_COUNTER("Server.ChunkUpdateBytesOut", static_cast<int64_t>(payload.size()));
         MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
         netServer_->sendTo(session.sessionId, payload);
-        sent.push_back(update.chunkPos);
+        if (isUpsert) {
+            ++upsertCount;
+            upsertBytes += payload.size();
+        }
+        sentChunks.push_back(update.chunkPos);
     }
-    for (const glm::ivec3& chunkPos : sent) {
+    for (const glm::ivec3& chunkPos : sentChunks) {
         session.pendingChunkUpdates.erase(chunkPos);
     }
-    MW_PROFILE_GAUGE("Server.PendingChunkUpdates", static_cast<double>(session.pendingChunkUpdates.size()));
 }
 
 void GameServer::queueChunkUpdate(Session& session, NetChunkUpdate update) {
-    const glm::ivec3 chunkPos = update.chunkPos;
-    if (update.operation == NetChunkOperation::Upsert) {
-        session.newlyVisibleChunks.erase(chunkPos);
-    }
-    session.pendingChunkUpdates[chunkPos] = std::move(update);
+    session.pendingChunkUpdates[update.chunkPos] = std::move(update);
 }
 
 void GameServer::updateChunks() {
@@ -343,7 +363,7 @@ void GameServer::updateChunks() {
 void GameServer::processQueuedChunks() {
     const std::vector<glm::ivec3> queuedChunks = chunkManager_.queuedChunks();
 
-    const auto timeBudget = std::chrono::duration<double, std::milli>(kChunkGenerationTimeBudgetMs);
+    const auto timeBudget = std::chrono::duration<double, std::milli>(kMaxChunkGenerationTimePerTick);
     const ChunkManager::TimePoint startTime = ChunkManager::Clock::now();
     int generatedCount = 0;
 

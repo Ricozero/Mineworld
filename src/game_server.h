@@ -48,7 +48,6 @@ private:
 
         glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
         std::unordered_set<glm::ivec3> cachedVisibleChunks;
-        std::unordered_set<glm::ivec3> newlyVisibleChunks;
         std::unordered_set<glm::ivec3> coreChunks;
 
         std::unordered_map<glm::ivec3, NetChunkUpdate> pendingChunkUpdates;
@@ -59,7 +58,7 @@ private:
 
     Session& getOrCreateSession(uint32_t sessionId);
     NetEntitySnapshot buildEntitySnapshot(Session& session);
-    void sendPendingChunkUpdates(Session& session);
+    void sendChunkUpdates(Session& session);
     void updateChunks();
     void updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ChunkManager::DemandMap& demands);
     void processQueuedChunks();
