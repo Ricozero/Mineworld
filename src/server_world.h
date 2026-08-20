@@ -3,7 +3,6 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <string>
-#include <vector>
 
 #include "actor_world.h"
 #include "voxel_world.h"
@@ -20,6 +19,7 @@ public:
     const ActorWorld& getActorWorld() const { return actorWorld_; }
 
     Chunk& getChunk(glm::ivec3 chunkPos);
+
     BlockData getBlock(glm::ivec3 worldPos) const;
     BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
@@ -27,8 +27,6 @@ public:
     bool loadChunk(const ChunkData& data);
     bool unloadChunk(glm::ivec3 chunkPos);
     bool isChunkInBounds(glm::ivec3 chunkPos) const;
-
-    std::vector<glm::ivec3> getLoadedChunks() const;
 
     entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
     entt::entity createRobot(const std::string& name, glm::vec3 position);

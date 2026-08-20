@@ -9,54 +9,54 @@
 #include <unordered_map>
 #include <vector>
 
-enum class ChunkState : uint8_t {
-    Unloaded,
-    Queued,
-    Generating,
-    ReadyToCommit,
-    Loaded,
-    UnloadPending,
-};
-
-enum class ChunkPriorityClass : uint8_t {
-    LoadingCore,
-    Player,
-    Robot,
-};
-
-struct ChunkPriority {
-    ChunkPriorityClass priorityClass = ChunkPriorityClass::Robot;
-    int horizontalDistanceSquared = 0;
-    int verticalDistance = 0;
-
-    bool isHigherThan(const ChunkPriority& other) const;
-};
-
-struct ChunkDemand {
-    uint32_t requesterCount = 0;
-    uint32_t retentionCount = 0;
-    std::optional<ChunkPriority> priority;
-
-    void addRequester(ChunkPriority requesterPriority);
-    void addRetention();
-};
-
-class ChunkManager {
+class ServerChunkManager {
 public:
-    using Clock = std::chrono::steady_clock;
-    using TimePoint = Clock::time_point;
-    using DemandMap = std::unordered_map<glm::ivec3, ChunkDemand>;
+    enum class State : uint8_t {
+        Unloaded,
+        Queued,
+        Generating,
+        ReadyToCommit,
+        Loaded,
+        UnloadPending,
+    };
 
-    struct Entry {
-        ChunkState state = ChunkState::Unloaded;
+    enum class PriorityClass : uint8_t {
+        LoadingCore,
+        Player,
+        Robot,
+    };
+
+    struct Priority {
+        PriorityClass priorityClass = PriorityClass::Robot;
+        int horizontalDistanceSquared = 0;
+        int verticalDistance = 0;
+
+        bool isHigherThan(const Priority& other) const;
+    };
+
+    struct Demand {
         uint32_t requesterCount = 0;
         uint32_t retentionCount = 0;
-        ChunkPriority priority;
+        std::optional<Priority> priority;
+
+        void addRequester(Priority requesterPriority);
+        void addRetention();
+    };
+
+    using Clock = std::chrono::steady_clock;
+    using TimePoint = Clock::time_point;
+    using DemandMap = std::unordered_map<glm::ivec3, Demand>;
+
+    struct Entry {
+        State state = State::Unloaded;
+        uint32_t requesterCount = 0;
+        uint32_t retentionCount = 0;
+        Priority priority;
         uint64_t generationId = 0;
         TimePoint unloadTime = TimePoint::max();
     };
 
-    explicit ChunkManager(Clock::duration unloadDelay);
+    explicit ServerChunkManager(Clock::duration unloadDelay);
 
     void updateDemands(const DemandMap& demands, TimePoint now);
 
@@ -70,7 +70,7 @@ public:
     bool markUnloaded(glm::ivec3 chunkPos);
     void restoreLoaded(glm::ivec3 chunkPos);
 
-    size_t stateCount(ChunkState state) const;
+    size_t stateCount(State state) const;
     size_t requestedChunkCount() const;
 
 private:

@@ -288,11 +288,10 @@ bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outU
             return false;
         }
         result.blocks.reserve(ChunkData::BLOCK_COUNT);
-        for (flatbuffers::uoffset_t i = 0; i < static_cast<flatbuffers::uoffset_t>(ChunkData::BLOCK_COUNT); ++i) {
+        for (size_t i = 0; i < ChunkData::BLOCK_COUNT; ++i) {
             const size_t blockOffset = i * NetChunkUpdate::SERIALIZED_BLOCK_SIZE;
-            const BlockType type = static_cast<BlockType>((*blockBytes)[blockOffset + NetChunkUpdate::BLOCK_TYPE_OFFSET]);
-            const BlockOrientation orientation =
-                static_cast<BlockOrientation>((*blockBytes)[blockOffset + NetChunkUpdate::BLOCK_ORIENTATION_OFFSET]);
+            const BlockType type = static_cast<BlockType>((*blockBytes)[static_cast<flatbuffers::uoffset_t>(blockOffset + NetChunkUpdate::BLOCK_TYPE_OFFSET)]);
+            const BlockOrientation orientation = static_cast<BlockOrientation>((*blockBytes)[static_cast<flatbuffers::uoffset_t>(blockOffset + NetChunkUpdate::BLOCK_ORIENTATION_OFFSET)]);
             if (!isValidBlock(type, orientation)) {
                 return false;
             }

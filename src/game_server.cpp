@@ -19,9 +19,9 @@
 
 namespace {
 
-constexpr size_t kMaxChunkUpsertsPerTick = 4;
-constexpr size_t kMaxChunkUpsertBytesPerTick = 64 * 1024;
-constexpr size_t kMaxChunkGenerationsPerTick = 8;
+constexpr size_t kMaxChunkUpsertsPerTick = 16;
+constexpr size_t kMaxChunkUpsertBytesPerTick = 128 * 1024;
+constexpr size_t kMaxChunkGenerationsPerTick = 16;
 constexpr double kMaxChunkGenerationTimePerTick = 25.0;
 constexpr int kRobotChunkViewRadius = 1;
 constexpr int kCoreChunkRadius = 1;
@@ -156,7 +156,7 @@ GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
     return inserted->second;
 }
 
-void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ChunkManager::DemandMap& demands) {
+void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ServerChunkManager::DemandMap& demands) {
     session.lastChunkPos = currentChunkPos;
     std::unordered_set<glm::ivec3> nextVisibleChunks;
     std::unordered_set<glm::ivec3> nextRetentionChunks;
@@ -190,11 +190,11 @@ void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentCh
         }
 
         const glm::ivec3 offset = chunkPos - currentChunkPos;
-        ChunkPriorityClass priorityClass = ChunkPriorityClass::Player;
+        ServerChunkManager::PriorityClass priorityClass = ServerChunkManager::PriorityClass::Player;
         if (!session.ready && session.coreChunks.count(chunkPos) > 0) {
-            priorityClass = ChunkPriorityClass::LoadingCore;
+            priorityClass = ServerChunkManager::PriorityClass::LoadingCore;
         }
-        demands[chunkPos].addRequester(ChunkPriority{
+        demands[chunkPos].addRequester(ServerChunkManager::Priority{
             priorityClass,
             offset.x * offset.x + offset.z * offset.z,
             std::abs(offset.y),
@@ -319,7 +319,7 @@ void GameServer::queueChunkUpdate(Session& session, NetChunkUpdate update) {
 void GameServer::updateChunks() {
     MW_PROFILE_SCOPE("Server.UpdateChunks");
 
-    ChunkManager::DemandMap demands;
+    ServerChunkManager::DemandMap demands;
     auto& registry = world_.getActorWorld().registry();
 
     auto playerView = registry.view<SessionComponent, TransformComponent>();
@@ -340,35 +340,35 @@ void GameServer::updateChunks() {
                 return;
             }
             const glm::ivec3 offset = chunkPos - entityChunk;
-            demands[chunkPos].addRequester(ChunkPriority{
-                ChunkPriorityClass::Robot,
+            demands[chunkPos].addRequester(ServerChunkManager::Priority{
+                ServerChunkManager::PriorityClass::Robot,
                 offset.x * offset.x + offset.z * offset.z,
                 std::abs(offset.y),
             });
         });
     }
 
-    const ChunkManager::TimePoint now = ChunkManager::Clock::now();
+    const ServerChunkManager::TimePoint now = ServerChunkManager::Clock::now();
     chunkManager_.updateDemands(demands, now);
     processQueuedChunks();
     processPendingUnloads(now);
 
-    const size_t loadedChunkCount = chunkManager_.stateCount(ChunkState::Loaded) + chunkManager_.stateCount(ChunkState::UnloadPending);
+    const size_t loadedChunkCount = chunkManager_.stateCount(ServerChunkManager::State::Loaded) + chunkManager_.stateCount(ServerChunkManager::State::UnloadPending);
     MW_PROFILE_GAUGE("Server.LoadedChunks", static_cast<double>(loadedChunkCount));
-    MW_PROFILE_GAUGE("Server.QueuedChunks", static_cast<double>(chunkManager_.stateCount(ChunkState::Queued)));
+    MW_PROFILE_GAUGE("Server.QueuedChunks", static_cast<double>(chunkManager_.stateCount(ServerChunkManager::State::Queued)));
     MW_PROFILE_GAUGE("Server.RequestedChunks", static_cast<double>(chunkManager_.requestedChunkCount()));
-    MW_PROFILE_GAUGE("Server.PendingUnloadChunks", static_cast<double>(chunkManager_.stateCount(ChunkState::UnloadPending)));
+    MW_PROFILE_GAUGE("Server.PendingUnloadChunks", static_cast<double>(chunkManager_.stateCount(ServerChunkManager::State::UnloadPending)));
 }
 
 void GameServer::processQueuedChunks() {
     const std::vector<glm::ivec3> queuedChunks = chunkManager_.queuedChunks();
 
     const auto timeBudget = std::chrono::duration<double, std::milli>(kMaxChunkGenerationTimePerTick);
-    const ChunkManager::TimePoint startTime = ChunkManager::Clock::now();
+    const ServerChunkManager::TimePoint startTime = ServerChunkManager::Clock::now();
     int generatedCount = 0;
 
     for (const glm::ivec3& chunkPos : queuedChunks) {
-        if (generatedCount >= kMaxChunkGenerationsPerTick || ChunkManager::Clock::now() - startTime >= timeBudget) {
+        if (generatedCount >= kMaxChunkGenerationsPerTick || ServerChunkManager::Clock::now() - startTime >= timeBudget) {
             break;
         }
 
@@ -387,7 +387,7 @@ void GameServer::processQueuedChunks() {
     }
 }
 
-void GameServer::processPendingUnloads(ChunkManager::TimePoint now) {
+void GameServer::processPendingUnloads(ServerChunkManager::TimePoint now) {
     for (const glm::ivec3& chunkPos : chunkManager_.chunksReadyToUnload(now)) {
         if (!commitChunkUnload(chunkPos)) {
             chunkManager_.restoreLoaded(chunkPos);

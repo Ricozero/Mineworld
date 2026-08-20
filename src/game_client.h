@@ -4,12 +4,11 @@
 #include <cstdint>
 #include <deque>
 #include <entt/entt.hpp>
-#include <glm/gtx/hash.hpp>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
+#include "client_chunk_manager.h"
 #include "client_world.h"
 #include "net_interface.h"
 #include "net_protocol.h"
@@ -51,30 +50,28 @@ private:
     void pumpNetwork();
     void onServerPacket(const std::vector<uint8_t>& packet);
     void handleServerHello(const NetServerHello& hello);
-    bool areCoreChunksLoaded() const;
     void tryEnterRunning();
     void fail(std::string reason);
     void sendInputToServer();
     void replayEntitySnapshots();
     void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
-    void queueChunkUpdate(NetChunkUpdate update);
-    void applyPendingChunkUpdates();
-    bool isCoreChunk(glm::ivec3 chunkPos) const;
+    void applyChunkUpdate(const NetChunkUpdate& update);
+    void rebuildChunkMeshes();
+    ClientChunkManager::MeshFocus localPlayerMeshFocus() const;
     void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
 
     ClientWorld world_;
+    ClientChunkManager chunkManager_{world_};
     std::vector<std::unique_ptr<common_system::BaseSystem<ClientWorld>>> systems_;
     uint32_t localSessionId_ = 0;
     State state_ = State::Connecting;
     std::string failureReason_;
-    std::vector<glm::ivec3> coreChunks_;
     float secondsSincePacket_ = 0.0f;
 
     asio::io_context ioContext_;
     std::unique_ptr<INetClient> netClient_;
     std::deque<NetEntitySnapshot> entitySnapshotBuffer_;
-    std::unordered_map<glm::ivec3, NetChunkUpdate> pendingChunkUpdates_;
     uint32_t lastAppliedEntitySnapshot_ = 0;
     RenderContext* renderContext_ = nullptr;
     bool helloPending_ = true;

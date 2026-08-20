@@ -11,9 +11,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "chunk_manager.h"
 #include "net_interface.h"
 #include "net_protocol.h"
+#include "server_chunk_manager.h"
 #include "server_world.h"
 
 namespace common_system {
@@ -60,9 +60,9 @@ private:
     NetEntitySnapshot buildEntitySnapshot(Session& session);
     void sendChunkUpdates(Session& session);
     void updateChunks();
-    void updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ChunkManager::DemandMap& demands);
+    void updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ServerChunkManager::DemandMap& demands);
     void processQueuedChunks();
-    void processPendingUnloads(ChunkManager::TimePoint now);
+    void processPendingUnloads(ServerChunkManager::TimePoint now);
     bool commitChunkLoad(const ChunkData& data, uint64_t generationId);
     bool commitChunkUnload(glm::ivec3 chunkPos);
     void queueChunkUpdate(Session& session, NetChunkUpdate update);
@@ -78,7 +78,7 @@ private:
     void onClientReady(uint32_t sessionId);
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
 
-    ChunkManager chunkManager_{std::chrono::seconds(3)};
+    ServerChunkManager chunkManager_{std::chrono::seconds(3)};
     ServerWorld world_;
     std::vector<std::unique_ptr<common_system::BaseSystem<ServerWorld>>> systems_;
 

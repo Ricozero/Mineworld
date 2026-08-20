@@ -19,6 +19,8 @@ public:
     const ActorWorld& getActorWorld() const { return actorWorld_; }
 
     Chunk& getChunk(glm::ivec3 chunkPos);
+    bool isChunkLoaded(glm::ivec3 chunkPos) const;
+
     BlockData getBlock(glm::ivec3 worldPos) const;
     BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
 

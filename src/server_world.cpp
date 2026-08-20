@@ -40,10 +40,6 @@ bool ServerWorld::isChunkInBounds(glm::ivec3 chunkPos) const {
     return ChunkGenerator::isChunkInBounds(chunkPos);
 }
 
-std::vector<glm::ivec3> ServerWorld::getLoadedChunks() const {
-    return voxelWorld_.getLoadedChunks();
-}
-
 entt::entity ServerWorld::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
     return actorWorld_.createLocalPlayer(name, sessionId, position, mode);
 }

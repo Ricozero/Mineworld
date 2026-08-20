@@ -20,6 +20,8 @@
 #include <vector>
 
 #include "chunk.h"
+#include "chunk_mesh.h"
+#include "client_chunk_manager.h"
 #include "client_world.h"
 #include "config.h"
 #include "entity.h"
@@ -38,11 +40,8 @@ constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
 constexpr size_t kBoxVertexCount = 24;
 constexpr size_t kBoxIndexCount = 36;
-constexpr int kMaxChunkMeshRebuildsPerFrame = 2;
 constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
 constexpr size_t kPlayerModelIndexCount = kBoxIndexCount * 2;
-constexpr size_t kMaxBatchVertices = UINT16_MAX;
-constexpr size_t kMaxBatchIndices = UINT16_MAX;
 
 uint32_t bgfxResetFlags() {
     return AppConfig::instance().vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
@@ -69,152 +68,6 @@ struct MeshBuilder {
     std::vector<PosColorVertex> vertices;
     std::vector<uint16_t> indices;
 };
-
-struct Face {
-    glm::ivec3 normal;
-    std::array<glm::vec3, 4> corners;
-    float shade;
-};
-
-const std::array<Face, 6> kFaces = {{
-    {glm::ivec3(1, 0, 0), {glm::vec3(1, 0, 0), glm::vec3(1, 1, 0), glm::vec3(1, 1, 1), glm::vec3(1, 0, 1)}, 0.82f},
-    {glm::ivec3(-1, 0, 0), {glm::vec3(0, 0, 1), glm::vec3(0, 1, 1), glm::vec3(0, 1, 0), glm::vec3(0, 0, 0)}, 0.72f},
-    {glm::ivec3(0, 1, 0), {glm::vec3(0, 1, 1), glm::vec3(1, 1, 1), glm::vec3(1, 1, 0), glm::vec3(0, 1, 0)}, 1.0f},
-    {glm::ivec3(0, -1, 0), {glm::vec3(0, 0, 0), glm::vec3(1, 0, 0), glm::vec3(1, 0, 1), glm::vec3(0, 0, 1)}, 0.55f},
-    {glm::ivec3(0, 0, 1), {glm::vec3(1, 0, 1), glm::vec3(1, 1, 1), glm::vec3(0, 1, 1), glm::vec3(0, 0, 1)}, 0.9f},
-    {glm::ivec3(0, 0, -1), {glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::vec3(1, 1, 0), glm::vec3(1, 0, 0)}, 0.65f},
-}};
-
-glm::vec3 blockColor(BlockType type) {
-    switch (type) {
-        case BlockType::Stone:
-            return glm::vec3(0.48f, 0.50f, 0.53f);
-        case BlockType::Dirt:
-            return glm::vec3(0.26f, 0.17f, 0.10f);
-        case BlockType::Grass:
-            return glm::vec3(0.24f, 0.58f, 0.22f);
-        case BlockType::Wood:
-            return glm::vec3(0.50f, 0.31f, 0.14f);
-        case BlockType::Leaves:
-            return glm::vec3(0.16f, 0.45f, 0.18f);
-        case BlockType::Water:
-            return glm::vec3(0.20f, 0.42f, 0.85f);
-        case BlockType::Sand:
-            return glm::vec3(0.78f, 0.68f, 0.42f);
-        case BlockType::Air:
-            return glm::vec3(0.0f);
-    }
-    return glm::vec3(1.0f, 0.0f, 1.0f);
-}
-
-uint32_t packColor(glm::vec3 color) {
-    color = glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
-    const uint32_t r = static_cast<uint32_t>(color.r * 255.0f);
-    const uint32_t g = static_cast<uint32_t>(color.g * 255.0f);
-    const uint32_t b = static_cast<uint32_t>(color.b * 255.0f);
-    return 0xff000000u | (b << 16) | (g << 8) | r;
-}
-
-constexpr int kOppositeFace[6] = {1, 0, 3, 2, 5, 4};
-
-constexpr glm::ivec3 kNeighborOffsets[6] = {
-    {1, 0, 0},
-    {-1, 0, 0},
-    {0, 1, 0},
-    {0, -1, 0},
-    {0, 0, 1},
-    {0, 0, -1},
-};
-
-inline int bitIndex(int faceA, int faceB) {
-    if (faceA > faceB) {
-        std::swap(faceA, faceB);
-    }
-    return faceA * 6 + faceB;
-}
-
-inline bool faceConnected(ChunkFaceConnectivity mask, int faceA, int faceB) {
-    if (faceA == faceB) {
-        return false;
-    }
-    return (mask & (ChunkFaceConnectivity{1} << bitIndex(faceA, faceB))) != 0;
-}
-
-ChunkFaceConnectivity computeFaceConnectivity(const Chunk& chunk) {
-    constexpr int S = ChunkData::SIZE;
-
-    std::array<uint8_t, S * S * S> air{};
-    for (int x = 0; x < S; ++x)
-        for (int y = 0; y < S; ++y)
-            for (int z = 0; z < S; ++z)
-                air[x * S * S + y * S + z] =
-                    (chunk.getBlock({x, y, z}).type == BlockType::Air) ? 1u : 0u;
-
-    uint8_t reachable[6] = {};
-    std::array<uint8_t, S * S * S> visited{};
-    std::queue<int> q;
-
-    for (int startFace = 0; startFace < 6; ++startFace) {
-        std::fill(visited.begin(), visited.end(), 0);
-        q = {};
-
-        auto enqueue = [&](int x, int y, int z) {
-            int idx = x * S * S + y * S + z;
-            if (air[idx] && !visited[idx]) {
-                visited[idx] = 1;
-                q.push(idx);
-            }
-        };
-
-        for (int a = 0; a < S; ++a) {
-            for (int b = 0; b < S; ++b) {
-                switch (startFace) {
-                    case 0: enqueue(S - 1, a, b); break;
-                    case 1: enqueue(0, a, b); break;
-                    case 2: enqueue(a, S - 1, b); break;
-                    case 3: enqueue(a, 0, b); break;
-                    case 4: enqueue(a, b, S - 1); break;
-                    case 5: enqueue(a, b, 0); break;
-                }
-            }
-        }
-
-        while (!q.empty()) {
-            int idx = q.front();
-            q.pop();
-            int x = idx / (S * S);
-            int y = (idx / S) % S;
-            int z = idx % S;
-
-            if (x == S - 1) reachable[startFace] |= (1 << 0);
-            if (x == 0) reachable[startFace] |= (1 << 1);
-            if (y == S - 1) reachable[startFace] |= (1 << 2);
-            if (y == 0) reachable[startFace] |= (1 << 3);
-            if (z == S - 1) reachable[startFace] |= (1 << 4);
-            if (z == 0) reachable[startFace] |= (1 << 5);
-
-            const int dx[] = {1, -1, 0, 0, 0, 0};
-            const int dy[] = {0, 0, 1, -1, 0, 0};
-            const int dz[] = {0, 0, 0, 0, 1, -1};
-            for (int d = 0; d < 6; ++d) {
-                int nx = x + dx[d], ny = y + dy[d], nz = z + dz[d];
-                if (nx < 0 || nx >= S || ny < 0 || ny >= S || nz < 0 || nz >= S) continue;
-                int nidx = nx * S * S + ny * S + nz;
-                if (air[nidx] && !visited[nidx]) {
-                    visited[nidx] = 1;
-                    q.push(nidx);
-                }
-            }
-        }
-    }
-
-    ChunkFaceConnectivity mask = 0;
-    for (int from = 0; from < 6; ++from)
-        for (int to = from + 1; to < 6; ++to)
-            if ((reachable[from] >> to) & 1)
-                mask |= ChunkFaceConnectivity{1} << bitIndex(from, to);
-    return mask;
-}
 
 struct Frustum {
     glm::vec4 planes[6];  // left, right, bottom, top, near, far
@@ -255,7 +108,7 @@ struct Frustum {
 };
 
 void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::vec3 color) {
-    if (mesh.vertices.size() > kMaxBatchVertices - 4) {
+    if (mesh.vertices.size() > kMaxMeshVertices - 4) {
         return;
     }
 
@@ -351,7 +204,7 @@ void addPlayerModel(MeshBuilder& mesh, const TransformComponent& transform, glm:
 }
 
 void addLineBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color) {
-    if (mesh.vertices.size() > kMaxBatchVertices - 8) {
+    if (mesh.vertices.size() > kMaxMeshVertices - 8) {
         return;
     }
 
@@ -397,7 +250,7 @@ void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
     }
     const uint32_t vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     const uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
-    if (vertexCount > kMaxBatchVertices || indexCount > kMaxBatchIndices) {
+    if (vertexCount > kMaxMeshVertices || indexCount > kMaxMeshIndices) {
         return;
     }
     if (bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout) >= vertexCount &&
@@ -416,9 +269,9 @@ void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
         bgfx::setIndexBuffer(&indexBuffer);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_PT_LINES);
         bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex});
-        MW_PROFILE_COUNTER("Client.Render.LineSubmits", 1);
-        MW_PROFILE_COUNTER("Client.Render.LineVertices", static_cast<int64_t>(vertexCount));
-        MW_PROFILE_COUNTER("Client.Render.LineIndices", static_cast<int64_t>(indexCount));
+        MW_PROFILE_COUNTER("Render.LineSubmits", 1);
+        MW_PROFILE_COUNTER("Render.LineVertices", static_cast<int64_t>(vertexCount));
+        MW_PROFILE_COUNTER("Render.LineIndices", static_cast<int64_t>(indexCount));
     }
 }
 
@@ -495,7 +348,7 @@ void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
     }
     const uint32_t vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     const uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
-    if (vertexCount > kMaxBatchVertices || indexCount > kMaxBatchIndices) {
+    if (vertexCount > kMaxMeshVertices || indexCount > kMaxMeshIndices) {
         return;
     }
     if (bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout) >= vertexCount &&
@@ -514,89 +367,13 @@ void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
         bgfx::setIndexBuffer(&indexBuffer);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
         bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex});
-        MW_PROFILE_COUNTER("Client.Render.MeshSubmits", 1);
-        MW_PROFILE_COUNTER("Client.Render.MeshVertices", static_cast<int64_t>(vertexCount));
-        MW_PROFILE_COUNTER("Client.Render.MeshIndices", static_cast<int64_t>(indexCount));
+        MW_PROFILE_COUNTER("Render.MeshSubmits", 1);
+        MW_PROFILE_COUNTER("Render.MeshVertices", static_cast<int64_t>(vertexCount));
+        MW_PROFILE_COUNTER("Render.MeshIndices", static_cast<int64_t>(indexCount));
     }
 }
 
 }  // namespace
-
-bool ChunkMeshCache::contains(glm::ivec3 chunkPos) const {
-    return entries_.count(chunkPos) > 0;
-}
-
-bool ChunkMeshCache::isReady(glm::ivec3 chunkPos) const {
-    return contains(chunkPos) && dirtyChunks_.count(chunkPos) == 0;
-}
-
-const ChunkMeshCache::Entry* ChunkMeshCache::get(glm::ivec3 chunkPos) const {
-    auto it = entries_.find(chunkPos);
-    return it != entries_.end() ? &it->second : nullptr;
-}
-
-void ChunkMeshCache::put(glm::ivec3 chunkPos, size_t blockCount, Entry entry) {
-    blockCounts_[chunkPos] = blockCount;
-    entries_[chunkPos] = std::move(entry);
-    dirtyChunks_.erase(chunkPos);
-}
-
-void ChunkMeshCache::markDirty(glm::ivec3 chunkPos) {
-    dirtyChunks_.insert(chunkPos);
-}
-
-void ChunkMeshCache::invalidate(glm::ivec3 chunkPos) {
-    entries_.erase(chunkPos);
-    blockCounts_.erase(chunkPos);
-    dirtyChunks_.erase(chunkPos);
-}
-
-void ChunkMeshCache::evictStale(const std::vector<glm::ivec3>& loadedChunks) {
-    std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
-    std::vector<glm::ivec3> toRemove;
-    toRemove.reserve(entries_.size());
-    for (const auto& [pos, _] : entries_) {
-        if (!loadedSet.count(pos)) {
-            toRemove.push_back(pos);
-        }
-    }
-    for (const glm::ivec3& pos : toRemove) {
-        invalidate(pos);
-    }
-
-    std::vector<glm::ivec3> dirtyToRemove;
-    dirtyToRemove.reserve(dirtyChunks_.size());
-    for (const glm::ivec3& pos : dirtyChunks_) {
-        if (!loadedSet.count(pos)) {
-            dirtyToRemove.push_back(pos);
-        }
-    }
-    for (const glm::ivec3& pos : dirtyToRemove) {
-        dirtyChunks_.erase(pos);
-    }
-}
-
-bool ChunkMeshCache::needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount, const std::unordered_map<glm::ivec3, size_t>& currentCounts) const {
-    auto countIt = blockCounts_.find(chunkPos);
-    if (dirtyChunks_.count(chunkPos) > 0) {
-        return true;
-    }
-    if (countIt == blockCounts_.end() || countIt->second != currentBlockCount || !contains(chunkPos)) {
-        return true;
-    }
-
-    for (const glm::ivec3& off : kNeighborOffsets) {
-        const glm::ivec3 neighbor = chunkPos + off;
-        auto prevIt = blockCounts_.find(neighbor);
-        auto currIt = currentCounts.find(neighbor);
-        if (prevIt != blockCounts_.end() && currIt != currentCounts.end()) {
-            if (prevIt->second != currIt->second) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
 
 RenderContext::~RenderContext() {
     shutdown();
@@ -1006,12 +783,11 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
     }
 }
 
-void RenderContext::render(const ClientWorld& world) {
+void RenderContext::render(const ClientWorld& world, const ClientChunkManager& chunkManager) {
     if (!window_ || !bgfxInitialized_) {
         return;
     }
 
-    // Compute deltaTime internally
     const auto now = std::chrono::steady_clock::now();
     float deltaTime = 1.0f / 60.0f;
     if (hasLastRenderTime_) {
@@ -1043,7 +819,7 @@ void RenderContext::render(const ClientWorld& world) {
     bgfx::setViewTransform(kMainView, view, projection);
     bgfx::touch(kMainView);
 
-    renderWorld(world);
+    renderWorld(world, chunkManager);
 
     recordBgfxStats(bgfx::getStats());
 
@@ -1072,7 +848,7 @@ void RenderContext::render(const ClientWorld& world) {
     }
 
     {
-        MW_PROFILE_SCOPE("Client.Render.BgfxFrame");
+        MW_PROFILE_SCOPE("Render.BgfxFrame");
         bgfx::frame();
     }
 }
@@ -1104,50 +880,6 @@ RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
     const InGameMenuAction action = pendingInGameMenuAction_;
     pendingInGameMenuAction_ = InGameMenuAction::None;
     return action;
-}
-
-void RenderContext::invalidateChunkCache(glm::ivec3 chunkPos) {
-    MW_PROFILE_COUNTER("Client.Render.CacheInvalidations", 1);
-
-    chunkMeshCache_.markDirty(chunkPos);
-    for (const glm::ivec3& off : kNeighborOffsets) {
-        chunkMeshCache_.markDirty(chunkPos + off);
-    }
-}
-
-void RenderContext::updateCoreChunkMeshes(const ClientWorld& world, const std::vector<glm::ivec3>& coreChunks) {
-    MW_PROFILE_SCOPE("Client.Render.BuildCoreChunkMeshes");
-
-    const VoxelWorld& voxelWorld = world.getVoxelWorld();
-    const auto loadedChunks = voxelWorld.getLoadedChunks();
-    chunkMeshCache_.evictStale(loadedChunks);
-
-    std::unordered_map<glm::ivec3, size_t> currentCounts;
-    currentCounts.reserve(loadedChunks.size());
-    for (const glm::ivec3& chunkPos : loadedChunks) {
-        currentCounts[chunkPos] = voxelWorld.getChunk(chunkPos).getBlockCount();
-    }
-
-    int meshRebuilds = 0;
-    for (const glm::ivec3& chunkPos : coreChunks) {
-        auto countIt = currentCounts.find(chunkPos);
-        if (countIt == currentCounts.end() || !chunkMeshCache_.needsRebuild(chunkPos, countIt->second, currentCounts)) {
-            continue;
-        }
-        if (meshRebuilds >= kMaxChunkMeshRebuildsPerFrame) {
-            break;
-        }
-
-        ChunkMeshCache::Entry entry;
-        buildChunkMesh(world, chunkPos, entry);
-        chunkMeshCache_.put(chunkPos, countIt->second, std::move(entry));
-        ++meshRebuilds;
-        MW_PROFILE_COUNTER("Client.Render.MeshRebuilds", 1);
-    }
-}
-
-bool RenderContext::isChunkMeshReady(glm::ivec3 chunkPos) const {
-    return chunkMeshCache_.isReady(chunkPos);
 }
 
 bool RenderContext::loadShaders() {
@@ -1280,67 +1012,20 @@ void RenderContext::shutdownImGui() {
     }
 }
 
-void RenderContext::renderWorld(const ClientWorld& world) {
-    MW_PROFILE_SCOPE("Client.Render.World");
+void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManager& chunkManager) {
+    MW_PROFILE_SCOPE("Render.World");
 
     const VoxelWorld& voxelWorld = world.getVoxelWorld();
-    const auto loadedChunks = voxelWorld.getLoadedChunks();
+    std::vector<glm::ivec3> loadedChunks;
+    voxelWorld.forEachLoadedChunk([&](glm::ivec3 chunkPos) {
+        loadedChunks.push_back(chunkPos);
+    });
     MW_PROFILE_GAUGE("Render.LoadedChunks", static_cast<double>(loadedChunks.size()));
-
-    chunkMeshCache_.evictStale(loadedChunks);
-
-    {
-        MW_PROFILE_SCOPE("Client.Render.World.BuildChunkMesh");
-
-        // Build/update cached meshes per chunk (only when dirty)
-        std::unordered_map<glm::ivec3, size_t> currentCounts;
-        currentCounts.reserve(loadedChunks.size());
-        for (const glm::ivec3& chunkPos : loadedChunks) {
-            currentCounts[chunkPos] = voxelWorld.getChunk(chunkPos).getBlockCount();
-        }
-
-        const glm::ivec3 cameraChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
-        std::vector<glm::ivec3> rebuildCandidates;
-        rebuildCandidates.reserve(loadedChunks.size());
-        for (const glm::ivec3& chunkPos : loadedChunks) {
-            const size_t blockCount = currentCounts[chunkPos];
-            if (chunkMeshCache_.needsRebuild(chunkPos, blockCount, currentCounts)) {
-                rebuildCandidates.push_back(chunkPos);
-            }
-        }
-
-        std::sort(rebuildCandidates.begin(), rebuildCandidates.end(), [&](glm::ivec3 a, glm::ivec3 b) {
-            const bool aMissing = !chunkMeshCache_.contains(a);
-            const bool bMissing = !chunkMeshCache_.contains(b);
-            if (aMissing != bMissing) {
-                return aMissing;
-            }
-            return ivec3DistanceSq(a, cameraChunk) < ivec3DistanceSq(b, cameraChunk);
-        });
-
-        int meshRebuildsThisFrame = 0;
-        int meshRebuildBacklog = 0;
-        for (const glm::ivec3& chunkPos : rebuildCandidates) {
-            const size_t blockCount = currentCounts[chunkPos];
-            if (meshRebuildsThisFrame >= kMaxChunkMeshRebuildsPerFrame) {
-                ++meshRebuildBacklog;
-                continue;
-            }
-            ChunkMeshCache::Entry entry;
-            buildChunkMesh(world, chunkPos, entry);
-            ++meshRebuildsThisFrame;
-            MW_PROFILE_COUNTER("Client.Render.MeshRebuilds", 1);
-            MW_PROFILE_COUNTER("Client.Render.MeshBuildVertices", static_cast<int64_t>(entry.vertexCount));
-            MW_PROFILE_COUNTER("Client.Render.MeshBuildIndices", static_cast<int64_t>(entry.indices.size()));
-            chunkMeshCache_.put(chunkPos, blockCount, std::move(entry));
-        }
-        MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkMeshCache_.size()));
-        MW_PROFILE_GAUGE("Render.MeshRebuildBacklog", static_cast<double>(meshRebuildBacklog));
-    }
+    MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkManager.meshCount()));
 
     std::unordered_set<glm::ivec3> visibleChunks;
     {
-        MW_PROFILE_SCOPE("Client.Render.World.ChunkCulling");
+        MW_PROFILE_SCOPE("Render.World.ChunkCulling");
 
         // Frustum culling
         const glm::vec3 camTarget = cameraPosition_ + forward();
@@ -1400,13 +1085,13 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             reachableChunks.insert(node.pos);
 
             ChunkFaceConnectivity conn = ~0u;
-            if (const ChunkMeshCache::Entry* e = chunkMeshCache_.get(node.pos)) {
+            if (const ChunkMesh* e = chunkManager.getMesh(node.pos)) {
                 conn = e->faceConnectivity;
             }
 
             for (int outFace = 0; outFace < 6; ++outFace) {
-                if (node.inFace >= 0 && !faceConnected(conn, node.inFace, outFace)) continue;
-                enqueueChunk(node.pos + kNeighborOffsets[outFace], kOppositeFace[outFace]);
+                if (node.inFace >= 0 && !chunkFacesConnected(conn, node.inFace, outFace)) continue;
+                enqueueChunk(node.pos + kChunkFaceOffsets[outFace], kOppositeChunkFace[outFace]);
             }
         }
 
@@ -1427,22 +1112,22 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     currentBatch.indices.reserve(12288);
 
     {
-        MW_PROFILE_SCOPE("Client.Render.World.SubmitChunkMesh");
+        MW_PROFILE_SCOPE("Render.World.SubmitChunkMesh");
 
         for (const glm::ivec3& chunkPos : loadedChunks) {
             if (!visibleChunks.count(chunkPos)) continue;
 
-            const ChunkMeshCache::Entry* cached = chunkMeshCache_.get(chunkPos);
+            const ChunkMesh* cached = chunkManager.getMesh(chunkPos);
             if (!cached || cached->vertexCount == 0 || cached->indices.empty()) {
                 continue;
             }
 
-            if (cached->vertexCount > kMaxBatchVertices || cached->indices.size() > kMaxBatchIndices) {
+            if (cached->vertexCount > kMaxMeshVertices || cached->indices.size() > kMaxMeshIndices) {
                 continue;
             }
 
-            if (currentBatch.vertices.size() + cached->vertexCount > kMaxBatchVertices ||
-                currentBatch.indices.size() + cached->indices.size() > kMaxBatchIndices) {
+            if (currentBatch.vertices.size() + cached->vertexCount > kMaxMeshVertices ||
+                currentBatch.indices.size() + cached->indices.size() > kMaxMeshIndices) {
                 submitMeshBatch(currentBatch, worldShader_.program);
                 currentBatch.vertices.clear();
                 currentBatch.indices.clear();
@@ -1469,7 +1154,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     }
 
     {
-        MW_PROFILE_SCOPE("Client.Render.World.Entities");
+        MW_PROFILE_SCOPE("Render.World.Entities");
 
         const auto& registry = world.getActorWorld().registry();
         auto view = registry.view<TransformComponent, MeshComponent>();
@@ -1483,8 +1168,8 @@ void RenderContext::renderWorld(const ClientWorld& world) {
             const bool actorModel = registry.all_of<PlayerComponent>(entity) || registry.all_of<RobotComponent>(entity);
             const size_t requiredVertices = actorModel ? kPlayerModelVertexCount : kBoxVertexCount;
             const size_t requiredIndices = actorModel ? kPlayerModelIndexCount : kBoxIndexCount;
-            if (currentBatch.vertices.size() + requiredVertices > kMaxBatchVertices ||
-                currentBatch.indices.size() + requiredIndices > kMaxBatchIndices) {
+            if (currentBatch.vertices.size() + requiredVertices > kMaxMeshVertices ||
+                currentBatch.indices.size() + requiredIndices > kMaxMeshIndices) {
                 submitMeshBatch(currentBatch, worldShader_.program);
                 currentBatch.vertices.clear();
                 currentBatch.indices.clear();
@@ -1503,7 +1188,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
     }
 
     {
-        MW_PROFILE_SCOPE("Client.Render.World.ChunkBounds");
+        MW_PROFILE_SCOPE("Render.World.ChunkBounds");
 
         if (showChunkBounds_) {
             MeshBuilder lineBatch;
@@ -1519,7 +1204,7 @@ void RenderContext::renderWorld(const ClientWorld& world) {
 }
 
 void RenderContext::renderProfilerOverlay() {
-    MW_PROFILE_SCOPE("Client.Render.Profiler");
+    MW_PROFILE_SCOPE("Render.Profiler");
 
     const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot();
 
@@ -1661,7 +1346,7 @@ void RenderContext::renderProfilerOverlay() {
 }
 
 void RenderContext::renderInGameMenu() {
-    MW_PROFILE_SCOPE("Client.Render.Menu");
+    MW_PROFILE_SCOPE("Render.Menu");
 
     ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(260.0f, 0.0f), ImGuiCond_Always);
@@ -1681,7 +1366,7 @@ void RenderContext::renderInGameMenu() {
 }
 
 void RenderContext::renderCursorOverlay() {
-    MW_PROFILE_SCOPE("Client.Render.Cursor");
+    MW_PROFILE_SCOPE("Render.Cursor");
     ImDrawList* drawList = ImGui::GetBackgroundDrawList();
     const ImVec2 center(static_cast<float>(windowWidth_) * 0.5f, static_cast<float>(windowHeight_) * 0.5f);
 
@@ -1808,68 +1493,6 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
             bgfx::submit(kImGuiView, program);
         }
     }
-}
-
-void RenderContext::buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, ChunkMeshCache::Entry& outMesh) {
-    const VoxelWorld& voxelWorld = world.getVoxelWorld();
-    const Chunk& chunk = voxelWorld.getChunk(chunkPos);
-
-    std::vector<PosColorVertex> vertices;
-    std::vector<uint16_t> indices;
-    vertices.reserve(1024);
-    indices.reserve(1536);
-
-    for (int x = 0; x < ChunkData::SIZE; ++x) {
-        for (int y = 0; y < ChunkData::SIZE; ++y) {
-            for (int z = 0; z < ChunkData::SIZE; ++z) {
-                const glm::ivec3 localPos(x, y, z);
-                const BlockData block = chunk.getBlock(localPos);
-                if (block.type == BlockType::Air) {
-                    continue;
-                }
-
-                const glm::ivec3 worldPos = chunk.localToWorld(localPos);
-                const glm::vec3 baseColor = blockColor(block.type);
-                for (const Face& face : kFaces) {
-                    // Face culling
-                    if (world.getBlock(worldPos + face.normal).type != BlockType::Air) {
-                        continue;
-                    }
-
-                    if (vertices.size() > kMaxBatchVertices - 4 || indices.size() > kMaxBatchIndices - 6) {
-                        goto done;
-                    }
-
-                    const auto start = static_cast<uint16_t>(vertices.size());
-                    const uint32_t packedColor = packColor(baseColor * face.shade);
-                    for (const glm::vec3& corner : face.corners) {
-                        glm::vec3 pos = glm::vec3(worldPos) + corner;
-                        vertices.push_back(PosColorVertex{pos.x, pos.y, pos.z, packedColor});
-                    }
-                    indices.push_back(start + 0);
-                    indices.push_back(start + 1);
-                    indices.push_back(start + 2);
-                    indices.push_back(start + 0);
-                    indices.push_back(start + 2);
-                    indices.push_back(start + 3);
-                }
-            }
-        }
-    }
-done:
-
-    outMesh.vertexCount = vertices.size();
-    outMesh.vertexData.resize(vertices.size() * 4);
-    for (size_t i = 0; i < vertices.size(); ++i) {
-        outMesh.vertexData[i * 4 + 0] = vertices[i].x;
-        outMesh.vertexData[i * 4 + 1] = vertices[i].y;
-        outMesh.vertexData[i * 4 + 2] = vertices[i].z;
-        float colorAsFloat;
-        std::memcpy(&colorAsFloat, &vertices[i].abgr, sizeof(float));
-        outMesh.vertexData[i * 4 + 3] = colorAsFloat;
-    }
-    outMesh.indices = std::move(indices);
-    outMesh.faceConnectivity = computeFaceConnectivity(chunk);
 }
 
 void RenderContext::updateImGuiInput() {

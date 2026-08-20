@@ -60,15 +60,6 @@ BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
     return it->second->getBlock(localPos);
 }
 
-BlockData VoxelWorld::getBlockOrAir(glm::ivec3 worldPos) const {
-    glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
-    auto it = chunks_.find(Chunk::worldToChunk(worldPos));
-    if (it == chunks_.end()) {
-        return BlockData{BlockType::Air, BlockOrientation::North};
-    }
-    return it->second->getBlock(localPos);
-}
-
 BlockQueryResult VoxelWorld::queryBlock(glm::ivec3 worldPos) const {
     const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
     auto it = chunks_.find(chunkPos);
@@ -84,23 +75,4 @@ void VoxelWorld::setBlock(glm::ivec3 worldPos, BlockData blockData) {
     glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
     auto& chunk = getChunk(Chunk::worldToChunk(worldPos));
     chunk.setBlock(localPos, blockData);
-}
-
-bool VoxelWorld::setBlockIfChunkLoaded(glm::ivec3 worldPos, BlockData blockData) {
-    glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
-    auto it = chunks_.find(chunkPos);
-    if (it == chunks_.end()) {
-        return false;
-    }
-    it->second->setBlock(Chunk::worldToLocal(worldPos), blockData);
-    return true;
-}
-
-std::vector<glm::ivec3> VoxelWorld::getLoadedChunks() const {
-    std::vector<glm::ivec3> loaded;
-    loaded.reserve(chunks_.size());
-    for (const auto& [chunkPos, _] : chunks_) {
-        loaded.push_back(chunkPos);
-    }
-    return loaded;
 }

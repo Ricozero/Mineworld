@@ -4,19 +4,18 @@
 #include <chrono>
 #include <unordered_set>
 
+#include "chunk_mesh.h"
 #include "client_system.h"
 #include "entity.h"
-#include "helper.h"
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
-#include "render_context.h"
 
 namespace {
 
 constexpr float kConnectionTimeoutSeconds = 10.0f;
-constexpr int kMaxChunkUpdatesPerFrame = 2;
-constexpr double kChunkApplyBudgetMilliseconds = 2.0;
+constexpr size_t kMaxChunkMeshRebuildsPerFrame = 16;
+constexpr double kMaxChunkMeshRebuildTimePerFrame = 8.0;
 
 }  // namespace
 
@@ -60,16 +59,13 @@ void GameClient::update(float deltaTime) {
 
     if (state_ == State::Loading) {
         replayEntitySnapshots();
-        applyPendingChunkUpdates();
-        if (renderContext_) {
-            renderContext_->updateCoreChunkMeshes(world_, coreChunks_);
-        }
+        rebuildChunkMeshes();
         tryEnterRunning();
         return;
     }
 
     replayEntitySnapshots();
-    applyPendingChunkUpdates();
+    rebuildChunkMeshes();
     updateRemoteInterpolation(deltaTime);
     for (auto& system : systems_) {
         system->update(world_, deltaTime);
@@ -141,7 +137,7 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
         case Payload::ChunkUpdate: {
             NetChunkUpdate update;
             if (deserializeChunkUpdate(packet, update)) {
-                queueChunkUpdate(std::move(update));
+                applyChunkUpdate(update);
             }
             break;
         }
@@ -174,7 +170,7 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
     }
 
     localSessionId_ = hello.sessionId;
-    coreChunks_ = hello.coreChunks;
+    chunkManager_.setCoreChunks(hello.coreChunks);
     logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
 
     entt::entity entity = world_.createLocalPlayer(hello.actorName, hello.sessionId, hello.position, hello.playerMode);
@@ -191,34 +187,19 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
 }
 
 void GameClient::tryEnterRunning() {
-    if (!areCoreChunksLoaded()) {
+    if (!chunkManager_.areCoreChunksReady()) {
         return;
-    }
-
-    for (const glm::ivec3& chunkPos : coreChunks_) {
-        if (renderContext_ && !renderContext_->isChunkMeshReady(chunkPos)) {
-            return;
-        }
     }
 
     netClient_->sendReliable(serializeClientReady());
     netClient_->flush();
 
     registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
-    registerSystem(std::make_unique<RenderSystem>(renderContext_, localSessionId_));
+    registerSystem(std::make_unique<RenderSystem>(renderContext_, &chunkManager_, localSessionId_));
 
-    coreChunks_.clear();
+    chunkManager_.clearCoreChunks();
     state_ = State::Running;
     logging::info("World is ready");
-}
-
-bool GameClient::areCoreChunksLoaded() const {
-    for (const glm::ivec3& chunkPos : coreChunks_) {
-        if (!world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-            return false;
-        }
-    }
-    return true;
 }
 
 void GameClient::fail(std::string reason) {
@@ -323,88 +304,73 @@ void GameClient::applyEntitySnapshot(const NetEntitySnapshot& snapshot) {
     }
 }
 
-void GameClient::queueChunkUpdate(NetChunkUpdate update) {
-    auto it = pendingChunkUpdates_.find(update.chunkPos);
-    if (it != pendingChunkUpdates_.end() &&
-        update.operation == NetChunkOperation::Upsert &&
-        it->second.operation == NetChunkOperation::Upsert &&
-        update.revision < it->second.revision) {
-        return;
+void GameClient::applyChunkUpdate(const NetChunkUpdate& update) {
+    MW_PROFILE_SCOPE("Client.ApplyChunkUpdate");
+
+    bool applied = false;
+    if (update.operation == NetChunkOperation::Unload) {
+        applied = chunkManager_.unload(update.chunkPos, update.revision);
+    } else {
+        if (update.blocks.size() != ChunkData::BLOCK_COUNT) {
+            logging::warn("Received invalid chunk update with {} blocks", update.blocks.size());
+            return;
+        }
+
+        ChunkData data;
+        data.chunkPos = update.chunkPos;
+        data.revision = update.revision;
+        std::copy(update.blocks.begin(), update.blocks.end(), data.blocks.begin());
+        applied = chunkManager_.upsert(data);
     }
-    pendingChunkUpdates_[update.chunkPos] = std::move(update);
-    MW_PROFILE_GAUGE("Client.PendingChunkUpdates", static_cast<double>(pendingChunkUpdates_.size()));
+
+    if (applied) {
+        MW_PROFILE_COUNTER("Client.ChunkUpdatesApplied", 1);
+    } else {
+        MW_PROFILE_COUNTER("Client.ChunkUpdatesDropped", 1);
+    }
 }
 
-void GameClient::applyPendingChunkUpdates() {
-    MW_PROFILE_SCOPE("Client.ApplyChunkUpdates");
-    if (pendingChunkUpdates_.empty()) {
-        return;
+void GameClient::rebuildChunkMeshes() {
+    MW_PROFILE_SCOPE("Client.RebuildChunkMeshes");
+
+    const ClientChunkManager::MeshFocus focus = localPlayerMeshFocus();
+    const auto start = std::chrono::steady_clock::now();
+    size_t attemptedCount = 0;
+    while (attemptedCount < kMaxChunkMeshRebuildsPerFrame) {
+        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        if (attemptedCount > 0 && elapsedMs >= kMaxChunkMeshRebuildTimePerFrame) {
+            break;
+        }
+
+        const std::optional<ClientChunkManager::MeshTask> task = chunkManager_.takeNextMeshTask(focus);
+        if (!task) {
+            break;
+        }
+
+        ChunkMesh mesh = buildChunkMesh(world_.getVoxelWorld(), task->chunkPos);
+        const bool accepted = chunkManager_.completeMeshTask(*task, std::move(mesh));
+        ++attemptedCount;
+        if (accepted) {
+            MW_PROFILE_COUNTER("Client.ChunkMeshesRebuilt", 1);
+        }
     }
 
-    std::vector<NetChunkUpdate*> candidates;
-    candidates.reserve(pendingChunkUpdates_.size());
-    for (auto& [chunkPos, update] : pendingChunkUpdates_) {
-        candidates.push_back(&update);
-    }
+    MW_PROFILE_GAUGE("Client.MeshRebuildBacklog", static_cast<double>(chunkManager_.dirtyMeshCount()));
+}
 
-    glm::ivec3 centerChunk{0};
-    auto& registry = world_.getActorWorld().registry();
+ClientChunkManager::MeshFocus GameClient::localPlayerMeshFocus() const {
+    const auto& registry = world_.getActorWorld().registry();
     auto localPlayers = registry.view<SessionComponent, TransformComponent>();
     for (entt::entity entity : localPlayers) {
         if (localPlayers.get<SessionComponent>(entity).sessionId == localSessionId_) {
-            centerChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(localPlayers.get<TransformComponent>(entity).position)));
-            break;
+            const auto& transform = localPlayers.get<TransformComponent>(entity);
+            return ClientChunkManager::MeshFocus{
+                Chunk::worldToChunk(glm::ivec3(glm::floor(transform.position))),
+                common_system::lookForward(transform.rotation.y, transform.rotation.x),
+            };
         }
     }
-    std::sort(candidates.begin(), candidates.end(), [&](const NetChunkUpdate* a, const NetChunkUpdate* b) {
-        const bool aCore = isCoreChunk(a->chunkPos);
-        const bool bCore = isCoreChunk(b->chunkPos);
-        if (aCore != bCore) {
-            return aCore;
-        }
-        return ivec3DistanceSq(a->chunkPos, centerChunk) < ivec3DistanceSq(b->chunkPos, centerChunk);
-    });
-
-    const auto start = std::chrono::steady_clock::now();
-    std::vector<glm::ivec3> applied;
-    applied.reserve(kMaxChunkUpdatesPerFrame);
-    for (NetChunkUpdate* update : candidates) {
-        if (applied.size() >= static_cast<size_t>(kMaxChunkUpdatesPerFrame)) {
-            break;
-        }
-        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-        if (!applied.empty() && elapsedMs >= kChunkApplyBudgetMilliseconds) {
-            break;
-        }
-
-        bool changed = false;
-        bool handled = false;
-        if (update->operation == NetChunkOperation::Unload) {
-            changed = world_.unloadChunk(update->chunkPos);
-            handled = true;
-        } else if (update->blocks.size() == ChunkData::BLOCK_COUNT) {
-            ChunkData data;
-            data.chunkPos = update->chunkPos;
-            data.revision = update->revision;
-            std::copy(update->blocks.begin(), update->blocks.end(), data.blocks.begin());
-            changed = world_.loadChunk(data);
-            handled = changed;
-        }
-
-        if (handled && renderContext_) {
-            renderContext_->invalidateChunkCache(update->chunkPos);
-        }
-        applied.push_back(update->chunkPos);
-        MW_PROFILE_COUNTER("Client.ChunkUpdatesApplied", 1);
-    }
-    for (const glm::ivec3& chunkPos : applied) {
-        pendingChunkUpdates_.erase(chunkPos);
-    }
-    MW_PROFILE_GAUGE("Client.PendingChunkUpdates", static_cast<double>(pendingChunkUpdates_.size()));
-}
-
-bool GameClient::isCoreChunk(glm::ivec3 chunkPos) const {
-    return std::find(coreChunks_.begin(), coreChunks_.end(), chunkPos) != coreChunks_.end();
+    return ClientChunkManager::MeshFocus{};
 }
 
 void GameClient::queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor) {

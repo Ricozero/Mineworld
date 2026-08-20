@@ -5,49 +5,15 @@
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <glm/gtx/hash.hpp>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
 
 #include "entity.h"
 
+class ClientChunkManager;
 class ClientWorld;
 struct ImDrawData;
 struct ImGuiContext;
 struct GLFWwindow;
-
-// Bit (i*6+j) set when chunk face i and j are connected by open air (i<j).
-// Face indices: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z.
-using ChunkFaceConnectivity = uint32_t;
-
-class ChunkMeshCache {
-public:
-    struct Entry {
-        std::vector<float> vertexData;
-        std::vector<uint16_t> indices;
-        size_t vertexCount = 0;
-        ChunkFaceConnectivity faceConnectivity = ~0u;
-    };
-
-    bool contains(glm::ivec3 chunkPos) const;
-    bool isReady(glm::ivec3 chunkPos) const;
-    const Entry* get(glm::ivec3 chunkPos) const;
-    void put(glm::ivec3 chunkPos, size_t blockCount, Entry entry);
-    void markDirty(glm::ivec3 chunkPos);
-    void invalidate(glm::ivec3 chunkPos);
-    void evictStale(const std::vector<glm::ivec3>& loadedChunks);
-    bool needsRebuild(glm::ivec3 chunkPos, size_t currentBlockCount, const std::unordered_map<glm::ivec3, size_t>& currentCounts) const;
-
-    const std::unordered_map<glm::ivec3, Entry>& entries() const { return entries_; }
-    size_t size() const { return entries_.size(); }
-
-private:
-    std::unordered_map<glm::ivec3, Entry> entries_;
-    std::unordered_map<glm::ivec3, size_t> blockCounts_;
-    std::unordered_set<glm::ivec3> dirtyChunks_;
-};
 
 class RenderContext {
 public:
@@ -76,18 +42,13 @@ public:
     void pollEvents();
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
-    void render(const ClientWorld& world);
-    void updateCoreChunkMeshes(const ClientWorld& world, const std::vector<glm::ivec3>& coreChunks);
-    bool isChunkMeshReady(glm::ivec3 chunkPos) const;
+    void render(const ClientWorld& world, const ClientChunkManager& chunkManager);
 
     // In-game menu (ESC) control
     void captureMouse();
     void releaseMouse();
     void resetInGameMenu();
     InGameMenuAction consumeInGameMenuAction();
-
-    // Called by GameClient when server pushes chunk updates
-    void invalidateChunkCache(glm::ivec3 chunkPos);
 
 private:
     // clang-format off
@@ -114,12 +75,11 @@ private:
     void updateDisplayMetrics();
 
     // Per-frame render helpers (called within a single NewFrame/Render pair)
-    void renderWorld(const ClientWorld& world);
+    void renderWorld(const ClientWorld& world, const ClientChunkManager& chunkManager);
     void renderProfilerOverlay();
     void renderCursorOverlay();
     void renderInGameMenu();
     void renderImGuiDrawData(ImDrawData* drawData);
-    void buildChunkMesh(const ClientWorld& world, glm::ivec3 chunkPos, ChunkMeshCache::Entry& outMesh);
 
     // Input helpers
     void updateImGuiInput();
@@ -172,7 +132,4 @@ private:
     ImGuiContext* imguiContext_ = nullptr;
     double imguiScrollY_ = 0.0;
     ImGuiShader imguiShader_;
-
-    // Chunk mesh cache
-    ChunkMeshCache chunkMeshCache_;
 };

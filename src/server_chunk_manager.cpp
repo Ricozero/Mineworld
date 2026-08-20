@@ -1,27 +1,27 @@
-#include "chunk_manager.h"
+#include "server_chunk_manager.h"
 
 #include <algorithm>
 #include <tuple>
 
-bool ChunkPriority::isHigherThan(const ChunkPriority& other) const {
+bool ServerChunkManager::Priority::isHigherThan(const Priority& other) const {
     return std::tie(priorityClass, horizontalDistanceSquared, verticalDistance) <
            std::tie(other.priorityClass, other.horizontalDistanceSquared, other.verticalDistance);
 }
 
-void ChunkDemand::addRequester(ChunkPriority requesterPriority) {
+void ServerChunkManager::Demand::addRequester(Priority requesterPriority) {
     ++requesterCount;
     if (!priority || requesterPriority.isHigherThan(*priority)) {
         priority = requesterPriority;
     }
 }
 
-void ChunkDemand::addRetention() {
+void ServerChunkManager::Demand::addRetention() {
     ++retentionCount;
 }
 
-ChunkManager::ChunkManager(Clock::duration unloadDelay) : unloadDelay_(unloadDelay) {}
+ServerChunkManager::ServerChunkManager(Clock::duration unloadDelay) : unloadDelay_(unloadDelay) {}
 
-void ChunkManager::updateDemands(const DemandMap& demands, TimePoint now) {
+void ServerChunkManager::updateDemands(const DemandMap& demands, TimePoint now) {
     for (const auto& [chunkPos, _] : demands) {
         entries_.try_emplace(chunkPos);
     }
@@ -40,32 +40,32 @@ void ChunkManager::updateDemands(const DemandMap& demands, TimePoint now) {
         }
 
         switch (entry.state) {
-            case ChunkState::Unloaded:
+            case State::Unloaded:
                 if (entry.requesterCount > 0) {
-                    entry.state = ChunkState::Queued;
+                    entry.state = State::Queued;
                 }
                 break;
-            case ChunkState::Queued:
+            case State::Queued:
                 if (entry.requesterCount == 0) {
-                    entry.state = ChunkState::Unloaded;
+                    entry.state = State::Unloaded;
                 }
                 break;
-            case ChunkState::Generating:
+            case State::Generating:
                 break;
-            case ChunkState::ReadyToCommit:
+            case State::ReadyToCommit:
                 if (entry.requesterCount == 0) {
-                    entry.state = ChunkState::Unloaded;
+                    entry.state = State::Unloaded;
                 }
                 break;
-            case ChunkState::Loaded:
+            case State::Loaded:
                 if (entry.requesterCount == 0 && entry.retentionCount == 0) {
-                    entry.state = ChunkState::UnloadPending;
+                    entry.state = State::UnloadPending;
                     entry.unloadTime = now + unloadDelay_;
                 }
                 break;
-            case ChunkState::UnloadPending:
+            case State::UnloadPending:
                 if (entry.requesterCount > 0 || entry.retentionCount > 0) {
-                    entry.state = ChunkState::Loaded;
+                    entry.state = State::Loaded;
                     entry.unloadTime = TimePoint::max();
                 }
                 break;
@@ -74,14 +74,14 @@ void ChunkManager::updateDemands(const DemandMap& demands, TimePoint now) {
 
     std::erase_if(entries_, [](const auto& item) {
         const Entry& entry = item.second;
-        return entry.state == ChunkState::Unloaded && entry.requesterCount == 0 && entry.retentionCount == 0;
+        return entry.state == State::Unloaded && entry.requesterCount == 0 && entry.retentionCount == 0;
     });
 }
 
-std::vector<glm::ivec3> ChunkManager::queuedChunks() const {
+std::vector<glm::ivec3> ServerChunkManager::queuedChunks() const {
     std::vector<glm::ivec3> chunks;
     for (const auto& [chunkPos, entry] : entries_) {
-        if (entry.state == ChunkState::Queued && entry.requesterCount > 0) {
+        if (entry.state == State::Queued && entry.requesterCount > 0) {
             chunks.push_back(chunkPos);
         }
     }
@@ -100,59 +100,59 @@ std::vector<glm::ivec3> ChunkManager::queuedChunks() const {
     return chunks;
 }
 
-std::optional<uint64_t> ChunkManager::beginGeneration(glm::ivec3 chunkPos) {
+std::optional<uint64_t> ServerChunkManager::beginGeneration(glm::ivec3 chunkPos) {
     auto it = entries_.find(chunkPos);
-    if (it == entries_.end() || it->second.state != ChunkState::Queued || it->second.requesterCount == 0) {
+    if (it == entries_.end() || it->second.state != State::Queued || it->second.requesterCount == 0) {
         return std::nullopt;
     }
 
     Entry& entry = it->second;
-    entry.state = ChunkState::Generating;
+    entry.state = State::Generating;
     entry.generationId = nextGenerationId_++;
     return entry.generationId;
 }
 
-bool ChunkManager::finishGeneration(glm::ivec3 chunkPos, uint64_t generationId) {
+bool ServerChunkManager::finishGeneration(glm::ivec3 chunkPos, uint64_t generationId) {
     auto it = entries_.find(chunkPos);
-    if (it == entries_.end() || it->second.state != ChunkState::Generating || it->second.generationId != generationId) {
+    if (it == entries_.end() || it->second.state != State::Generating || it->second.generationId != generationId) {
         return false;
     }
 
     Entry& entry = it->second;
     if (entry.requesterCount == 0) {
-        entry.state = ChunkState::Unloaded;
+        entry.state = State::Unloaded;
         return false;
     }
-    entry.state = ChunkState::ReadyToCommit;
+    entry.state = State::ReadyToCommit;
     return true;
 }
 
-bool ChunkManager::commitLoaded(glm::ivec3 chunkPos, uint64_t generationId) {
+bool ServerChunkManager::commitLoaded(glm::ivec3 chunkPos, uint64_t generationId) {
     auto it = entries_.find(chunkPos);
-    if (it == entries_.end() || it->second.state != ChunkState::ReadyToCommit ||
+    if (it == entries_.end() || it->second.state != State::ReadyToCommit ||
         it->second.generationId != generationId || it->second.requesterCount == 0) {
         return false;
     }
 
     Entry& entry = it->second;
-    entry.state = ChunkState::Loaded;
+    entry.state = State::Loaded;
     entry.unloadTime = TimePoint::max();
     return true;
 }
 
-void ChunkManager::failGeneration(glm::ivec3 chunkPos, uint64_t generationId) {
+void ServerChunkManager::failGeneration(glm::ivec3 chunkPos, uint64_t generationId) {
     auto it = entries_.find(chunkPos);
     if (it == entries_.end() || it->second.generationId != generationId ||
-        (it->second.state != ChunkState::Generating && it->second.state != ChunkState::ReadyToCommit)) {
+        (it->second.state != State::Generating && it->second.state != State::ReadyToCommit)) {
         return;
     }
-    it->second.state = it->second.requesterCount > 0 ? ChunkState::Queued : ChunkState::Unloaded;
+    it->second.state = it->second.requesterCount > 0 ? State::Queued : State::Unloaded;
 }
 
-std::vector<glm::ivec3> ChunkManager::chunksReadyToUnload(TimePoint now) const {
+std::vector<glm::ivec3> ServerChunkManager::chunksReadyToUnload(TimePoint now) const {
     std::vector<glm::ivec3> chunks;
     for (const auto& [chunkPos, entry] : entries_) {
-        if (entry.state == ChunkState::UnloadPending && entry.requesterCount == 0 && entry.retentionCount == 0 &&
+        if (entry.state == State::UnloadPending && entry.requesterCount == 0 && entry.retentionCount == 0 &&
             now >= entry.unloadTime) {
             chunks.push_back(chunkPos);
         }
@@ -160,33 +160,33 @@ std::vector<glm::ivec3> ChunkManager::chunksReadyToUnload(TimePoint now) const {
     return chunks;
 }
 
-bool ChunkManager::markUnloaded(glm::ivec3 chunkPos) {
+bool ServerChunkManager::markUnloaded(glm::ivec3 chunkPos) {
     auto it = entries_.find(chunkPos);
-    if (it == entries_.end() || it->second.state != ChunkState::UnloadPending ||
+    if (it == entries_.end() || it->second.state != State::UnloadPending ||
         it->second.requesterCount != 0 || it->second.retentionCount != 0) {
         return false;
     }
-    it->second.state = ChunkState::Unloaded;
+    it->second.state = State::Unloaded;
     it->second.unloadTime = TimePoint::max();
     return true;
 }
 
-void ChunkManager::restoreLoaded(glm::ivec3 chunkPos) {
+void ServerChunkManager::restoreLoaded(glm::ivec3 chunkPos) {
     auto it = entries_.find(chunkPos);
     if (it == entries_.end()) {
         return;
     }
-    it->second.state = ChunkState::Loaded;
+    it->second.state = State::Loaded;
     it->second.unloadTime = TimePoint::max();
 }
 
-size_t ChunkManager::stateCount(ChunkState state) const {
+size_t ServerChunkManager::stateCount(State state) const {
     return static_cast<size_t>(std::count_if(entries_.begin(), entries_.end(), [&](const auto& item) {
         return item.second.state == state;
     }));
 }
 
-size_t ChunkManager::requestedChunkCount() const {
+size_t ServerChunkManager::requestedChunkCount() const {
     return static_cast<size_t>(std::count_if(entries_.begin(), entries_.end(), [](const auto& item) {
         return item.second.requesterCount > 0;
     }));

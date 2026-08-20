@@ -1,5 +1,6 @@
 #include "client_system.h"
 
+#include "client_chunk_manager.h"
 #include "client_world.h"
 #include "common_system.h"
 #include "entity.h"
@@ -40,14 +41,14 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
     }
 }
 
-RenderSystem::RenderSystem(RenderContext* renderContext, uint32_t localSessionId)
-    : renderContext_(renderContext), localSessionId_(localSessionId) {
+RenderSystem::RenderSystem(RenderContext* renderContext, const ClientChunkManager* chunkManager, uint32_t localSessionId)
+    : renderContext_(renderContext), chunkManager_(chunkManager), localSessionId_(localSessionId) {
 }
 
 void RenderSystem::update(ClientWorld& world, float deltaTime) {
     MW_PROFILE_SCOPE("Client.Render");
 
-    if (!renderContext_) {
+    if (!renderContext_ || !chunkManager_) {
         return;
     }
 
@@ -64,5 +65,5 @@ void RenderSystem::update(ClientWorld& world, float deltaTime) {
         break;
     }
 
-    renderContext_->render(world);
+    renderContext_->render(world, *chunkManager_);
 }

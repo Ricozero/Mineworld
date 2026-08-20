@@ -4,7 +4,6 @@
 #include <glm/gtx/hash.hpp>
 #include <memory>
 #include <unordered_map>
-#include <vector>
 
 #include "block.h"
 #include "chunk.h"
@@ -20,12 +19,8 @@ public:
     ChunkData buildChunkData(glm::ivec3 chunkPos) const;
 
     BlockData getBlock(glm::ivec3 worldPos) const;
-    BlockData getBlockOrAir(glm::ivec3 worldPos) const;
     BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
     void setBlock(glm::ivec3 worldPos, BlockData blockData);
-    bool setBlockIfChunkLoaded(glm::ivec3 worldPos, BlockData blockData);
-
-    std::vector<glm::ivec3> getLoadedChunks() const;
 
     template <typename Func>
     void forEachLoadedChunk(Func&& func) const {
