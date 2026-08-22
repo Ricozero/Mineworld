@@ -1,0 +1,24 @@
+{
+    "dependencies": [
+        "entt",
+        "glm",
+        "spdlog",
+        "asio",
+        "kcp",
+        "flatbuffers",
+        "glfw3",
+        {
+            "name": "bgfx",
+            "features": [
+                "tools"
+            ]
+        },
+        "imgui",
+        {
+            "name": "tracy",
+            "features": [
+                "gui-tools"
+            ]
+        }
+    ]
+}
