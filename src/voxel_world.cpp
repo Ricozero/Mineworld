@@ -1,23 +1,11 @@
 #include "voxel_world.h"
 
-#include <glm/gtx/string_cast.hpp>
-
-#include "helper.h"
-
 Chunk& VoxelWorld::getChunk(glm::ivec3 chunkPos) {
-    auto it = chunks_.find(chunkPos);
-    if (it != chunks_.end()) {
-        return *(it->second);
-    }
-    crash("Chunk not loaded at {}", glm::to_string(chunkPos));
+    return *chunks_.at(chunkPos);
 }
 
 const Chunk& VoxelWorld::getChunk(glm::ivec3 chunkPos) const {
-    auto it = chunks_.find(chunkPos);
-    if (it != chunks_.end()) {
-        return *(it->second);
-    }
-    crash("Chunk not loaded at {}", glm::to_string(chunkPos));
+    return *chunks_.at(chunkPos);
 }
 
 bool VoxelWorld::isChunkLoaded(glm::ivec3 chunkPos) const {

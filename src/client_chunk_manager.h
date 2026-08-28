@@ -11,8 +11,9 @@
 
 #include "chunk.h"
 #include "chunk_mesh.h"
+#include "chunk_mesh_pool.h"
 
-class ClientWorld;
+class VoxelWorld;
 
 class ClientChunkManager {
 public:
@@ -26,7 +27,13 @@ public:
         glm::vec3 forward{0.0f};
     };
 
-    explicit ClientChunkManager(ClientWorld& world);
+    enum class MeshTaskResult : uint8_t {
+        Accepted,
+        Discarded,
+        Exhausted,
+    };
+
+    explicit ClientChunkManager(VoxelWorld& world);
 
     void setCoreChunks(std::vector<glm::ivec3> coreChunks);
     void clearCoreChunks();
@@ -36,11 +43,18 @@ public:
     bool unload(glm::ivec3 chunkPos, uint32_t revision);
 
     std::optional<MeshTask> takeNextMeshTask(const MeshFocus& focus);
-    bool completeMeshTask(const MeshTask& task, ChunkMesh mesh);
+    MeshTaskResult completeMeshTask(const MeshTask& task, const ChunkMesh& mesh);
 
-    const ChunkMesh* getMesh(glm::ivec3 chunkPos) const;
+    void onFrameSubmitted(uint32_t bgfxFrameNumber) { meshPool_.onFrameSubmitted(bgfxFrameNumber); }
+
+    std::optional<ChunkMeshBinding> meshBinding(glm::ivec3 chunkPos) const;
+    ChunkFaceConnectivity faceConnectivity(glm::ivec3 chunkPos) const;
+    uint16_t quadIndexBuffer() const { return meshPool_.quadIndexBuffer(); }
     size_t meshCount() const { return meshCount_; }
     size_t dirtyMeshCount() const;
+    size_t meshBytesReserved() const { return meshPool_.reservedBytes(); }
+    size_t meshBytesCommitted() const { return meshPool_.committedBytes(); }
+    size_t meshBytesUsed() const { return meshPool_.usedBytes(); }
 
 private:
     enum class MeshState : uint8_t {
@@ -53,15 +67,18 @@ private:
         MeshState meshState = MeshState::Dirty;
         uint64_t meshOrder = 0;
         uint64_t meshGeneration = 0;
-        std::optional<ChunkMesh> mesh;
+        bool hasMesh = false;
+        ChunkFaceConnectivity faceConnectivity = ~0u;
+        ChunkMeshSlot slot;
     };
 
     void scheduleMeshRebuild(glm::ivec3 chunkPos);
     bool isCoreChunk(glm::ivec3 chunkPos) const;
 
-    ClientWorld& world_;
+    VoxelWorld& world_;
     std::unordered_set<glm::ivec3> coreChunks_;
     std::unordered_map<glm::ivec3, Entry> entries_;
+    ChunkMeshPool meshPool_;
     size_t meshCount_ = 0;
     uint64_t nextMeshOrder_ = 1;
 };

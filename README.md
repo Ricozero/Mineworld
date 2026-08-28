@@ -47,10 +47,7 @@ bin/mineworld.exe server
 
 ### 当前
 
-- 视野16
-  - 远处区块有残缺，移动视角远处区块会闪烁
-  - Profiler会闪烁，有时渲染顺序错误，InGameMenu会渲染到Profiler上方
-  - 看不到区块边界
+- 无
 
 ### 架构
 
@@ -59,13 +56,12 @@ bin/mineworld.exe server
 - Lua，Sol2，协程
 - Handle资源管理系统热加载（音乐，音效，材质，贴图集，着色器，脚本）
 - actor的唯一id
-- 区块
+- 服务器区块
   - 永久区块
   - 增量修改
-  - 存储：leveldb，游程编码和区间树
-- 服务器区块
   - 区块共享编码缓存，由容量上限和 LRU 策略回收
-  - 区块压缩，palette + bit packing，RLE，zstd/lz4
+  - 存储：leveldb，游程编码和区间树
+  - 压缩：palette + bit packing，RLE，zstd/lz4
   - 固定大小的工作线程池
     - 主线程负责计算需求、更新状态机、投递任务和提交完成结果
     - 工作线程只读取 chunkPos、generationId 和不可变世界生成参数，生成 ChunkData 并写入线程安全完成队列
@@ -73,7 +69,6 @@ bin/mineworld.exe server
     - 服务器关闭时停止接收任务，清空未开始任务，等待工作线程退出并丢弃无效结果
 - 客户端区块
   - 热缓存+冷缓存，对于冷缓存，需要自身版本和相邻区块签名一致
-  - SubmitChunkMesh改成bgfx buffer
   - 多线程网格构建
   - 客户端视野，影响是否构建网格
   - 区块边界用颜色表示不同加载状态
@@ -110,6 +105,7 @@ bin/mineworld.exe server
 - 方块光照传播算法
 - 显示实体名称
 - LOD
+- 光线追踪
 
 ### 工具
 

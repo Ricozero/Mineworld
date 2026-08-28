@@ -3,10 +3,15 @@
 #include <algorithm>
 #include <array>
 
-#include "client_world.h"
 #include "helper.h"
+#include "log.h"
+#include "voxel_world.h"
 
-ClientChunkManager::ClientChunkManager(ClientWorld& world) : world_(world) {}
+ClientChunkManager::ClientChunkManager(VoxelWorld& world) : world_(world) {
+    if (!meshPool_.initialize()) {
+        logging::error("Chunk mesh pool failed to initialize");
+    }
+}
 
 void ClientChunkManager::setCoreChunks(std::vector<glm::ivec3> coreChunks) {
     coreChunks_.clear();
@@ -47,9 +52,10 @@ bool ClientChunkManager::unload(glm::ivec3 chunkPos, uint32_t revision) {
 
     auto entryIt = entries_.find(chunkPos);
     if (entryIt != entries_.end()) {
-        if (entryIt->second.mesh) {
+        if (entryIt->second.hasMesh) {
             --meshCount_;
         }
+        meshPool_.release(entryIt->second.slot);
         entries_.erase(entryIt);
     }
 
@@ -105,32 +111,49 @@ std::optional<ClientChunkManager::MeshTask> ClientChunkManager::takeNextMeshTask
     return MeshTask{best->first, entry.meshGeneration};
 }
 
-bool ClientChunkManager::completeMeshTask(const MeshTask& task, ChunkMesh mesh) {
+ClientChunkManager::MeshTaskResult ClientChunkManager::completeMeshTask(const MeshTask& task, const ChunkMesh& mesh) {
     auto it = entries_.find(task.chunkPos);
     if (it == entries_.end()) {
-        return false;
+        return MeshTaskResult::Discarded;
     }
 
     Entry& entry = it->second;
     if (entry.meshState != MeshState::Building) {
-        return false;
+        return MeshTaskResult::Discarded;
     }
     if (task.generation != entry.meshGeneration || !world_.isChunkLoaded(task.chunkPos)) {
         entry.meshState = MeshState::Dirty;
-        return false;
+        return MeshTaskResult::Discarded;
     }
 
-    if (!entry.mesh) {
+    ChunkMeshSlot newSlot;
+    if (!meshPool_.upload(mesh.vertices, newSlot)) {
+        entry.meshState = MeshState::Dirty;
+        return MeshTaskResult::Exhausted;
+    }
+
+    meshPool_.release(entry.slot);
+    entry.slot = newSlot;
+    entry.faceConnectivity = mesh.faceConnectivity;
+    if (!entry.hasMesh) {
         ++meshCount_;
     }
-    entry.mesh = std::move(mesh);
+    entry.hasMesh = true;
     entry.meshState = MeshState::Ready;
-    return true;
+    return MeshTaskResult::Accepted;
 }
 
-const ChunkMesh* ClientChunkManager::getMesh(glm::ivec3 chunkPos) const {
+std::optional<ChunkMeshBinding> ClientChunkManager::meshBinding(glm::ivec3 chunkPos) const {
     auto it = entries_.find(chunkPos);
-    return it != entries_.end() && it->second.mesh ? &*it->second.mesh : nullptr;
+    if (it == entries_.end() || !it->second.slot.isValid()) {
+        return std::nullopt;
+    }
+    return meshPool_.binding(it->second.slot);
+}
+
+ChunkFaceConnectivity ClientChunkManager::faceConnectivity(glm::ivec3 chunkPos) const {
+    auto it = entries_.find(chunkPos);
+    return it != entries_.end() ? it->second.faceConnectivity : ~0u;
 }
 
 size_t ClientChunkManager::dirtyMeshCount() const {

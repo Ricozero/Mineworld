@@ -62,7 +62,7 @@ private:
     void updateRemoteInterpolation(float deltaTime);
 
     ClientWorld world_;
-    ClientChunkManager chunkManager_{world_};
+    ClientChunkManager chunkManager_{world_.getVoxelWorld()};
     std::vector<std::unique_ptr<common_system::BaseSystem<ClientWorld>>> systems_;
     uint32_t localSessionId_ = 0;
     State state_ = State::Connecting;

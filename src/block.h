@@ -10,7 +10,8 @@ enum class BlockType : uint8_t {
     Wood,
     Leaves,
     Water,
-    Sand
+    Sand,
+    Count,
 };
 
 enum class BlockOrientation : uint8_t {

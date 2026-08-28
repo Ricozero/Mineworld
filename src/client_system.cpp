@@ -41,7 +41,7 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
     }
 }
 
-RenderSystem::RenderSystem(RenderContext* renderContext, const ClientChunkManager* chunkManager, uint32_t localSessionId)
+RenderSystem::RenderSystem(RenderContext* renderContext, ClientChunkManager* chunkManager, uint32_t localSessionId)
     : renderContext_(renderContext), chunkManager_(chunkManager), localSessionId_(localSessionId) {
 }
 

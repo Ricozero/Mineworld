@@ -9,18 +9,21 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <queue>
 #include <unordered_set>
 #include <vector>
 
 #include "chunk.h"
 #include "chunk_mesh.h"
+#include "chunk_mesh_pool.h"
 #include "client_chunk_manager.h"
 #include "client_world.h"
 #include "config.h"
@@ -38,13 +41,27 @@ T cycleMode(T current) {
 
 constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
+constexpr uint32_t kDepthLast = UINT32_MAX;
 constexpr size_t kBoxVertexCount = 24;
-constexpr size_t kBoxIndexCount = 36;
 constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
-constexpr size_t kPlayerModelIndexCount = kBoxIndexCount * 2;
+constexpr size_t kLineBoxVertexCount = 8;
+constexpr size_t kMaxBatchVertices = UINT16_MAX;
+
+uint32_t depthSortKey(float distanceSq) {
+    return bx::floatToBits(distanceSq);
+}
 
 uint32_t bgfxResetFlags() {
     return AppConfig::instance().vsync ? BGFX_RESET_VSYNC : BGFX_RESET_NONE;
+}
+
+template <typename Handle>
+void destroyHandle(uint16_t& index) {
+    Handle handle{index};
+    if (bgfx::isValid(handle)) {
+        bgfx::destroy(handle);
+        index = bgfx::kInvalidHandle;
+    }
 }
 
 struct PosColorVertex {
@@ -108,9 +125,7 @@ struct Frustum {
 };
 
 void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::vec3 color) {
-    if (mesh.vertices.size() > kMaxMeshVertices - 4) {
-        return;
-    }
+    assert(mesh.vertices.size() + 4 <= kMaxBatchVertices);
 
     const auto start = static_cast<uint16_t>(mesh.vertices.size());
     const uint32_t packedColor = packColor(color);
@@ -204,9 +219,7 @@ void addPlayerModel(MeshBuilder& mesh, const TransformComponent& transform, glm:
 }
 
 void addLineBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color) {
-    if (mesh.vertices.size() > kMaxMeshVertices - 8) {
-        return;
-    }
+    assert(mesh.vertices.size() + kLineBoxVertexCount <= kMaxBatchVertices);
 
     const uint16_t start = static_cast<uint16_t>(mesh.vertices.size());
     const uint32_t packedColor = packColor(color);
@@ -244,15 +257,12 @@ void addLineBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color
     }
 }
 
-void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
+void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex, uint32_t depth) {
     if (mesh.vertices.empty() || mesh.indices.empty()) {
         return;
     }
     const uint32_t vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     const uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
-    if (vertexCount > kMaxMeshVertices || indexCount > kMaxMeshIndices) {
-        return;
-    }
     if (bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout) >= vertexCount &&
         bgfx::getAvailTransientIndexBuffer(indexCount) >= indexCount) {
         bgfx::TransientVertexBuffer vertexBuffer;
@@ -267,8 +277,8 @@ void submitLineBatch(const MeshBuilder& mesh, unsigned short programIndex) {
         bgfx::setTransform(model);
         bgfx::setVertexBuffer(0, &vertexBuffer);
         bgfx::setIndexBuffer(&indexBuffer);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_PT_LINES);
-        bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex});
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_PT_LINES);
+        bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex}, depth);
         MW_PROFILE_COUNTER("Render.LineSubmits", 1);
         MW_PROFILE_COUNTER("Render.LineVertices", static_cast<int64_t>(vertexCount));
         MW_PROFILE_COUNTER("Render.LineIndices", static_cast<int64_t>(indexCount));
@@ -342,15 +352,12 @@ void recordBgfxStats(const bgfx::Stats* stats) {
     MW_PROFILE_GAUGE("BGFX.GpuMemMaxMB", static_cast<double>(stats->gpuMemoryMax) / (1024.0 * 1024.0));
 }
 
-void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
+void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex, uint32_t depth) {
     if (mesh.vertices.empty() || mesh.indices.empty()) {
         return;
     }
     const uint32_t vertexCount = static_cast<uint32_t>(mesh.vertices.size());
     const uint32_t indexCount = static_cast<uint32_t>(mesh.indices.size());
-    if (vertexCount > kMaxMeshVertices || indexCount > kMaxMeshIndices) {
-        return;
-    }
     if (bgfx::getAvailTransientVertexBuffer(vertexCount, PosColorVertex::layout) >= vertexCount &&
         bgfx::getAvailTransientIndexBuffer(indexCount) >= indexCount) {
         bgfx::TransientVertexBuffer vertexBuffer;
@@ -365,8 +372,8 @@ void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex) {
         bgfx::setTransform(model);
         bgfx::setVertexBuffer(0, &vertexBuffer);
         bgfx::setIndexBuffer(&indexBuffer);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
-        bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex});
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
+        bgfx::submit(kMainView, bgfx::ProgramHandle{programIndex}, depth);
         MW_PROFILE_COUNTER("Render.MeshSubmits", 1);
         MW_PROFILE_COUNTER("Render.MeshVertices", static_cast<int64_t>(vertexCount));
         MW_PROFILE_COUNTER("Render.MeshIndices", static_cast<int64_t>(indexCount));
@@ -783,7 +790,7 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
     }
 }
 
-void RenderContext::render(const ClientWorld& world, const ClientChunkManager& chunkManager) {
+void RenderContext::render(const ClientWorld& world, ClientChunkManager& chunkManager) {
     if (!window_ || !bgfxInitialized_) {
         return;
     }
@@ -799,6 +806,7 @@ void RenderContext::render(const ClientWorld& world, const ClientChunkManager& c
 
     updateDisplayMetrics();
 
+    bgfx::setViewMode(kMainView, bgfx::ViewMode::DepthAscending);
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x87bdf2ff, 1.0f, 0);
 
@@ -847,10 +855,12 @@ void RenderContext::render(const ClientWorld& world, const ClientChunkManager& c
         renderImGuiDrawData(ImGui::GetDrawData());
     }
 
+    uint32_t frameNumber = 0;
     {
         MW_PROFILE_SCOPE("Render.BgfxFrame");
-        bgfx::frame();
+        frameNumber = bgfx::frame();
     }
+    chunkManager.onFrameSubmitted(frameNumber);
 }
 
 void RenderContext::captureMouse() {
@@ -882,39 +892,59 @@ RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
     return action;
 }
 
-bool RenderContext::loadShaders() {
+bool RenderContext::loadProgram(const char* vertexName, const char* fragmentName, uint16_t& program) {
     const char* rendererDir = shaderDirectoryForRenderer(bgfx::getRendererType());
     std::filesystem::path shaderDir = std::filesystem::path("shaders") / rendererDir;
-    std::vector<uint8_t> vertexShaderData = readBinaryFile(shaderDir / "vs_color.sc.bin");
-    std::vector<uint8_t> fragmentShaderData = readBinaryFile(shaderDir / "fs_color.sc.bin");
+    std::vector<uint8_t> vertexShaderData = readBinaryFile(shaderDir / vertexName);
+    std::vector<uint8_t> fragmentShaderData = readBinaryFile(shaderDir / fragmentName);
     if (vertexShaderData.empty() || fragmentShaderData.empty()) {
         shaderDir = std::filesystem::path("bin") / "shaders" / rendererDir;
-        vertexShaderData = readBinaryFile(shaderDir / "vs_color.sc.bin");
-        fragmentShaderData = readBinaryFile(shaderDir / "fs_color.sc.bin");
+        vertexShaderData = readBinaryFile(shaderDir / vertexName);
+        fragmentShaderData = readBinaryFile(shaderDir / fragmentName);
     }
     if (vertexShaderData.empty() || fragmentShaderData.empty()) {
-        logging::error("Failed to load shaders from {}", shaderDir.string());
+        logging::error("Failed to load shaders {}/{} from {}", vertexName, fragmentName, shaderDir.string());
         return false;
     }
 
-    bgfx::ShaderHandle vertexShader = bgfx::createShader(bgfx::copy(vertexShaderData.data(), static_cast<uint32_t>(vertexShaderData.size())));
-    bgfx::ShaderHandle fragmentShader = bgfx::createShader(bgfx::copy(fragmentShaderData.data(), static_cast<uint32_t>(fragmentShaderData.size())));
-    bgfx::ProgramHandle program = bgfx::createProgram(vertexShader, fragmentShader, true);
-    if (!bgfx::isValid(program)) {
-        logging::error("Failed to create bgfx shader program");
+    const bgfx::ShaderHandle vertexShader = bgfx::createShader(bgfx::copy(vertexShaderData.data(), static_cast<uint32_t>(vertexShaderData.size())));
+    const bgfx::ShaderHandle fragmentShader = bgfx::createShader(bgfx::copy(fragmentShaderData.data(), static_cast<uint32_t>(fragmentShaderData.size())));
+    if (!bgfx::isValid(vertexShader) || !bgfx::isValid(fragmentShader)) {
+        logging::error("Failed to create bgfx shader {}", bgfx::isValid(vertexShader) ? fragmentName : vertexName);
+        if (bgfx::isValid(vertexShader)) {
+            bgfx::destroy(vertexShader);
+        }
+        if (bgfx::isValid(fragmentShader)) {
+            bgfx::destroy(fragmentShader);
+        }
         return false;
     }
 
-    worldShader_.program = program.idx;
+    const bgfx::ProgramHandle handle = bgfx::createProgram(vertexShader, fragmentShader, true);
+    if (!bgfx::isValid(handle)) {
+        logging::error("Failed to create bgfx shader program {}/{}", vertexName, fragmentName);
+        bgfx::destroy(vertexShader);
+        bgfx::destroy(fragmentShader);
+        return false;
+    }
+
+    program = handle.idx;
+    return true;
+}
+
+bool RenderContext::loadShaders() {
+    if (!loadProgram("vs_unlit.sc.bin", "fs_unlit.sc.bin", unlitShader_.program)) {
+        return false;
+    }
+    if (!loadProgram("vs_chunk.sc.bin", "fs_chunk.sc.bin", chunkShader_.program)) {
+        return false;
+    }
     return true;
 }
 
 void RenderContext::destroyShaders() {
-    bgfx::ProgramHandle program{worldShader_.program};
-    if (bgfx::isValid(program)) {
-        bgfx::destroy(program);
-        worldShader_.program = bgfx::kInvalidHandle;
-    }
+    destroyHandle<bgfx::ProgramHandle>(unlitShader_.program);
+    destroyHandle<bgfx::ProgramHandle>(chunkShader_.program);
 }
 
 bool RenderContext::initializeImGui() {
@@ -959,51 +989,17 @@ bool RenderContext::initializeImGui() {
     }
     imguiShader_.textureUniform = textureUniform.idx;
 
-    const char* rendererDir = shaderDirectoryForRenderer(bgfx::getRendererType());
-    std::filesystem::path shaderDir = std::filesystem::path("shaders") / rendererDir;
-    std::vector<uint8_t> vertexShaderData = readBinaryFile(shaderDir / "vs_imgui.sc.bin");
-    std::vector<uint8_t> fragmentShaderData = readBinaryFile(shaderDir / "fs_imgui.sc.bin");
-    if (vertexShaderData.empty() || fragmentShaderData.empty()) {
-        shaderDir = std::filesystem::path("bin") / "shaders" / rendererDir;
-        vertexShaderData = readBinaryFile(shaderDir / "vs_imgui.sc.bin");
-        fragmentShaderData = readBinaryFile(shaderDir / "fs_imgui.sc.bin");
-    }
-    if (vertexShaderData.empty() || fragmentShaderData.empty()) {
-        logging::error("Failed to load ImGui shaders from {}", shaderDir.string());
+    if (!loadProgram("vs_imgui.sc.bin", "fs_imgui.sc.bin", imguiShader_.program)) {
         shutdownImGui();
         return false;
     }
-
-    bgfx::ShaderHandle vertexShader = bgfx::createShader(bgfx::copy(vertexShaderData.data(), static_cast<uint32_t>(vertexShaderData.size())));
-    bgfx::ShaderHandle fragmentShader = bgfx::createShader(bgfx::copy(fragmentShaderData.data(), static_cast<uint32_t>(fragmentShaderData.size())));
-    bgfx::ProgramHandle program = bgfx::createProgram(vertexShader, fragmentShader, true);
-    if (!bgfx::isValid(program)) {
-        logging::error("Failed to create ImGui shader program");
-        shutdownImGui();
-        return false;
-    }
-    imguiShader_.program = program.idx;
     return true;
 }
 
 void RenderContext::shutdownImGui() {
-    bgfx::ProgramHandle program{imguiShader_.program};
-    if (bgfx::isValid(program)) {
-        bgfx::destroy(program);
-        imguiShader_.program = bgfx::kInvalidHandle;
-    }
-
-    bgfx::UniformHandle textureUniform{imguiShader_.textureUniform};
-    if (bgfx::isValid(textureUniform)) {
-        bgfx::destroy(textureUniform);
-        imguiShader_.textureUniform = bgfx::kInvalidHandle;
-    }
-
-    bgfx::TextureHandle fontTexture{imguiShader_.fontTexture};
-    if (bgfx::isValid(fontTexture)) {
-        bgfx::destroy(fontTexture);
-        imguiShader_.fontTexture = bgfx::kInvalidHandle;
-    }
+    destroyHandle<bgfx::ProgramHandle>(imguiShader_.program);
+    destroyHandle<bgfx::UniformHandle>(imguiShader_.textureUniform);
+    destroyHandle<bgfx::TextureHandle>(imguiShader_.fontTexture);
 
     if (imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
@@ -1084,10 +1080,7 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
 
             reachableChunks.insert(node.pos);
 
-            ChunkFaceConnectivity conn = ~0u;
-            if (const ChunkMesh* e = chunkManager.getMesh(node.pos)) {
-                conn = e->faceConnectivity;
-            }
+            const ChunkFaceConnectivity conn = chunkManager.faceConnectivity(node.pos);
 
             for (int outFace = 0; outFace < 6; ++outFace) {
                 if (node.inFace >= 0 && !chunkFacesConnected(conn, node.inFace, outFace)) continue;
@@ -1107,55 +1100,47 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
         MW_PROFILE_GAUGE("Render.ChunksCulled", static_cast<double>(loadedChunks.size()) - static_cast<double>(visibleChunks.size()));
     }
 
-    MeshBuilder currentBatch;
-    currentBatch.vertices.reserve(8192);
-    currentBatch.indices.reserve(12288);
-
     {
         MW_PROFILE_SCOPE("Render.World.SubmitChunkMesh");
 
-        for (const glm::ivec3& chunkPos : loadedChunks) {
-            if (!visibleChunks.count(chunkPos)) continue;
+        const bgfx::IndexBufferHandle quadIndexBuffer{chunkManager.quadIndexBuffer()};
+        if (bgfx::isValid(quadIndexBuffer)) {
+            int64_t submittedChunks = 0;
+            int64_t submittedVertices = 0;
+            for (const glm::ivec3& chunkPos : visibleChunks) {
+                const std::optional<ChunkMeshBinding> binding = chunkManager.meshBinding(chunkPos);
+                if (!binding) {
+                    continue;
+                }
+                const glm::vec3 center = (glm::vec3(chunkPos) + glm::vec3(0.5f)) * static_cast<float>(ChunkData::SIZE);
+                const glm::vec3 offset = center - cameraPosition_;
 
-            const ChunkMesh* cached = chunkManager.getMesh(chunkPos);
-            if (!cached || cached->vertexCount == 0 || cached->indices.empty()) {
-                continue;
+                float model[16];
+                bx::mtxTranslate(model, static_cast<float>(chunkPos.x * ChunkData::SIZE), static_cast<float>(chunkPos.y * ChunkData::SIZE), static_cast<float>(chunkPos.z * ChunkData::SIZE));
+                bgfx::setTransform(model);
+                bgfx::setVertexBuffer(0, bgfx::DynamicVertexBufferHandle{binding->vertexBuffer}, binding->vertexOffset, binding->vertexCount);
+                bgfx::setIndexBuffer(quadIndexBuffer, 0, ChunkMeshPool::indexCountForVertices(binding->vertexCount));
+                bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
+                bgfx::submit(kMainView, bgfx::ProgramHandle{chunkShader_.program}, depthSortKey(glm::dot(offset, offset)));
+                ++submittedChunks;
+                submittedVertices += binding->vertexCount;
             }
 
-            if (cached->vertexCount > kMaxMeshVertices || cached->indices.size() > kMaxMeshIndices) {
-                continue;
-            }
-
-            if (currentBatch.vertices.size() + cached->vertexCount > kMaxMeshVertices ||
-                currentBatch.indices.size() + cached->indices.size() > kMaxMeshIndices) {
-                submitMeshBatch(currentBatch, worldShader_.program);
-                currentBatch.vertices.clear();
-                currentBatch.indices.clear();
-            }
-
-            const auto baseVertex = static_cast<uint16_t>(currentBatch.vertices.size());
-            constexpr size_t kFloatsPerVertex = 4;
-            for (size_t i = 0; i < cached->vertexCount; ++i) {
-                float x = cached->vertexData[i * kFloatsPerVertex + 0];
-                float y = cached->vertexData[i * kFloatsPerVertex + 1];
-                float z = cached->vertexData[i * kFloatsPerVertex + 2];
-                uint32_t abgr;
-                std::memcpy(&abgr, &cached->vertexData[i * kFloatsPerVertex + 3], sizeof(uint32_t));
-                currentBatch.vertices.push_back(PosColorVertex{x, y, z, abgr});
-            }
-            for (uint16_t idx : cached->indices) {
-                currentBatch.indices.push_back(baseVertex + idx);
-            }
+            MW_PROFILE_COUNTER("Render.ChunkSubmits", submittedChunks);
+            MW_PROFILE_COUNTER("Render.ChunkVertices", submittedVertices);
         }
 
-        submitMeshBatch(currentBatch, worldShader_.program);
-        currentBatch.vertices.clear();
-        currentBatch.indices.clear();
+        MW_PROFILE_GAUGE("Render.ChunkPoolReservedMB", static_cast<double>(chunkManager.meshBytesReserved()) / (1024.0 * 1024.0));
+        MW_PROFILE_GAUGE("Render.ChunkPoolCommittedMB", static_cast<double>(chunkManager.meshBytesCommitted()) / (1024.0 * 1024.0));
+        MW_PROFILE_GAUGE("Render.ChunkPoolUsedMB", static_cast<double>(chunkManager.meshBytesUsed()) / (1024.0 * 1024.0));
     }
 
     {
         MW_PROFILE_SCOPE("Render.World.Entities");
 
+        MeshBuilder entityBatch;
+        entityBatch.vertices.reserve(8192);
+        entityBatch.indices.reserve(12288);
         const auto& registry = world.getActorWorld().registry();
         auto view = registry.view<TransformComponent, MeshComponent>();
         MW_PROFILE_GAUGE("Render.VisibleEntities", static_cast<double>(view.size_hint()));
@@ -1167,24 +1152,22 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
 
             const bool actorModel = registry.all_of<PlayerComponent>(entity) || registry.all_of<RobotComponent>(entity);
             const size_t requiredVertices = actorModel ? kPlayerModelVertexCount : kBoxVertexCount;
-            const size_t requiredIndices = actorModel ? kPlayerModelIndexCount : kBoxIndexCount;
-            if (currentBatch.vertices.size() + requiredVertices > kMaxMeshVertices ||
-                currentBatch.indices.size() + requiredIndices > kMaxMeshIndices) {
-                submitMeshBatch(currentBatch, worldShader_.program);
-                currentBatch.vertices.clear();
-                currentBatch.indices.clear();
+            if (entityBatch.vertices.size() + requiredVertices > kMaxBatchVertices) {
+                submitMeshBatch(entityBatch, unlitShader_.program, kDepthLast);
+                entityBatch.vertices.clear();
+                entityBatch.indices.clear();
             }
             const auto& transform = view.get<TransformComponent>(entity);
             const glm::vec3 color(meshComp.color.r, meshComp.color.g, meshComp.color.b);
             if (actorModel) {
-                addPlayerModel(currentBatch, transform, color);
+                addPlayerModel(entityBatch, transform, color);
             } else {
                 const glm::vec3 center = transform.position + glm::vec3(0.0f, 0.91f, 0.0f);
-                addOrientedBox(currentBatch, center, glm::vec3(0.35f, 0.90f, 0.35f), transform.rotation.y, color);
+                addOrientedBox(entityBatch, center, glm::vec3(0.35f, 0.90f, 0.35f), transform.rotation.y, color);
             }
         }
 
-        submitMeshBatch(currentBatch, worldShader_.program);
+        submitMeshBatch(entityBatch, unlitShader_.program, kDepthLast);
     }
 
     {
@@ -1194,11 +1177,17 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
             MeshBuilder lineBatch;
             const glm::vec3 boundColor(1.0f, 0.92f, 0.25f);
             for (const glm::ivec3& chunkPos : loadedChunks) {
+                if (lineBatch.vertices.size() + kLineBoxVertexCount > kMaxBatchVertices) {
+                    submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
+                    lineBatch.vertices.clear();
+                    lineBatch.indices.clear();
+                }
+
                 const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkData::SIZE);
                 const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkData::SIZE));
                 addLineBox(lineBatch, min, max, boundColor);
             }
-            submitLineBatch(lineBatch, worldShader_.program);
+            submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
         }
     }
 }
@@ -1485,11 +1474,7 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
             bgfx::setTexture(0, textureUniform, fontTexture);
             bgfx::setVertexBuffer(0, &vertexBuffer, command.VtxOffset, vertexCount - command.VtxOffset);
             bgfx::setIndexBuffer(&indexBuffer, command.IdxOffset, command.ElemCount);
-            bgfx::setState(
-                BGFX_STATE_WRITE_RGB |
-                BGFX_STATE_WRITE_A |
-                BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) |
-                BGFX_STATE_MSAA);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA) | BGFX_STATE_MSAA);
             bgfx::submit(kImGuiView, program);
         }
     }

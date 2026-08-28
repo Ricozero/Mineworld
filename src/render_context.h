@@ -42,7 +42,7 @@ public:
     void pollEvents();
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
-    void render(const ClientWorld& world, const ClientChunkManager& chunkManager);
+    void render(const ClientWorld& world, ClientChunkManager& chunkManager);
 
     // In-game menu (ESC) control
     void captureMouse();
@@ -57,7 +57,7 @@ private:
     enum class ProfilerMode { Hidden, Summary, Full, Count };
     // clang-format on
 
-    struct WorldShader {
+    struct ShaderProgram {
         uint16_t program = 0xffff;
     };
 
@@ -68,6 +68,7 @@ private:
     };
 
     // Init helpers
+    static bool loadProgram(const char* vertexName, const char* fragmentName, uint16_t& program);
     bool loadShaders();
     void destroyShaders();
     bool initializeImGui();
@@ -97,7 +98,8 @@ private:
     int windowHeight_ = 720;
     float framebufferScaleX_ = 1.0f;
     float framebufferScaleY_ = 1.0f;
-    WorldShader worldShader_;
+    ShaderProgram unlitShader_;
+    ShaderProgram chunkShader_;
 
     // Camera
     glm::vec3 cameraPosition_{8.0f, 6.0f, 24.0f};

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cstring>
+#include <cassert>
 #include <queue>
 #include <utility>
 
@@ -14,44 +14,33 @@
 
 namespace {
 
-constexpr size_t kFloatsPerVertex = 4;
+constexpr glm::vec3 kBlockAlbedo[static_cast<size_t>(BlockType::Count)] = {
+    glm::vec3(0.0f),                 // Air
+    glm::vec3(0.48f, 0.50f, 0.53f),  // Stone
+    glm::vec3(0.26f, 0.17f, 0.10f),  // Dirt
+    glm::vec3(0.24f, 0.58f, 0.22f),  // Grass
+    glm::vec3(0.50f, 0.31f, 0.14f),  // Wood
+    glm::vec3(0.16f, 0.45f, 0.18f),  // Leaves
+    glm::vec3(0.20f, 0.42f, 0.85f),  // Water
+    glm::vec3(0.78f, 0.68f, 0.42f),  // Sand
+};
+
+const glm::vec3 kLightDirection = glm::normalize(glm::vec3(0.4f, 1.0f, 0.55f));
+constexpr float kAmbient = 0.3f;
 
 struct Face {
     glm::ivec3 normal;
-    std::array<glm::vec3, 4> corners;
-    float shade;
+    std::array<glm::ivec3, 4> corners;
 };
 
 const std::array<Face, 6> kFaces = {{
-    {glm::ivec3(1, 0, 0), {glm::vec3(1, 0, 0), glm::vec3(1, 1, 0), glm::vec3(1, 1, 1), glm::vec3(1, 0, 1)}, 0.82f},
-    {glm::ivec3(-1, 0, 0), {glm::vec3(0, 0, 1), glm::vec3(0, 1, 1), glm::vec3(0, 1, 0), glm::vec3(0, 0, 0)}, 0.72f},
-    {glm::ivec3(0, 1, 0), {glm::vec3(0, 1, 1), glm::vec3(1, 1, 1), glm::vec3(1, 1, 0), glm::vec3(0, 1, 0)}, 1.0f},
-    {glm::ivec3(0, -1, 0), {glm::vec3(0, 0, 0), glm::vec3(1, 0, 0), glm::vec3(1, 0, 1), glm::vec3(0, 0, 1)}, 0.55f},
-    {glm::ivec3(0, 0, 1), {glm::vec3(1, 0, 1), glm::vec3(1, 1, 1), glm::vec3(0, 1, 1), glm::vec3(0, 0, 1)}, 0.9f},
-    {glm::ivec3(0, 0, -1), {glm::vec3(0, 0, 0), glm::vec3(0, 1, 0), glm::vec3(1, 1, 0), glm::vec3(1, 0, 0)}, 0.65f},
+    {glm::ivec3(1, 0, 0), {glm::ivec3(1, 0, 0), glm::ivec3(1, 1, 0), glm::ivec3(1, 1, 1), glm::ivec3(1, 0, 1)}},
+    {glm::ivec3(-1, 0, 0), {glm::ivec3(0, 0, 1), glm::ivec3(0, 1, 1), glm::ivec3(0, 1, 0), glm::ivec3(0, 0, 0)}},
+    {glm::ivec3(0, 1, 0), {glm::ivec3(0, 1, 1), glm::ivec3(1, 1, 1), glm::ivec3(1, 1, 0), glm::ivec3(0, 1, 0)}},
+    {glm::ivec3(0, -1, 0), {glm::ivec3(0, 0, 0), glm::ivec3(1, 0, 0), glm::ivec3(1, 0, 1), glm::ivec3(0, 0, 1)}},
+    {glm::ivec3(0, 0, 1), {glm::ivec3(1, 0, 1), glm::ivec3(1, 1, 1), glm::ivec3(0, 1, 1), glm::ivec3(0, 0, 1)}},
+    {glm::ivec3(0, 0, -1), {glm::ivec3(0, 0, 0), glm::ivec3(0, 1, 0), glm::ivec3(1, 1, 0), glm::ivec3(1, 0, 0)}},
 }};
-
-glm::vec3 blockColor(BlockType type) {
-    switch (type) {
-        case BlockType::Stone:
-            return glm::vec3(0.48f, 0.50f, 0.53f);
-        case BlockType::Dirt:
-            return glm::vec3(0.26f, 0.17f, 0.10f);
-        case BlockType::Grass:
-            return glm::vec3(0.24f, 0.58f, 0.22f);
-        case BlockType::Wood:
-            return glm::vec3(0.50f, 0.31f, 0.14f);
-        case BlockType::Leaves:
-            return glm::vec3(0.16f, 0.45f, 0.18f);
-        case BlockType::Water:
-            return glm::vec3(0.20f, 0.42f, 0.85f);
-        case BlockType::Sand:
-            return glm::vec3(0.78f, 0.68f, 0.42f);
-        case BlockType::Air:
-            return glm::vec3(0.0f);
-    }
-    return glm::vec3(1.0f, 0.0f, 1.0f);
-}
 
 int bitIndex(int faceA, int faceB) {
     if (faceA > faceB) {
@@ -67,8 +56,7 @@ ChunkFaceConnectivity computeFaceConnectivity(const Chunk& chunk) {
     for (int x = 0; x < S; ++x)
         for (int y = 0; y < S; ++y)
             for (int z = 0; z < S; ++z)
-                air[x * S * S + y * S + z] =
-                    (chunk.getBlock({x, y, z}).type == BlockType::Air) ? 1u : 0u;
+                air[x * S * S + y * S + z] = (chunk.getBlock({x, y, z}).type == BlockType::Air) ? 1u : 0u;
 
     uint8_t reachable[6] = {};
     std::array<uint8_t, S * S * S> visited{};
@@ -136,14 +124,21 @@ ChunkFaceConnectivity computeFaceConnectivity(const Chunk& chunk) {
     return mask;
 }
 
-void pushVertex(ChunkMesh& mesh, glm::vec3 position, uint32_t packedColor) {
-    float colorAsFloat;
-    std::memcpy(&colorAsFloat, &packedColor, sizeof(float));
-    mesh.vertexData.push_back(position.x);
-    mesh.vertexData.push_back(position.y);
-    mesh.vertexData.push_back(position.z);
-    mesh.vertexData.push_back(colorAsFloat);
-    ++mesh.vertexCount;
+using ShadedColorTable = std::array<std::array<uint32_t, 6>, static_cast<size_t>(BlockType::Count)>;
+
+const ShadedColorTable& shadedColorTable() {
+    static const ShadedColorTable table = [] {
+        ShadedColorTable built{};
+        for (size_t type = 0; type < built.size(); ++type) {
+            for (size_t face = 0; face < kFaces.size(); ++face) {
+                const float wrapped = glm::dot(glm::vec3(kFaces[face].normal), kLightDirection) * 0.5f + 0.5f;
+                const float shade = kAmbient + (1.0f - kAmbient) * wrapped;
+                built[type][face] = packColor(kBlockAlbedo[type] * shade);
+            }
+        }
+        return built;
+    }();
+    return table;
 }
 
 }  // namespace
@@ -159,10 +154,10 @@ ChunkMesh buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos) {
     MW_PROFILE_SCOPE("Client.BuildChunkMesh");
 
     const Chunk& chunk = voxelWorld.getChunk(chunkPos);
+    const ShadedColorTable& colorTable = shadedColorTable();
 
     ChunkMesh mesh;
-    mesh.vertexData.reserve(1024 * kFloatsPerVertex);
-    mesh.indices.reserve(1536);
+    mesh.vertices.reserve(1024);
 
     for (int x = 0; x < ChunkData::SIZE; ++x) {
         for (int y = 0; y < ChunkData::SIZE; ++y) {
@@ -172,38 +167,35 @@ ChunkMesh buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos) {
                 if (block.type == BlockType::Air) {
                     continue;
                 }
+                assert(block.type < BlockType::Count);
+                const std::array<uint32_t, 6>& faceColors = colorTable[static_cast<size_t>(block.type)];
 
                 const glm::ivec3 worldPos = chunk.localToWorld(localPos);
-                const glm::vec3 baseColor = blockColor(block.type);
-                for (const Face& face : kFaces) {
+                for (size_t faceIndex = 0; faceIndex < kFaces.size(); ++faceIndex) {
+                    const Face& face = kFaces[faceIndex];
                     // Face culling
                     if (voxelWorld.getBlock(worldPos + face.normal).type != BlockType::Air) {
                         continue;
                     }
 
-                    if (mesh.vertexCount > kMaxMeshVertices - 4 || mesh.indices.size() > kMaxMeshIndices - 6) {
-                        goto done;
-                    }
+                    assert(mesh.vertices.size() + 4 <= kMaxChunkMeshVertices);
 
-                    const auto start = static_cast<uint16_t>(mesh.vertexCount);
-                    const uint32_t packedColor = packColor(baseColor * face.shade);
-                    for (const glm::vec3& corner : face.corners) {
-                        pushVertex(mesh, glm::vec3(worldPos) + corner, packedColor);
+                    for (const glm::ivec3& corner : face.corners) {
+                        const glm::ivec3 vertexPos = localPos + corner;
+                        mesh.vertices.push_back(ChunkVertex{
+                            static_cast<uint8_t>(vertexPos.x),
+                            static_cast<uint8_t>(vertexPos.y),
+                            static_cast<uint8_t>(vertexPos.z),
+                            0,
+                            faceColors[faceIndex],
+                        });
                     }
-                    mesh.indices.push_back(start + 0);
-                    mesh.indices.push_back(start + 1);
-                    mesh.indices.push_back(start + 2);
-                    mesh.indices.push_back(start + 0);
-                    mesh.indices.push_back(start + 2);
-                    mesh.indices.push_back(start + 3);
                 }
             }
         }
     }
-done:
 
     mesh.faceConnectivity = computeFaceConnectivity(chunk);
-    MW_PROFILE_COUNTER("Client.ChunkMeshVertices", static_cast<int64_t>(mesh.vertexCount));
-    MW_PROFILE_COUNTER("Client.ChunkMeshIndices", static_cast<int64_t>(mesh.indices.size()));
+    MW_PROFILE_COUNTER("Client.ChunkMeshVertices", static_cast<int64_t>(mesh.vertices.size()));
     return mesh;
 }

@@ -347,11 +347,13 @@ void GameClient::rebuildChunkMeshes() {
             break;
         }
 
-        ChunkMesh mesh = buildChunkMesh(world_.getVoxelWorld(), task->chunkPos);
-        const bool accepted = chunkManager_.completeMeshTask(*task, std::move(mesh));
+        const ChunkMesh mesh = buildChunkMesh(world_.getVoxelWorld(), task->chunkPos);
+        const ClientChunkManager::MeshTaskResult result = chunkManager_.completeMeshTask(*task, mesh);
         ++attemptedCount;
-        if (accepted) {
+        if (result == ClientChunkManager::MeshTaskResult::Accepted) {
             MW_PROFILE_COUNTER("Client.ChunkMeshesRebuilt", 1);
+        } else if (result == ClientChunkManager::MeshTaskResult::Exhausted) {
+            break;
         }
     }
 
