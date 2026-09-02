@@ -8,15 +8,13 @@
 #include <string>
 #include <vector>
 
+#include "actor_world.h"
 #include "client_chunk_manager.h"
-#include "client_world.h"
+#include "system.h"
+#include "voxel_world.h"
 #include "net_interface.h"
 #include "net_protocol.h"
 
-namespace common_system {
-template <typename World>
-class BaseSystem;
-}
 class RenderContext;
 
 class GameClient {
@@ -33,16 +31,13 @@ public:
     GameClient(RenderContext* renderContext, std::string address, uint16_t port);
     ~GameClient();
 
-    ClientWorld& world() { return world_; }
-    const ClientWorld& world() const { return world_; }
-
     uint32_t localSessionId() const { return localSessionId_; }
     bool isSessionReady() const { return state_ == State::Running; }
     bool hasFailed() const { return state_ == State::Failed; }
     State state() const { return state_; }
     std::string statusText() const;
 
-    void registerSystem(std::unique_ptr<common_system::BaseSystem<ClientWorld>> system);
+    void registerSystem(std::unique_ptr<System> system);
     void update(float deltaTime);
     void disconnect();
 
@@ -55,15 +50,16 @@ private:
     void sendInputToServer();
     void replayEntitySnapshots();
     void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
-    void applyChunkUpdate(const NetChunkUpdate& update);
+    void applyChunkUpdate(NetChunkUpdate&& update);
     void rebuildChunkMeshes();
     ClientChunkManager::MeshFocus localPlayerMeshFocus() const;
     void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
 
-    ClientWorld world_;
-    ClientChunkManager chunkManager_{world_.getVoxelWorld()};
-    std::vector<std::unique_ptr<common_system::BaseSystem<ClientWorld>>> systems_;
+    VoxelWorld voxelWorld_;
+    ActorWorld actorWorld_{false};
+    ClientChunkManager chunkManager_{voxelWorld_};
+    std::vector<std::unique_ptr<System>> systems_;
     uint32_t localSessionId_ = 0;
     State state_ = State::Connecting;
     std::string failureReason_;

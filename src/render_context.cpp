@@ -21,16 +21,17 @@
 #include <unordered_set>
 #include <vector>
 
-#include "chunk.h"
+#include "actor_world.h"
+#include "chunk_layout.h"
 #include "chunk_mesh.h"
 #include "chunk_mesh_pool.h"
 #include "client_chunk_manager.h"
-#include "client_world.h"
 #include "config.h"
 #include "entity.h"
 #include "helper.h"
 #include "log.h"
 #include "profiler.h"
+#include "voxel_world.h"
 
 namespace {
 
@@ -790,7 +791,7 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
     }
 }
 
-void RenderContext::render(const ClientWorld& world, ClientChunkManager& chunkManager) {
+void RenderContext::render(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, ClientChunkManager& chunkManager) {
     if (!window_ || !bgfxInitialized_) {
         return;
     }
@@ -827,7 +828,7 @@ void RenderContext::render(const ClientWorld& world, ClientChunkManager& chunkMa
     bgfx::setViewTransform(kMainView, view, projection);
     bgfx::touch(kMainView);
 
-    renderWorld(world, chunkManager);
+    renderWorld(voxelWorld, actorWorld, chunkManager);
 
     recordBgfxStats(bgfx::getStats());
 
@@ -1008,10 +1009,9 @@ void RenderContext::shutdownImGui() {
     }
 }
 
-void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManager& chunkManager) {
+void RenderContext::renderWorld(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, const ClientChunkManager& chunkManager) {
     MW_PROFILE_SCOPE("Render.World");
 
-    const VoxelWorld& voxelWorld = world.getVoxelWorld();
     std::vector<glm::ivec3> loadedChunks;
     voxelWorld.forEachLoadedChunk([&](glm::ivec3 chunkPos) {
         loadedChunks.push_back(chunkPos);
@@ -1040,8 +1040,8 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
         const Frustum frustum = Frustum::fromBxMatrix(vpMat);
 
         // Occlusion culling
-        const glm::ivec3 cameraChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
-        const float chunkWorldSize = static_cast<float>(ChunkData::SIZE);
+        const glm::ivec3 cameraChunk = ChunkLayout::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
+        const float chunkWorldSize = static_cast<float>(ChunkLayout::SIZE);
 
         std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
 
@@ -1112,11 +1112,11 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
                 if (!binding) {
                     continue;
                 }
-                const glm::vec3 center = (glm::vec3(chunkPos) + glm::vec3(0.5f)) * static_cast<float>(ChunkData::SIZE);
+                const glm::vec3 center = (glm::vec3(chunkPos) + glm::vec3(0.5f)) * static_cast<float>(ChunkLayout::SIZE);
                 const glm::vec3 offset = center - cameraPosition_;
 
                 float model[16];
-                bx::mtxTranslate(model, static_cast<float>(chunkPos.x * ChunkData::SIZE), static_cast<float>(chunkPos.y * ChunkData::SIZE), static_cast<float>(chunkPos.z * ChunkData::SIZE));
+                bx::mtxTranslate(model, static_cast<float>(chunkPos.x * ChunkLayout::SIZE), static_cast<float>(chunkPos.y * ChunkLayout::SIZE), static_cast<float>(chunkPos.z * ChunkLayout::SIZE));
                 bgfx::setTransform(model);
                 bgfx::setVertexBuffer(0, bgfx::DynamicVertexBufferHandle{binding->vertexBuffer}, binding->vertexOffset, binding->vertexCount);
                 bgfx::setIndexBuffer(quadIndexBuffer, 0, ChunkMeshPool::indexCountForVertices(binding->vertexCount));
@@ -1141,12 +1141,12 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
         MeshBuilder entityBatch;
         entityBatch.vertices.reserve(8192);
         entityBatch.indices.reserve(12288);
-        const auto& registry = world.getActorWorld().registry();
+        const auto& registry = actorWorld.registry();
         auto view = registry.view<TransformComponent, MeshComponent>();
         MW_PROFILE_GAUGE("Render.VisibleEntities", static_cast<double>(view.size_hint()));
         for (auto entity : view) {
             const auto& meshComp = view.get<MeshComponent>(entity);
-            if (!meshComp.isVisible || shouldHideLocalPlayerModel(world, entity)) {
+            if (!meshComp.isVisible || shouldHideLocalPlayerModel(actorWorld, entity)) {
                 continue;
             }
 
@@ -1183,8 +1183,8 @@ void RenderContext::renderWorld(const ClientWorld& world, const ClientChunkManag
                     lineBatch.indices.clear();
                 }
 
-                const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkData::SIZE);
-                const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkData::SIZE));
+                const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkLayout::SIZE);
+                const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkLayout::SIZE));
                 addLineBox(lineBatch, min, max, boundColor);
             }
             submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
@@ -1226,7 +1226,7 @@ void RenderContext::renderProfilerOverlay() {
 
     if (ImGui::Begin("ProfilerOverlay", nullptr, flags)) {
         char buffer[128];
-        glm::ivec3 chunkCoord = Chunk::worldToChunk(glm::ivec3(
+        glm::ivec3 chunkCoord = ChunkLayout::worldToChunk(glm::ivec3(
             static_cast<int>(std::floor(cameraPosition_.x)),
             static_cast<int>(std::floor(cameraPosition_.y)),
             static_cast<int>(std::floor(cameraPosition_.z))));
@@ -1529,12 +1529,12 @@ glm::vec3 RenderContext::right() const {
     return glm::normalize(glm::cross(forward(), glm::vec3(0.0f, 1.0f, 0.0f)));
 }
 
-bool RenderContext::shouldHideLocalPlayerModel(const ClientWorld& world, entt::entity entity) const {
+bool RenderContext::shouldHideLocalPlayerModel(const ActorWorld& actorWorld, entt::entity entity) const {
     if (cameraViewMode_ != CameraViewMode::FirstPerson) {
         return false;
     }
 
-    const auto& registry = world.getActorWorld().registry();
+    const auto& registry = actorWorld.registry();
     if (!registry.all_of<SessionComponent>(entity)) {
         return false;
     }

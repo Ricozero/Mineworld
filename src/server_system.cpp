@@ -2,27 +2,28 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <glm/glm.hpp>
 
-#include "common_system.h"
+#include "actor_simulation.h"
+#include "actor_world.h"
 #include "entity.h"
 #include "profiler.h"
-#include "server_world.h"
 
-void PhysicsSystem::update(ServerWorld& world, float deltaTime) {
+void PhysicsSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {
     MW_PROFILE_SCOPE("Server.Physics");
 
-    auto& registry = world.getActorWorld().registry();
-    updateMovement(world, deltaTime);
+    auto& registry = actorWorld.registry();
+    updateMovement(voxelWorld, actorWorld, deltaTime);
 
     auto view = registry.view<TransformComponent, PhysicsComponent>();
     for (auto entity : view) {
         const auto& transform = view.get<TransformComponent>(entity);
-        world.getActorWorld().updateEntityChunk(entity, transform.position);
+        actorWorld.updateEntityChunk(entity, transform.position);
     }
 }
 
-void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
-    auto& registry = world.getActorWorld().registry();
+void PhysicsSystem::updateMovement(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {
+    auto& registry = actorWorld.registry();
 
     // Update robot AI inputs
     auto robotView = registry.view<RobotComponent, RandomMovementComponent, TransformComponent, ControllerInputComponent>();
@@ -55,10 +56,10 @@ void PhysicsSystem::updateMovement(ServerWorld& world, float deltaTime) {
     for (auto entity : actorView) {
         auto& input = actorView.get<ControllerInputComponent>(entity);
         if (input.jump) {
-            common_system::refreshGrounded(world, registry, entity);
+            actor_simulation::refreshGrounded(voxelWorld, registry, entity);
         }
-        common_system::applyControllerInput(registry, entity, deltaTime, false);
-        common_system::simulateActorPhysics(world, registry, entity, deltaTime);
+        actor_simulation::applyControllerInput(registry, entity, deltaTime, false);
+        actor_simulation::simulatePhysics(voxelWorld, registry, entity, deltaTime);
         input.jump = false;
     }
 }

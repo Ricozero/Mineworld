@@ -1,15 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <glm/glm.hpp>
 
-#include "chunk.h"
+#include "chunk_data.h"
 
 class ChunkGenerator {
 public:
-    static ChunkData generate(glm::ivec3 chunkPos);
-    static bool isChunkInBounds(glm::ivec3 chunkPos);
+    static constexpr uint32_t INITIAL_REVISION = 1;
 
-private:
-    static BlockData generateBlock(glm::ivec3 worldPos);
-    static bool isBlockInBounds(glm::ivec3 worldPos);
+    static ChunkData generate(glm::ivec3 chunkPos);
 };

@@ -10,17 +10,13 @@
 
 class VoxelWorld {
 public:
-    Chunk& getChunk(glm::ivec3 chunkPos);
-    const Chunk& getChunk(glm::ivec3 chunkPos) const;
-    bool isChunkLoaded(glm::ivec3 chunkPos) const;
+    const Chunk* findChunk(glm::ivec3 chunkPos) const;
 
-    bool loadChunk(const ChunkData& data);
+    bool loadChunk(glm::ivec3 chunkPos, uint32_t revision, ChunkData&& data);
     bool unloadChunk(glm::ivec3 chunkPos);
-    ChunkData buildChunkData(glm::ivec3 chunkPos) const;
 
     BlockData getBlock(glm::ivec3 worldPos) const;
     BlockQueryResult queryBlock(glm::ivec3 worldPos) const;
-    void setBlock(glm::ivec3 worldPos, BlockData blockData);
 
     template <typename Func>
     void forEachLoadedChunk(Func&& func) const {

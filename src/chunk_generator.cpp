@@ -1,20 +1,27 @@
 #include "chunk_generator.h"
 
+#include <algorithm>
+#include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
+#include "chunk_layout.h"
 #include "profiler.h"
 
 namespace {
 
-constexpr glm::ivec3 kWorldMin{-1024, -256, -1024};
-constexpr glm::ivec3 kWorldMax{1024, 256, 1024};
 constexpr int kBaseHeight = 0;
 constexpr int kDirtDepth = 3;
 constexpr int kTerrainAmplitude = 4;
 constexpr float kTerrainFrequency = 0.045f;
 constexpr int kTreeMinHeight = 4;
 constexpr int kTreeHeightVariation = 3;
+constexpr int kTreeLeafRadius = 3;
+constexpr int kTreeColumnRadius = 2;
+constexpr int kMaxTreeTop = kTreeMinHeight + kTreeHeightVariation - 1 + kTreeLeafRadius;
+constexpr int kHeightFieldSize = ChunkLayout::SIZE + 2 * kTreeColumnRadius;
 
 uint32_t hash2D(int x, int z) {
     uint32_t value = static_cast<uint32_t>(x) * 0x8da6b343u;
@@ -31,6 +38,40 @@ int terrainHeight(int x, int z) {
     return kBaseHeight + static_cast<int>(std::round(wave * static_cast<float>(kTerrainAmplitude)));
 }
 
+struct HeightField {
+    glm::ivec2 origin{0};
+    int minHeight = 0;
+    int maxHeight = 0;
+    std::array<int, kHeightFieldSize * kHeightFieldSize> heights{};
+
+    int at(int worldX, int worldZ) const {
+        const int x = worldX - origin.x;
+        const int z = worldZ - origin.y;
+        assert(x >= 0 && x < kHeightFieldSize && z >= 0 && z < kHeightFieldSize);
+        return heights[static_cast<size_t>(z) * kHeightFieldSize + x];
+    }
+};
+
+HeightField buildHeightField(glm::ivec3 chunkMin) {
+    HeightField field;
+    field.origin = glm::ivec2(chunkMin.x - kTreeColumnRadius, chunkMin.z - kTreeColumnRadius);
+    field.minHeight = std::numeric_limits<int>::max();
+    field.maxHeight = std::numeric_limits<int>::min();
+
+    for (int z = 0; z < kHeightFieldSize; ++z) {
+        for (int x = 0; x < kHeightFieldSize; ++x) {
+            const int height = terrainHeight(field.origin.x + x, field.origin.y + z);
+            field.heights[static_cast<size_t>(z) * kHeightFieldSize + x] = height;
+            field.maxHeight = std::max(field.maxHeight, height);
+            if (x >= kTreeColumnRadius && x < kTreeColumnRadius + ChunkLayout::SIZE &&
+                z >= kTreeColumnRadius && z < kTreeColumnRadius + ChunkLayout::SIZE) {
+                field.minHeight = std::min(field.minHeight, height);
+            }
+        }
+    }
+    return field;
+}
+
 bool shouldPlaceTree(glm::ivec3 worldPos) {
     return hash2D(worldPos.x, worldPos.z) % 199u == 0u;
 }
@@ -39,10 +80,10 @@ int treeHeight(glm::ivec3 worldPos) {
     return kTreeMinHeight + static_cast<int>(hash2D(worldPos.x + 17, worldPos.z - 11) % kTreeHeightVariation);
 }
 
-bool generateTreeBlock(glm::ivec3 worldPos, BlockData& blockData) {
-    for (int rootX = worldPos.x - 2; rootX <= worldPos.x + 2; ++rootX) {
-        for (int rootZ = worldPos.z - 2; rootZ <= worldPos.z + 2; ++rootZ) {
-            const glm::ivec3 rootPos(rootX, terrainHeight(rootX, rootZ), rootZ);
+bool generateTreeBlock(glm::ivec3 worldPos, const HeightField& field, BlockData& blockData) {
+    for (int rootX = worldPos.x - kTreeColumnRadius; rootX <= worldPos.x + kTreeColumnRadius; ++rootX) {
+        for (int rootZ = worldPos.z - kTreeColumnRadius; rootZ <= worldPos.z + kTreeColumnRadius; ++rootZ) {
+            const glm::ivec3 rootPos(rootX, field.at(rootX, rootZ), rootZ);
             if (!shouldPlaceTree(rootPos)) {
                 continue;
             }
@@ -56,7 +97,7 @@ bool generateTreeBlock(glm::ivec3 worldPos, BlockData& blockData) {
             const glm::ivec3 leafCenter(rootX, rootPos.y + height, rootZ);
             const glm::ivec3 leafOffset = worldPos - leafCenter;
             const int distance = std::abs(leafOffset.x) + std::abs(leafOffset.y) + std::abs(leafOffset.z);
-            if (distance > 3) {
+            if (distance > kTreeLeafRadius) {
                 continue;
             }
             if (leafOffset.x == 0 && leafOffset.z == 0 && leafOffset.y <= 0) {
@@ -70,48 +111,15 @@ bool generateTreeBlock(glm::ivec3 worldPos, BlockData& blockData) {
     return false;
 }
 
-}  // namespace
-
-ChunkData ChunkGenerator::generate(glm::ivec3 chunkPos) {
-    MW_PROFILE_SCOPE("Server.GenerateChunk");
-    MW_PROFILE_COUNTER("Server.ChunksGenerated", 1);
-
-    ChunkData data;
-    data.chunkPos = chunkPos;
-    data.revision = 1;
-    for (int x = 0; x < ChunkData::SIZE; ++x) {
-        for (int y = 0; y < ChunkData::SIZE; ++y) {
-            for (int z = 0; z < ChunkData::SIZE; ++z) {
-                const glm::ivec3 localPos(x, y, z);
-                const glm::ivec3 worldPos = chunkPos * ChunkData::SIZE + localPos;
-                data.blocks[ChunkData::blockIndex(localPos)] = generateBlock(worldPos);
-            }
-        }
-    }
-    return data;
-}
-
-bool ChunkGenerator::isChunkInBounds(glm::ivec3 chunkPos) {
-    const glm::ivec3 minChunk = Chunk::worldToChunk(kWorldMin);
-    const glm::ivec3 maxChunk = Chunk::worldToChunk(kWorldMax);
-    return chunkPos.x >= minChunk.x && chunkPos.x < maxChunk.x &&
-           chunkPos.y >= minChunk.y && chunkPos.y < maxChunk.y &&
-           chunkPos.z >= minChunk.z && chunkPos.z < maxChunk.z;
-}
-
-BlockData ChunkGenerator::generateBlock(glm::ivec3 worldPos) {
-    if (!isBlockInBounds(worldPos)) {
-        return BlockData{BlockType::Air, BlockOrientation::North};
-    }
-
+BlockData generateBlock(glm::ivec3 worldPos, const HeightField& field) {
     BlockData treeBlock;
-    if (generateTreeBlock(worldPos, treeBlock)) {
+    if (generateTreeBlock(worldPos, field, treeBlock)) {
         return treeBlock;
     }
 
-    const int surfaceY = terrainHeight(worldPos.x, worldPos.z);
+    const int surfaceY = field.at(worldPos.x, worldPos.z);
     if (worldPos.y > surfaceY) {
-        return BlockData{BlockType::Air, BlockOrientation::North};
+        return BlockData{};
     }
     if (worldPos.y == surfaceY) {
         return BlockData{BlockType::Grass, BlockOrientation::North};
@@ -122,8 +130,35 @@ BlockData ChunkGenerator::generateBlock(glm::ivec3 worldPos) {
     return BlockData{BlockType::Stone, BlockOrientation::North};
 }
 
-bool ChunkGenerator::isBlockInBounds(glm::ivec3 worldPos) {
-    return worldPos.x >= kWorldMin.x && worldPos.x < kWorldMax.x &&
-           worldPos.y >= kWorldMin.y && worldPos.y < kWorldMax.y &&
-           worldPos.z >= kWorldMin.z && worldPos.z < kWorldMax.z;
+}  // namespace
+
+ChunkData ChunkGenerator::generate(glm::ivec3 chunkPos) {
+    MW_PROFILE_COUNTER("Server.ChunksGenerated", 1);
+
+    ChunkData data;
+
+    if (!ChunkLayout::isChunkInWorld(chunkPos)) {
+        data.fill(BlockData{});
+        return data;
+    }
+
+    const glm::ivec3 chunkMin = chunkPos * ChunkLayout::SIZE;
+    const int chunkMaxY = chunkMin.y + ChunkLayout::SIZE - 1;
+    const HeightField field = buildHeightField(chunkMin);
+
+    if (chunkMin.y > field.maxHeight + kMaxTreeTop) {
+        data.fill(BlockData{});
+        return data;
+    }
+    if (chunkMaxY < field.minHeight - kDirtDepth) {
+        data.fill(BlockData{BlockType::Stone, BlockOrientation::North});
+        return data;
+    }
+
+    for (size_t index = 0; index < ChunkLayout::BLOCK_COUNT; ++index) {
+        const glm::ivec3 worldPos = chunkMin + ChunkLayout::blockPosition(index);
+        data.set(index, generateBlock(worldPos, field));
+    }
+    data.optimize();
+    return data;
 }

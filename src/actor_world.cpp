@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include "chunk.h"
+#include "chunk_layout.h"
 #include "entity.h"
 #include "log.h"
 
@@ -183,6 +183,9 @@ const std::vector<entt::entity>& ActorWorld::getEntitiesInChunk(glm::ivec3 chunk
 }
 
 bool ActorWorld::loadEntitiesInChunk(glm::ivec3 chunkPos) {
+    if (!maintainChunkIndex_) {
+        return true;
+    }
     return true;
 }
 
@@ -198,7 +201,6 @@ bool ActorWorld::unloadEntitiesInChunk(glm::ivec3 chunkPos) {
 
     auto entities = it->second;
     for (auto entity : entities) {
-        // Don't destroy session-owned players when their chunk unloads.
         if (registry_.all_of<SessionComponent>(entity)) {
             continue;
         }
@@ -213,7 +215,7 @@ glm::ivec3 ActorWorld::positionToChunk(const glm::vec3& position) {
         static_cast<int>(std::floor(position.y)),
         static_cast<int>(std::floor(position.z)),
     };
-    return Chunk::worldToChunk(worldPos);
+    return ChunkLayout::worldToChunk(worldPos);
 }
 
 void ActorWorld::addEntityToChunk(entt::entity entity, glm::ivec3 chunkPos) {

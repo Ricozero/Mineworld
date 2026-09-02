@@ -12,7 +12,7 @@
 
 class ActorWorld {
 public:
-    ActorWorld(bool maintainChunkIndex);
+    explicit ActorWorld(bool maintainChunkIndex);
 
     entt::registry& registry() { return registry_; }
     const entt::registry& registry() const { return registry_; }

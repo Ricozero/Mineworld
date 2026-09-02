@@ -9,6 +9,7 @@
 
 #include "chunk.h"
 #include "chunk_generator.h"
+#include "chunk_layout.h"
 #include "config.h"
 #include "entity.h"
 #include "helper.h"
@@ -19,9 +20,9 @@
 
 namespace {
 
-constexpr size_t kMaxChunkUpsertsPerTick = 16;
-constexpr size_t kMaxChunkUpsertBytesPerTick = 128 * 1024;
-constexpr size_t kMaxChunkGenerationsPerTick = 16;
+constexpr size_t kMaxChunkUpsertsPerTick = 1024;
+constexpr size_t kMaxChunkUpsertBytesPerTick = 32 * 1024;
+constexpr size_t kMaxChunkGenerationsPerTick = 1024;
 constexpr double kMaxChunkGenerationTimePerTick = 25.0;
 constexpr int kRobotChunkViewRadius = 1;
 constexpr int kCoreChunkRadius = 1;
@@ -92,7 +93,7 @@ GameServer::GameServer() {
 
 GameServer::~GameServer() = default;
 
-void GameServer::registerSystem(std::unique_ptr<common_system::BaseSystem<ServerWorld>> system) {
+void GameServer::registerSystem(std::unique_ptr<System> system) {
     systems_.push_back(std::move(system));
 }
 
@@ -101,7 +102,7 @@ void GameServer::update(float deltaTime) {
 
     pumpNetwork();
     for (auto& system : systems_) {
-        system->update(world_, deltaTime);
+        system->update(voxelWorld_, actorWorld_, deltaTime);
     }
     updateChunks();
 
@@ -128,21 +129,11 @@ void GameServer::update(float deltaTime) {
 }
 
 entt::entity GameServer::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
-    return world_.createLocalPlayer(name, sessionId, position, mode);
+    return actorWorld_.createLocalPlayer(name, sessionId, position, mode);
 }
 
 entt::entity GameServer::createRobot(const std::string& name, glm::vec3 position) {
-    return world_.createRobot(name, position);
-}
-
-void GameServer::setBlock(glm::ivec3 worldPos, BlockData blockData) {
-    world_.setBlock(worldPos, blockData);
-    const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
-    for (auto& [sessionId, session] : sessions_) {
-        if (session.helloReceived && session.cachedVisibleChunks.count(chunkPos) > 0) {
-            queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
-        }
-    }
+    return actorWorld_.createRobot(name, position);
 }
 
 GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
@@ -164,12 +155,12 @@ void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentCh
     const int verticalRadius = AppConfig::instance().chunkViewRadiusVertical;
 
     forEachChunkInCylinder(currentChunkPos, horizontalRadius, verticalRadius, [&](glm::ivec3 chunkPos) {
-        if (world_.isChunkInBounds(chunkPos)) {
+        if (ChunkLayout::isChunkInWorld(chunkPos)) {
             nextVisibleChunks.insert(chunkPos);
         }
     });
     forEachChunkInRing(currentChunkPos, horizontalRadius, verticalRadius, [&](glm::ivec3 chunkPos) {
-        if (world_.isChunkInBounds(chunkPos)) {
+        if (ChunkLayout::isChunkInWorld(chunkPos)) {
             nextRetentionChunks.insert(chunkPos);
         }
     });
@@ -179,14 +170,17 @@ void GameServer::updateSessionChunkDemand(Session& session, glm::ivec3 currentCh
 
     for (const glm::ivec3& chunkPos : session.cachedVisibleChunks) {
         if (nextVisibleChunks.count(chunkPos) == 0) {
-            const uint32_t revision = world_.getVoxelWorld().isChunkLoaded(chunkPos) ? world_.getChunk(chunkPos).getRevision() : 0;
+            const Chunk* chunk = voxelWorld_.findChunk(chunkPos);
+            const uint32_t revision = chunk != nullptr ? chunk->getRevision() : 0;
             queueChunkUpdate(session, buildUnloadChunkUpdate(chunkPos, revision));
         }
     }
 
     for (const glm::ivec3& chunkPos : nextVisibleChunks) {
-        if (session.cachedVisibleChunks.count(chunkPos) == 0 && world_.getVoxelWorld().isChunkLoaded(chunkPos)) {
-            queueChunkUpdate(session, buildUpsertChunkUpdate(chunkPos));
+        if (session.cachedVisibleChunks.count(chunkPos) == 0) {
+            if (const Chunk* chunk = voxelWorld_.findChunk(chunkPos)) {
+                queueChunkUpdate(session, buildUpsertChunkUpdate(*chunk));
+            }
         }
 
         const glm::ivec3 offset = chunkPos - currentChunkPos;
@@ -215,9 +209,9 @@ NetEntitySnapshot GameServer::buildEntitySnapshot(Session& session) {
 
     const auto& visibleChunks = session.cachedVisibleChunks;
 
-    auto& registry = world_.getActorWorld().registry();
+    auto& registry = actorWorld_.registry();
     for (const glm::ivec3& chunkPos : visibleChunks) {
-        for (entt::entity entity : world_.getActorWorld().getEntitiesInChunk(chunkPos)) {
+        for (entt::entity entity : actorWorld_.getEntitiesInChunk(chunkPos)) {
             if (!registry.all_of<NameComponent, TransformComponent>(entity)) {
                 continue;
             }
@@ -254,7 +248,7 @@ void GameServer::sendChunkUpdates(Session& session) {
     std::vector<NetChunkUpdate*> candidates;
     candidates.reserve(session.pendingChunkUpdates.size());
     for (auto& [chunkPos, update] : session.pendingChunkUpdates) {
-        if (update.operation == NetChunkOperation::Upsert && (session.cachedVisibleChunks.count(chunkPos) == 0 || !world_.getVoxelWorld().isChunkLoaded(chunkPos))) {
+        if (update.operation == NetChunkOperation::Upsert && (session.cachedVisibleChunks.count(chunkPos) == 0 || voxelWorld_.findChunk(chunkPos) == nullptr)) {
             continue;
         }
         candidates.push_back(&update);
@@ -320,7 +314,7 @@ void GameServer::updateChunks() {
     MW_PROFILE_SCOPE("Server.UpdateChunks");
 
     ServerChunkManager::DemandMap demands;
-    auto& registry = world_.getActorWorld().registry();
+    auto& registry = actorWorld_.registry();
 
     auto playerView = registry.view<SessionComponent, TransformComponent>();
     for (auto entity : playerView) {
@@ -329,14 +323,14 @@ void GameServer::updateChunks() {
         if (sessionIt == sessions_.end() || !sessionIt->second.helloReceived) {
             continue;
         }
-        updateSessionChunkDemand(sessionIt->second, world_.getActorWorld().getEntityChunk(entity), demands);
+        updateSessionChunkDemand(sessionIt->second, actorWorld_.getEntityChunk(entity), demands);
     }
 
     auto robotView = registry.view<RobotComponent, TransformComponent>();
     for (auto entity : robotView) {
-        const glm::ivec3 entityChunk = world_.getActorWorld().getEntityChunk(entity);
+        const glm::ivec3 entityChunk = actorWorld_.getEntityChunk(entity);
         forEachChunkInBox(entityChunk, kRobotChunkViewRadius, [&](glm::ivec3 chunkPos) {
-            if (!world_.isChunkInBounds(chunkPos)) {
+            if (!ChunkLayout::isChunkInWorld(chunkPos)) {
                 return;
             }
             const glm::ivec3 offset = chunkPos - entityChunk;
@@ -381,7 +375,7 @@ void GameServer::processQueuedChunks() {
         if (!chunkManager_.finishGeneration(chunkPos, *generationId)) {
             continue;
         }
-        if (!commitChunkLoad(data, *generationId)) {
+        if (!commitChunkLoad(chunkPos, std::move(data), *generationId)) {
             chunkManager_.failGeneration(chunkPos, *generationId);
         }
     }
@@ -395,18 +389,25 @@ void GameServer::processPendingUnloads(ServerChunkManager::TimePoint now) {
     }
 }
 
-bool GameServer::commitChunkLoad(const ChunkData& data, uint64_t generationId) {
-    if (!world_.loadChunk(data)) {
+bool GameServer::commitChunkLoad(glm::ivec3 chunkPos, ChunkData&& data, uint64_t generationId) {
+    if (!ChunkLayout::isChunkInWorld(chunkPos) || voxelWorld_.findChunk(chunkPos) != nullptr ||
+        !voxelWorld_.loadChunk(chunkPos, ChunkGenerator::INITIAL_REVISION, std::move(data))) {
         return false;
     }
-    if (!chunkManager_.commitLoaded(data.chunkPos, generationId)) {
-        world_.unloadChunk(data.chunkPos);
+    if (!actorWorld_.loadEntitiesInChunk(chunkPos)) {
+        voxelWorld_.unloadChunk(chunkPos);
         return false;
     }
-
-    for (auto& [sessionId, session] : sessions_) {
-        if (session.helloReceived && session.cachedVisibleChunks.count(data.chunkPos) > 0) {
-            queueChunkUpdate(session, buildUpsertChunkUpdate(data.chunkPos));
+    if (!chunkManager_.commitLoaded(chunkPos, generationId)) {
+        actorWorld_.unloadEntitiesInChunk(chunkPos);
+        voxelWorld_.unloadChunk(chunkPos);
+        return false;
+    }
+    if (const Chunk* chunk = voxelWorld_.findChunk(chunkPos)) {
+        for (auto& [sessionId, session] : sessions_) {
+            if (session.helloReceived && session.cachedVisibleChunks.count(chunkPos) > 0) {
+                queueChunkUpdate(session, buildUpsertChunkUpdate(*chunk));
+            }
         }
     }
     return true;
@@ -416,16 +417,18 @@ bool GameServer::commitChunkUnload(glm::ivec3 chunkPos) {
     if (!chunkManager_.markUnloaded(chunkPos)) {
         return false;
     }
-    return !world_.getVoxelWorld().isChunkLoaded(chunkPos) || world_.unloadChunk(chunkPos);
+    if (voxelWorld_.findChunk(chunkPos) == nullptr) {
+        return true;
+    }
+    return actorWorld_.unloadEntitiesInChunk(chunkPos) && voxelWorld_.unloadChunk(chunkPos);
 }
 
-NetChunkUpdate GameServer::buildUpsertChunkUpdate(glm::ivec3 chunkPos) {
-    const ChunkData data = world_.getVoxelWorld().buildChunkData(chunkPos);
+NetChunkUpdate GameServer::buildUpsertChunkUpdate(const Chunk& chunk) {
     NetChunkUpdate update;
-    update.chunkPos = data.chunkPos;
-    update.revision = data.revision;
+    update.chunkPos = chunk.getPosition();
+    update.revision = chunk.getRevision();
     update.operation = NetChunkOperation::Upsert;
-    update.blocks.assign(data.blocks.begin(), data.blocks.end());
+    update.blocks = chunk.getData();
     return update;
 }
 
@@ -459,9 +462,9 @@ void GameServer::onSessionDisconnect(uint32_t sessionId) {
     }
 
     if (!sessionIt->second.actorName.empty()) {
-        entt::entity entity = world_.getEntityByName(sessionIt->second.actorName);
+        entt::entity entity = actorWorld_.getEntityByName(sessionIt->second.actorName);
         if (entity != entt::null) {
-            world_.destroyEntity(entity);
+            actorWorld_.destroyEntity(entity);
         }
     }
 
@@ -512,7 +515,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
 
     const entt::entity entity = createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
 
-    auto& registry = world_.getActorWorld().registry();
+    auto& registry = actorWorld_.registry();
     if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
         logging::error("Failed to create player for session {}", sessionId);
         return false;
@@ -528,10 +531,10 @@ bool GameServer::onClientHello(uint32_t sessionId) {
     hello.yaw = spawnYaw;
     hello.pitch = spawnPitch;
     hello.playerMode = PlayerMode::Survival;
-    const glm::ivec3 spawnChunk = Chunk::worldToChunk(glm::ivec3(glm::floor(spawnPos)));
+    const glm::ivec3 spawnChunk = ChunkLayout::worldToChunk(glm::ivec3(glm::floor(spawnPos)));
     hello.coreChunks.reserve((kCoreChunkRadius * 2 + 1) * (kCoreChunkRadius * 2 + 1) * (kCoreChunkRadius * 2 + 1));
     forEachChunkInBox(spawnChunk, kCoreChunkRadius, [&](glm::ivec3 chunkPos) {
-        if (!world_.isChunkInBounds(chunkPos)) {
+        if (!ChunkLayout::isChunkInWorld(chunkPos)) {
             return;
         }
         hello.coreChunks.push_back(chunkPos);
@@ -568,14 +571,14 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         return;
     }
 
-    auto& registry = world_.getActorWorld().registry();
+    auto& registry = actorWorld_.registry();
     auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent>();
     for (auto entity : view) {
         const auto& session = view.get<SessionComponent>(entity);
         if (session.sessionId != sessionId) {
             continue;
         }
-        world_.getActorWorld().setPlayerMode(entity, input.playerMode);
+        actorWorld_.setPlayerMode(entity, input.playerMode);
         auto& transform = view.get<TransformComponent>(entity);
         transform.position = input.position;
         transform.rotation.x = input.pitch;
@@ -586,7 +589,7 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         if (sessionIt != sessions_.end()) {
             sessionIt->second.lastProcessedInputSequence = input.sequence;
         }
-        world_.getActorWorld().updateEntityChunk(entity, transform.position);
+        actorWorld_.updateEntityChunk(entity, transform.position);
         break;
     }
 }

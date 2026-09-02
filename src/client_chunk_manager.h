@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "chunk.h"
+#include "chunk_data.h"
 #include "chunk_mesh.h"
 #include "chunk_mesh_pool.h"
 
@@ -39,7 +39,7 @@ public:
     void clearCoreChunks();
     bool areCoreChunksReady() const;
 
-    bool upsert(const ChunkData& data);
+    bool upsert(glm::ivec3 chunkPos, uint32_t revision, ChunkData&& data);
     bool unload(glm::ivec3 chunkPos, uint32_t revision);
 
     std::optional<MeshTask> takeNextMeshTask(const MeshFocus& focus);

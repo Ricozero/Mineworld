@@ -1,8 +1,8 @@
 #include "client_system.h"
 
+#include "actor_simulation.h"
+#include "actor_world.h"
 #include "client_chunk_manager.h"
-#include "client_world.h"
-#include "common_system.h"
 #include "entity.h"
 #include "profiler.h"
 #include "render_context.h"
@@ -11,14 +11,14 @@ InputSystem::InputSystem(RenderContext* renderContext, uint32_t localSessionId)
     : renderContext_(renderContext), localSessionId_(localSessionId) {
 }
 
-void InputSystem::update(ClientWorld& world, float deltaTime) {
+void InputSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {
     MW_PROFILE_SCOPE("Client.Input");
 
     if (!renderContext_) {
         return;
     }
 
-    auto& registry = world.getActorWorld().registry();
+    auto& registry = actorWorld.registry();
     auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent, ControllerInputComponent>();
     for (auto entity : view) {
         const auto& session = view.get<SessionComponent>(entity);
@@ -33,10 +33,10 @@ void InputSystem::update(ClientWorld& world, float deltaTime) {
         renderContext_->processInput(deltaTime, transform.rotation, player, input);
 
         if (input.jump) {
-            common_system::refreshGrounded(world, registry, entity);
+            actor_simulation::refreshGrounded(voxelWorld, registry, entity);
         }
-        common_system::applyControllerInput(registry, entity, deltaTime, false);
-        common_system::simulateActorPhysics(world, registry, entity, deltaTime);
+        actor_simulation::applyControllerInput(registry, entity, deltaTime, false);
+        actor_simulation::simulatePhysics(voxelWorld, registry, entity, deltaTime);
         break;
     }
 }
@@ -45,14 +45,14 @@ RenderSystem::RenderSystem(RenderContext* renderContext, ClientChunkManager* chu
     : renderContext_(renderContext), chunkManager_(chunkManager), localSessionId_(localSessionId) {
 }
 
-void RenderSystem::update(ClientWorld& world, float deltaTime) {
+void RenderSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {
     MW_PROFILE_SCOPE("Client.Render");
 
     if (!renderContext_ || !chunkManager_) {
         return;
     }
 
-    auto& registry = world.getActorWorld().registry();
+    auto& registry = actorWorld.registry();
     auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent>();
     for (auto entity : view) {
         const auto& session = view.get<SessionComponent>(entity);
@@ -65,5 +65,5 @@ void RenderSystem::update(ClientWorld& world, float deltaTime) {
         break;
     }
 
-    renderContext_->render(world, *chunkManager_);
+    renderContext_->render(voxelWorld, actorWorld, *chunkManager_);
 }

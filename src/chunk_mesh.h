@@ -4,11 +4,11 @@
 #include <glm/glm.hpp>
 #include <vector>
 
-#include "chunk.h"
+#include "chunk_layout.h"
 
 class VoxelWorld;
 
-inline constexpr size_t kMaxChunkMeshVertices = ChunkData::BLOCK_COUNT / 2 * 6 * 4;
+inline constexpr size_t kMaxChunkMeshVertices = ChunkLayout::BLOCK_COUNT / 2 * 6 * 4;
 static_assert(kMaxChunkMeshVertices <= 65536, "Chunk meshes are indexed with uint16 relative to the draw's base vertex");
 
 struct ChunkVertex {

@@ -1,44 +1,36 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 
 #include "block.h"
-
-struct ChunkData {
-    static constexpr int SIZE = 16;
-    static constexpr size_t BLOCK_COUNT = SIZE * SIZE * SIZE;
-
-    glm::ivec3 chunkPos{0};
-    uint32_t revision = 0;
-    std::array<BlockData, BLOCK_COUNT> blocks{};
-
-    static size_t blockIndex(glm::ivec3 localPos);
-};
+#include "chunk_data.h"
+#include "chunk_layout.h"
 
 class Chunk {
 public:
-    Chunk(glm::ivec3 chunkPos);
+    explicit Chunk(glm::ivec3 chunkPos) : chunkPos_(chunkPos) {}
     ~Chunk() = default;
 
-    static bool isValidLocalPosition(glm::ivec3 pos);
-    static glm::ivec3 worldToChunk(glm::ivec3 worldPos);
-    static glm::ivec3 worldToLocal(glm::ivec3 worldPos);
-    glm::ivec3 localToWorld(glm::ivec3 localPos) const;
+    glm::ivec3 localToWorld(glm::ivec3 localPos) const { return ChunkLayout::localToWorld(chunkPos_, localPos); }
 
-    glm::ivec3 getPosition() const { return data_.chunkPos; }
-    uint32_t getRevision() const { return data_.revision; }
+    glm::ivec3 getPosition() const { return chunkPos_; }
+    uint32_t getRevision() const { return revision_; }
+    const ChunkData& getData() const { return data_; }
+    BlockData getBlock(size_t index) const { return data_.get(index); }
     BlockData getBlock(glm::ivec3 localPos) const;
     void setBlock(glm::ivec3 localPos, BlockData blockData);
     void clearBlock(glm::ivec3 localPos);
-    bool applyData(const ChunkData& data);
-    ChunkData buildData() const;
+    bool applyData(uint32_t revision, ChunkData&& data);
 
-    size_t getBlockCount() const;
-    bool isEmpty() const { return getBlockCount() == 0; }
+    bool isUniform() const { return data_.isUniform(); }
+    BlockData uniformBlock() const { return data_.uniformBlock(); }
+    size_t blockCount() const { return data_.blockCount(); }
+    bool isEmpty() const { return blockCount() == 0; }
 
 private:
+    glm::ivec3 chunkPos_{0};
+    uint32_t revision_ = 0;
     ChunkData data_;
 };

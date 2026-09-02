@@ -1,39 +1,27 @@
-#pragma once
+#include "actor_simulation.h"
 
 #include <algorithm>
 #include <cmath>
-#include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <limits>
 
 #include "block.h"
-#include "chunk.h"
+#include "chunk_layout.h"
 #include "config.h"
+#include "direction.h"
 #include "entity.h"
+#include "voxel_world.h"
 
-namespace common_system {
+namespace {
 
-inline constexpr float kCollisionEpsilon = 0.001f;
-inline constexpr float kGroundProbeDistance = 0.05f;
+constexpr float kCollisionEpsilon = 0.001f;
+constexpr float kGroundProbeDistance = 0.05f;
 
-template <typename World>
-class BaseSystem {
-public:
-    virtual ~BaseSystem() = default;
-    virtual void update(World& world, float deltaTime) = 0;
-};
-
-inline bool isSpectatorPlayer(entt::registry& registry, entt::entity entity) {
+bool isSpectatorPlayer(entt::registry& registry, entt::entity entity) {
     return registry.all_of<PlayerComponent>(entity) && registry.get<PlayerComponent>(entity).mode == PlayerMode::Spectator;
 }
 
-template <typename World>
-BlockQueryResult queryCollisionBlock(World& world, glm::ivec3 worldPos) {
-    return world.queryBlock(worldPos);
-}
-
-template <typename World>
-BlockQueryResult findCollisionBoundary(World& world, const TransformComponent& transform, const BoxColliderComponent& collider, int axis, float delta, float& boundary) {
+BlockQueryResult findCollisionBoundary(const VoxelWorld& voxelWorld, const TransformComponent& transform, const BoxColliderComponent& collider, int axis, float delta, float& boundary) {
     const glm::vec3 halfSize = collider.size * 0.5f;
     const glm::vec3 currentMin = transform.position + collider.offset - halfSize;
     const glm::vec3 currentMax = transform.position + collider.offset + halfSize;
@@ -60,7 +48,7 @@ BlockQueryResult findCollisionBoundary(World& world, const TransformComponent& t
         for (int y = minBlock.y; y <= maxBlock.y; ++y) {
             for (int z = minBlock.z; z <= maxBlock.z; ++z) {
                 const glm::ivec3 blockPos(x, y, z);
-                const BlockQueryResult blockResult = queryCollisionBlock(world, blockPos);
+                const BlockQueryResult blockResult = voxelWorld.queryBlock(blockPos);
                 if (blockResult == BlockQueryResult::Unknown) {
                     return BlockQueryResult::Unknown;
                 }
@@ -68,9 +56,7 @@ BlockQueryResult findCollisionBoundary(World& world, const TransformComponent& t
                     continue;
                 }
 
-                const float blockBoundary = delta > 0.0f
-                                                ? static_cast<float>(blockPos[axis])
-                                                : static_cast<float>(blockPos[axis] + 1);
+                const float blockBoundary = delta > 0.0f ? static_cast<float>(blockPos[axis]) : static_cast<float>(blockPos[axis] + 1);
                 if (delta > 0.0f) {
                     if (blockBoundary < previousMax[axis] - kCollisionEpsilon ||
                         blockBoundary > currentMax[axis]) {
@@ -90,8 +76,7 @@ BlockQueryResult findCollisionBoundary(World& world, const TransformComponent& t
     return collided ? BlockQueryResult::Solid : BlockQueryResult::Empty;
 }
 
-template <typename World>
-BlockQueryResult testCollision(World& world, const TransformComponent& transform, const BoxColliderComponent& collider) {
+BlockQueryResult testCollision(const VoxelWorld& voxelWorld, const TransformComponent& transform, const BoxColliderComponent& collider) {
     const glm::vec3 halfSize = collider.size * 0.5f;
     const glm::vec3 min = transform.position + collider.offset - halfSize;
     const glm::vec3 max = transform.position + collider.offset + halfSize;
@@ -102,7 +87,7 @@ BlockQueryResult testCollision(World& world, const TransformComponent& transform
     for (int x = minBlock.x; x <= maxBlock.x; ++x) {
         for (int y = minBlock.y; y <= maxBlock.y; ++y) {
             for (int z = minBlock.z; z <= maxBlock.z; ++z) {
-                const BlockQueryResult result = queryCollisionBlock(world, {x, y, z});
+                const BlockQueryResult result = voxelWorld.queryBlock({x, y, z});
                 if (result == BlockQueryResult::Unknown) {
                     return BlockQueryResult::Unknown;
                 }
@@ -115,17 +100,16 @@ BlockQueryResult testCollision(World& world, const TransformComponent& transform
     return collided ? BlockQueryResult::Solid : BlockQueryResult::Empty;
 }
 
-template <typename World>
-bool areChunksLoadedInBounds(World& world, const glm::vec3& min, const glm::vec3& max) {
+bool areChunksLoadedInBounds(const VoxelWorld& voxelWorld, const glm::vec3& min, const glm::vec3& max) {
     const glm::ivec3 minBlock = glm::ivec3(glm::floor(min));
     const glm::ivec3 maxBlock = glm::ivec3(glm::floor(max - glm::vec3(kCollisionEpsilon)));
-    const glm::ivec3 minChunk = Chunk::worldToChunk(minBlock);
-    const glm::ivec3 maxChunk = Chunk::worldToChunk(maxBlock);
+    const glm::ivec3 minChunk = ChunkLayout::worldToChunk(minBlock);
+    const glm::ivec3 maxChunk = ChunkLayout::worldToChunk(maxBlock);
 
     for (int x = minChunk.x; x <= maxChunk.x; ++x) {
         for (int y = minChunk.y; y <= maxChunk.y; ++y) {
             for (int z = minChunk.z; z <= maxChunk.z; ++z) {
-                if (!world.getVoxelWorld().isChunkLoaded({x, y, z})) {
+                if (voxelWorld.findChunk({x, y, z}) == nullptr) {
                     return false;
                 }
             }
@@ -134,37 +118,17 @@ bool areChunksLoadedInBounds(World& world, const glm::vec3& min, const glm::vec3
     return true;
 }
 
-template <typename World>
-bool areSweptBoxChunksLoaded(World& world, const TransformComponent& transform, const BoxColliderComponent& collider, const glm::vec3& movement) {
+bool areSweptBoxChunksLoaded(const VoxelWorld& voxelWorld, const TransformComponent& transform, const BoxColliderComponent& collider, const glm::vec3& movement) {
     const glm::vec3 halfSize = collider.size * 0.5f;
     const glm::vec3 currentMin = transform.position + collider.offset - halfSize;
     const glm::vec3 currentMax = transform.position + collider.offset + halfSize;
     glm::vec3 sweptMin = glm::min(currentMin, currentMin + movement);
     const glm::vec3 sweptMax = glm::max(currentMax, currentMax + movement);
     sweptMin.y -= kGroundProbeDistance;
-    return areChunksLoadedInBounds(world, sweptMin, sweptMax);
+    return areChunksLoadedInBounds(voxelWorld, sweptMin, sweptMax);
 }
 
-template <typename World>
-void refreshGrounded(World& world, entt::registry& registry, entt::entity entity) {
-    if (!registry.all_of<TransformComponent, PhysicsComponent, BoxColliderComponent>(entity)) {
-        return;
-    }
-    auto& physics = registry.get<PhysicsComponent>(entity);
-    if (physics.isGrounded) {
-        return;
-    }
-
-    TransformComponent probe = registry.get<TransformComponent>(entity);
-    probe.position.y -= kGroundProbeDistance;
-    const BlockQueryResult result = testCollision(world, probe, registry.get<BoxColliderComponent>(entity));
-    if (result != BlockQueryResult::Unknown) {
-        physics.isGrounded = result == BlockQueryResult::Solid;
-    }
-}
-
-template <typename World>
-bool moveWithCollision(World& world, entt::registry& registry, entt::entity entity, float deltaTime) {
+bool moveWithCollision(const VoxelWorld& voxelWorld, entt::registry& registry, entt::entity entity, float deltaTime) {
     auto& transform = registry.get<TransformComponent>(entity);
     auto& physics = registry.get<PhysicsComponent>(entity);
     const auto& collider = registry.get<BoxColliderComponent>(entity);
@@ -181,7 +145,7 @@ bool moveWithCollision(World& world, entt::registry& registry, entt::entity enti
 
         transform.position[axis] += delta;
         float boundary = 0.0f;
-        const BlockQueryResult result = findCollisionBoundary(world, transform, collider, axis, delta, boundary);
+        const BlockQueryResult result = findCollisionBoundary(voxelWorld, transform, collider, axis, delta, boundary);
         if (result == BlockQueryResult::Unknown) {
             return false;
         }
@@ -203,7 +167,7 @@ bool moveWithCollision(World& world, entt::registry& registry, entt::entity enti
     if (!physics.isGrounded) {
         TransformComponent probe = transform;
         probe.position.y -= kGroundProbeDistance;
-        const BlockQueryResult result = testCollision(world, probe, collider);
+        const BlockQueryResult result = testCollision(voxelWorld, probe, collider);
         if (result == BlockQueryResult::Unknown) {
             return false;
         }
@@ -213,62 +177,7 @@ bool moveWithCollision(World& world, entt::registry& registry, entt::entity enti
     return true;
 }
 
-template <typename World>
-void simulateActorPhysics(World& world, entt::registry& registry, entt::entity entity, float deltaTime) {
-    if (isSpectatorPlayer(registry, entity) || !registry.all_of<TransformComponent, PhysicsComponent>(entity)) {
-        return;
-    }
-
-    auto& transform = registry.get<TransformComponent>(entity);
-    auto& physics = registry.get<PhysicsComponent>(entity);
-
-    const glm::vec3 initialPosition = transform.position;
-    const bool initialGrounded = physics.isGrounded;
-    if (physics.useGravity && !physics.isGrounded) {
-        physics.velocity.y -= AppConfig::instance().gravity * deltaTime;
-        physics.velocity.y = std::max(physics.velocity.y, -AppConfig::instance().maxFallSpeed);
-    }
-
-    physics.velocity += physics.acceleration * deltaTime;
-    const glm::vec3 movement = physics.velocity * deltaTime;
-    if (registry.all_of<BoxColliderComponent>(entity)) {
-        const auto& collider = registry.get<BoxColliderComponent>(entity);
-        if (!areSweptBoxChunksLoaded(world, transform, collider, movement) ||
-            !moveWithCollision(world, registry, entity, deltaTime)) {
-            transform.position = initialPosition;
-            physics.velocity = glm::vec3(0.0f);
-            physics.acceleration = glm::vec3(0.0f);
-            physics.isGrounded = initialGrounded;
-        }
-    } else {
-        transform.position += movement;
-        physics.acceleration = glm::vec3(0.0f);
-    }
-}
-
-inline glm::vec3 yawForward(float yawDegrees) {
-    const float yaw = glm::radians(yawDegrees);
-    return glm::normalize(glm::vec3(std::cos(yaw), 0.0f, std::sin(yaw)));
-}
-
-inline glm::vec3 yawRight(float yawDegrees) {
-    return glm::normalize(glm::cross(yawForward(yawDegrees), glm::vec3(0.0f, 1.0f, 0.0f)));
-}
-
-inline glm::vec3 lookForward(float yawDegrees, float pitchDegrees) {
-    const float yaw = glm::radians(yawDegrees);
-    const float pitch = glm::radians(pitchDegrees);
-    return glm::normalize(glm::vec3(
-        std::cos(yaw) * std::cos(pitch),
-        std::sin(pitch),
-        std::sin(yaw) * std::cos(pitch)));
-}
-
-inline glm::vec3 lookRight(float yawDegrees, float pitchDegrees) {
-    return glm::normalize(glm::cross(lookForward(yawDegrees, pitchDegrees), glm::vec3(0.0f, 1.0f, 0.0f)));
-}
-
-inline float movementSpeed(entt::registry& registry, entt::entity entity, const ControllerInputComponent& input) {
+float movementSpeed(entt::registry& registry, entt::entity entity, const ControllerInputComponent& input) {
     if (registry.all_of<PlayerComponent>(entity)) {
         const auto& player = registry.get<PlayerComponent>(entity);
         const bool spectator = player.mode == PlayerMode::Spectator;
@@ -282,7 +191,11 @@ inline float movementSpeed(entt::registry& registry, entt::entity entity, const 
     return 0.0f;
 }
 
-inline void applyControllerInput(entt::registry& registry, entt::entity entity, float deltaTime, bool consumeJump) {
+}  // namespace
+
+namespace actor_simulation {
+
+void applyControllerInput(entt::registry& registry, entt::entity entity, float deltaTime, bool consumeJump) {
     if (!registry.all_of<TransformComponent, ControllerInputComponent>(entity)) {
         return;
     }
@@ -290,18 +203,19 @@ inline void applyControllerInput(entt::registry& registry, entt::entity entity, 
     auto& transform = registry.get<TransformComponent>(entity);
     auto& input = registry.get<ControllerInputComponent>(entity);
     const float speed = movementSpeed(registry, entity, input);
-    const bool spectator = common_system::isSpectatorPlayer(registry, entity);
+    const bool spectator = isSpectatorPlayer(registry, entity);
 
     if (spectator) {
-        glm::vec3 move = lookForward(transform.rotation.y, transform.rotation.x) * input.move.z +
-                         lookRight(transform.rotation.y, transform.rotation.x) * input.move.x +
+        glm::vec3 move = Direction::lookForward(transform.rotation.y, transform.rotation.x) * input.move.z +
+                         Direction::lookRight(transform.rotation.y, transform.rotation.x) * input.move.x +
                          glm::vec3(0.0f, input.move.y, 0.0f);
         if (glm::dot(move, move) > 1.0f) {
             move = glm::normalize(move);
         }
         transform.position += move * speed * deltaTime;
     } else if (registry.all_of<PhysicsComponent>(entity)) {
-        glm::vec3 move = yawForward(transform.rotation.y) * input.move.z + yawRight(transform.rotation.y) * input.move.x;
+        glm::vec3 move = Direction::yawForward(transform.rotation.y) * input.move.z +
+                         Direction::yawRight(transform.rotation.y) * input.move.x;
         if (glm::dot(move, move) > 1.0f) {
             move = glm::normalize(move);
         }
@@ -320,4 +234,53 @@ inline void applyControllerInput(entt::registry& registry, entt::entity entity, 
     }
 }
 
-}  // namespace common_system
+void refreshGrounded(const VoxelWorld& voxelWorld, entt::registry& registry, entt::entity entity) {
+    if (!registry.all_of<TransformComponent, PhysicsComponent, BoxColliderComponent>(entity)) {
+        return;
+    }
+    auto& physics = registry.get<PhysicsComponent>(entity);
+    if (physics.isGrounded) {
+        return;
+    }
+
+    TransformComponent probe = registry.get<TransformComponent>(entity);
+    probe.position.y -= kGroundProbeDistance;
+    const BlockQueryResult result = testCollision(voxelWorld, probe, registry.get<BoxColliderComponent>(entity));
+    if (result != BlockQueryResult::Unknown) {
+        physics.isGrounded = result == BlockQueryResult::Solid;
+    }
+}
+
+void simulatePhysics(const VoxelWorld& voxelWorld, entt::registry& registry, entt::entity entity, float deltaTime) {
+    if (isSpectatorPlayer(registry, entity) || !registry.all_of<TransformComponent, PhysicsComponent>(entity)) {
+        return;
+    }
+
+    auto& transform = registry.get<TransformComponent>(entity);
+    auto& physics = registry.get<PhysicsComponent>(entity);
+
+    const glm::vec3 initialPosition = transform.position;
+    const bool initialGrounded = physics.isGrounded;
+    if (physics.useGravity && !physics.isGrounded) {
+        physics.velocity.y -= AppConfig::instance().gravity * deltaTime;
+        physics.velocity.y = std::max(physics.velocity.y, -AppConfig::instance().maxFallSpeed);
+    }
+
+    physics.velocity += physics.acceleration * deltaTime;
+    const glm::vec3 movement = physics.velocity * deltaTime;
+    if (registry.all_of<BoxColliderComponent>(entity)) {
+        const auto& collider = registry.get<BoxColliderComponent>(entity);
+        if (!areSweptBoxChunksLoaded(voxelWorld, transform, collider, movement) ||
+            !moveWithCollision(voxelWorld, registry, entity, deltaTime)) {
+            transform.position = initialPosition;
+            physics.velocity = glm::vec3(0.0f);
+            physics.acceleration = glm::vec3(0.0f);
+            physics.isGrounded = initialGrounded;
+        }
+    } else {
+        transform.position += movement;
+        physics.acceleration = glm::vec3(0.0f);
+    }
+}
+
+}  // namespace actor_simulation

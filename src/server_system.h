@@ -1,16 +1,11 @@
 #pragma once
 
-#include <entt/entt.hpp>
-#include <glm/glm.hpp>
+#include "system.h"
 
-#include "common_system.h"
-
-class ServerWorld;
-
-class PhysicsSystem : public common_system::BaseSystem<ServerWorld> {
+class PhysicsSystem : public System {
 public:
-    void update(ServerWorld& world, float deltaTime) override;
+    void update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) override;
 
 private:
-    void updateMovement(ServerWorld& world, float deltaTime);
+    void updateMovement(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime);
 };

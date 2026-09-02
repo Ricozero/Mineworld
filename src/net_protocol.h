@@ -2,14 +2,13 @@
 
 #include <flatbuffers/flatbuffers.h>
 
-#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
 #include <string>
 #include <vector>
 
-#include "block.h"
+#include "chunk_data.h"
 #include "entity.h"
 #include "net_protocol_generated.h"
 
@@ -34,14 +33,10 @@ enum class NetChunkOperation : uint8_t {
 };
 
 struct NetChunkUpdate {
-    static constexpr size_t BLOCK_TYPE_OFFSET = 0;
-    static constexpr size_t BLOCK_ORIENTATION_OFFSET = BLOCK_TYPE_OFFSET + sizeof(BlockType);
-    static constexpr size_t SERIALIZED_BLOCK_SIZE = sizeof(BlockType) + sizeof(BlockOrientation);
-
     glm::ivec3 chunkPos{0};
     uint32_t revision = 0;
     NetChunkOperation operation = NetChunkOperation::Upsert;
-    std::vector<BlockData> blocks;
+    ChunkData blocks;
 };
 
 struct NetClientInput {

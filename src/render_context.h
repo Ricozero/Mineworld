@@ -10,7 +10,8 @@
 #include "entity.h"
 
 class ClientChunkManager;
-class ClientWorld;
+class ActorWorld;
+class VoxelWorld;
 struct ImDrawData;
 struct ImGuiContext;
 struct GLFWwindow;
@@ -42,7 +43,7 @@ public:
     void pollEvents();
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
-    void render(const ClientWorld& world, ClientChunkManager& chunkManager);
+    void render(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, ClientChunkManager& chunkManager);
 
     // In-game menu (ESC) control
     void captureMouse();
@@ -76,7 +77,7 @@ private:
     void updateDisplayMetrics();
 
     // Per-frame render helpers (called within a single NewFrame/Render pair)
-    void renderWorld(const ClientWorld& world, const ClientChunkManager& chunkManager);
+    void renderWorld(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, const ClientChunkManager& chunkManager);
     void renderProfilerOverlay();
     void renderCursorOverlay();
     void renderInGameMenu();
@@ -87,7 +88,7 @@ private:
     static void handleScroll(GLFWwindow* window, double xOffset, double yOffset);
     glm::vec3 forward() const;
     glm::vec3 right() const;
-    bool shouldHideLocalPlayerModel(const ClientWorld& world, entt::entity entity) const;
+    bool shouldHideLocalPlayerModel(const ActorWorld& actorWorld, entt::entity entity) const;
 
     // Window & renderer
     GLFWwindow* window_ = nullptr;

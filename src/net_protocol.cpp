@@ -3,7 +3,7 @@
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/verifier.h>
 
-#include "chunk.h"
+#include "chunk_layout.h"
 
 namespace {
 
@@ -71,11 +71,6 @@ mineworld::net::ChunkOperation toWireChunkOperation(NetChunkOperation operation)
 
 NetChunkOperation fromWireChunkOperation(mineworld::net::ChunkOperation operation) {
     return operation == mineworld::net::ChunkOperation::Unload ? NetChunkOperation::Unload : NetChunkOperation::Upsert;
-}
-
-bool isValidBlock(BlockType type, BlockOrientation orientation) {
-    return static_cast<uint8_t>(type) < static_cast<uint8_t>(BlockType::Count) &&
-           static_cast<uint8_t>(orientation) <= static_cast<uint8_t>(BlockOrientation::Down);
 }
 
 }  // namespace
@@ -248,11 +243,7 @@ std::vector<uint8_t> serializeChunkUpdate(const NetChunkUpdate& update, flatbuff
     flatbuffers::Offset<flatbuffers::Vector<uint8_t>> blocks;
     if (update.operation == NetChunkOperation::Upsert) {
         std::vector<uint8_t> blockBytes;
-        blockBytes.reserve(update.blocks.size() * NetChunkUpdate::SERIALIZED_BLOCK_SIZE);
-        for (const BlockData& block : update.blocks) {
-            blockBytes.push_back(static_cast<uint8_t>(block.type));
-            blockBytes.push_back(static_cast<uint8_t>(block.orientation));
-        }
+        update.blocks.serialize(blockBytes);
         blocks = builder.CreateVector(blockBytes);
     }
     const auto payload = mineworld::net::CreateChunkUpdate(
@@ -276,6 +267,9 @@ bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outU
 
     NetChunkUpdate result;
     result.chunkPos = fromFbIVec3(update->chunk_pos());
+    if (!ChunkLayout::isChunkInWorld(result.chunkPos)) {
+        return false;
+    }
     result.revision = update->revision();
     result.operation = fromWireChunkOperation(update->operation());
     const auto* blockBytes = update->blocks();
@@ -284,18 +278,11 @@ bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outU
             return false;
         }
     } else {
-        if (!blockBytes || blockBytes->size() != ChunkData::BLOCK_COUNT * NetChunkUpdate::SERIALIZED_BLOCK_SIZE) {
+        if (!blockBytes || blockBytes->size() > ChunkData::MAX_SERIALIZED_SIZE) {
             return false;
         }
-        result.blocks.reserve(ChunkData::BLOCK_COUNT);
-        for (size_t i = 0; i < ChunkData::BLOCK_COUNT; ++i) {
-            const size_t blockOffset = i * NetChunkUpdate::SERIALIZED_BLOCK_SIZE;
-            const BlockType type = static_cast<BlockType>((*blockBytes)[static_cast<flatbuffers::uoffset_t>(blockOffset + NetChunkUpdate::BLOCK_TYPE_OFFSET)]);
-            const BlockOrientation orientation = static_cast<BlockOrientation>((*blockBytes)[static_cast<flatbuffers::uoffset_t>(blockOffset + NetChunkUpdate::BLOCK_ORIENTATION_OFFSET)]);
-            if (!isValidBlock(type, orientation)) {
-                return false;
-            }
-            result.blocks.emplace_back(type, orientation);
+        if (!ChunkData::deserialize(std::span<const uint8_t>(blockBytes->data(), blockBytes->size()), result.blocks)) {
+            return false;
         }
     }
     outUpdate = std::move(result);

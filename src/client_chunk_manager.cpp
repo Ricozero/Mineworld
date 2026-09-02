@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <utility>
 
 #include "helper.h"
 #include "log.h"
@@ -32,21 +33,22 @@ bool ClientChunkManager::areCoreChunksReady() const {
     return true;
 }
 
-bool ClientChunkManager::upsert(const ChunkData& data) {
-    if (!world_.loadChunk(data)) {
+bool ClientChunkManager::upsert(glm::ivec3 chunkPos, uint32_t revision, ChunkData&& data) {
+    if (!world_.loadChunk(chunkPos, revision, std::move(data))) {
         return false;
     }
 
-    entries_.try_emplace(data.chunkPos);
-    scheduleMeshRebuild(data.chunkPos);
+    entries_.try_emplace(chunkPos);
+    scheduleMeshRebuild(chunkPos);
     for (const glm::ivec3& offset : kChunkFaceOffsets) {
-        scheduleMeshRebuild(data.chunkPos + offset);
+        scheduleMeshRebuild(chunkPos + offset);
     }
     return true;
 }
 
 bool ClientChunkManager::unload(glm::ivec3 chunkPos, uint32_t revision) {
-    if (world_.isChunkLoaded(chunkPos) && revision < world_.getChunk(chunkPos).getRevision()) {
+    const Chunk* chunk = world_.findChunk(chunkPos);
+    if (chunk != nullptr && revision < chunk->getRevision()) {
         return false;
     }
 
@@ -92,7 +94,7 @@ std::optional<ClientChunkManager::MeshTask> ClientChunkManager::takeNextMeshTask
     auto best = entries_.end();
     MeshPriority bestPriority{};
     for (auto it = entries_.begin(); it != entries_.end(); ++it) {
-        if (it->second.meshState != MeshState::Dirty || !world_.isChunkLoaded(it->first)) {
+        if (it->second.meshState != MeshState::Dirty || world_.findChunk(it->first) == nullptr) {
             continue;
         }
 
@@ -121,7 +123,7 @@ ClientChunkManager::MeshTaskResult ClientChunkManager::completeMeshTask(const Me
     if (entry.meshState != MeshState::Building) {
         return MeshTaskResult::Discarded;
     }
-    if (task.generation != entry.meshGeneration || !world_.isChunkLoaded(task.chunkPos)) {
+    if (task.generation != entry.meshGeneration || world_.findChunk(task.chunkPos) == nullptr) {
         entry.meshState = MeshState::Dirty;
         return MeshTaskResult::Discarded;
     }
@@ -164,7 +166,7 @@ size_t ClientChunkManager::dirtyMeshCount() const {
 
 void ClientChunkManager::scheduleMeshRebuild(glm::ivec3 chunkPos) {
     auto it = entries_.find(chunkPos);
-    if (it == entries_.end() || !world_.isChunkLoaded(chunkPos)) {
+    if (it == entries_.end() || world_.findChunk(chunkPos) == nullptr) {
         return;
     }
 

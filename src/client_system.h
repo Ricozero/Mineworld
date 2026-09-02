@@ -1,28 +1,26 @@
 #pragma once
 
-#include <entt/entt.hpp>
-#include <glm/glm.hpp>
+#include <cstdint>
 
-#include "common_system.h"
+#include "system.h"
 
-class ClientWorld;
 class ClientChunkManager;
 class RenderContext;
 
-class InputSystem : public common_system::BaseSystem<ClientWorld> {
+class InputSystem : public System {
 public:
     InputSystem(RenderContext* renderContext, uint32_t localSessionId);
-    void update(ClientWorld& world, float deltaTime) override;
+    void update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) override;
 
 private:
     RenderContext* renderContext_ = nullptr;
     uint32_t localSessionId_ = 0;
 };
 
-class RenderSystem : public common_system::BaseSystem<ClientWorld> {
+class RenderSystem : public System {
 public:
     RenderSystem(RenderContext* renderContext, ClientChunkManager* chunkManager, uint32_t localSessionId);
-    void update(ClientWorld& world, float deltaTime) override;
+    void update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) override;
 
 private:
     RenderContext* renderContext_ = nullptr;

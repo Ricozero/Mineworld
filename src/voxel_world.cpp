@@ -1,28 +1,23 @@
 #include "voxel_world.h"
 
-Chunk& VoxelWorld::getChunk(glm::ivec3 chunkPos) {
-    return *chunks_.at(chunkPos);
+#include <utility>
+
+const Chunk* VoxelWorld::findChunk(glm::ivec3 chunkPos) const {
+    auto it = chunks_.find(chunkPos);
+    return it == chunks_.end() ? nullptr : it->second.get();
 }
 
-const Chunk& VoxelWorld::getChunk(glm::ivec3 chunkPos) const {
-    return *chunks_.at(chunkPos);
-}
-
-bool VoxelWorld::isChunkLoaded(glm::ivec3 chunkPos) const {
-    return chunks_.find(chunkPos) != chunks_.end();
-}
-
-bool VoxelWorld::loadChunk(const ChunkData& data) {
-    auto it = chunks_.find(data.chunkPos);
+bool VoxelWorld::loadChunk(glm::ivec3 chunkPos, uint32_t revision, ChunkData&& data) {
+    auto it = chunks_.find(chunkPos);
     if (it != chunks_.end()) {
-        return it->second->applyData(data);
+        return it->second->applyData(revision, std::move(data));
     }
 
-    auto chunk = std::make_unique<Chunk>(data.chunkPos);
-    if (!chunk->applyData(data)) {
+    auto chunk = std::make_unique<Chunk>(chunkPos);
+    if (!chunk->applyData(revision, std::move(data))) {
         return false;
     }
-    chunks_.emplace(data.chunkPos, std::move(chunk));
+    chunks_.emplace(chunkPos, std::move(chunk));
     return true;
 }
 
@@ -35,32 +30,20 @@ bool VoxelWorld::unloadChunk(glm::ivec3 chunkPos) {
     return true;
 }
 
-ChunkData VoxelWorld::buildChunkData(glm::ivec3 chunkPos) const {
-    return getChunk(chunkPos).buildData();
-}
-
 BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
-    glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
-    auto it = chunks_.find(Chunk::worldToChunk(worldPos));
-    if (it == chunks_.end()) {
-        return BlockData{BlockType::Air, BlockOrientation::North};
+    const Chunk* chunk = findChunk(ChunkLayout::worldToChunk(worldPos));
+    if (chunk == nullptr) {
+        return BlockData{};
     }
-    return it->second->getBlock(localPos);
+    return chunk->getBlock(ChunkLayout::worldToLocal(worldPos));
 }
 
 BlockQueryResult VoxelWorld::queryBlock(glm::ivec3 worldPos) const {
-    const glm::ivec3 chunkPos = Chunk::worldToChunk(worldPos);
-    auto it = chunks_.find(chunkPos);
-    if (it == chunks_.end()) {
+    const Chunk* chunk = findChunk(ChunkLayout::worldToChunk(worldPos));
+    if (chunk == nullptr) {
         return BlockQueryResult::Unknown;
     }
-    return it->second->getBlock(Chunk::worldToLocal(worldPos)).type == BlockType::Air
+    return chunk->getBlock(ChunkLayout::worldToLocal(worldPos)).type == BlockType::Air
                ? BlockQueryResult::Empty
                : BlockQueryResult::Solid;
-}
-
-void VoxelWorld::setBlock(glm::ivec3 worldPos, BlockData blockData) {
-    glm::ivec3 localPos = Chunk::worldToLocal(worldPos);
-    auto& chunk = getChunk(Chunk::worldToChunk(worldPos));
-    chunk.setBlock(localPos, blockData);
 }
