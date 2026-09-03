@@ -286,8 +286,6 @@ bool chunkFacesConnected(ChunkFaceConnectivity mask, int faceA, int faceB) {
 }
 
 ChunkMesh buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos) {
-    MW_PROFILE_SCOPE("Client.BuildChunkMesh");
-
     ChunkMesh mesh;
 
     const Chunk* chunkPtr = voxelWorld.findChunk(chunkPos);
@@ -324,7 +322,6 @@ ChunkMesh buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos) {
         const glm::ivec3 localPos = ChunkLayout::blockPosition(index);
 
         for (size_t faceIndex = 0; faceIndex < kFaces.size(); ++faceIndex) {
-            // Face culling
             if (neighborhood.blockAcross(index, localPos, faceIndex).type != BlockType::Air) {
                 continue;
             }

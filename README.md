@@ -47,11 +47,8 @@ bin/mineworld.exe server
 
 ### 当前
 
-- Chunk Culling性能优化
 - 网格构建性能优化
 - 网络LZ4
-- 区块共享编码缓存
-- 区块生成批量set接口
 
 ### 架构
 
@@ -61,6 +58,8 @@ bin/mineworld.exe server
 - Handle资源管理系统热加载（音乐，音效，材质，贴图集，着色器，脚本）
 - actor的唯一id
 - 服务器区块
+  - 区块共享编码缓存
+  - 区块生成批量set接口
   - 永久区块
   - 增量修改
   - 热区块和冷区块，冷区块使用RLE+区间树/线段树或者LZ4

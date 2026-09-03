@@ -145,17 +145,12 @@ ClientChunkManager::MeshTaskResult ClientChunkManager::completeMeshTask(const Me
     return MeshTaskResult::Accepted;
 }
 
-std::optional<ChunkMeshBinding> ClientChunkManager::meshBinding(glm::ivec3 chunkPos) const {
-    auto it = entries_.find(chunkPos);
-    if (it == entries_.end() || !it->second.slot.isValid()) {
-        return std::nullopt;
+void ClientChunkManager::collectChunks(std::vector<DrawableChunk>& out) const {
+    out.clear();
+    out.reserve(entries_.size());
+    for (const auto& [chunkPos, entry] : entries_) {
+        out.push_back(DrawableChunk{chunkPos, entry.faceConnectivity, meshPool_.binding(entry.slot)});
     }
-    return meshPool_.binding(it->second.slot);
-}
-
-ChunkFaceConnectivity ClientChunkManager::faceConnectivity(glm::ivec3 chunkPos) const {
-    auto it = entries_.find(chunkPos);
-    return it != entries_.end() ? it->second.faceConnectivity : ~0u;
 }
 
 size_t ClientChunkManager::dirtyMeshCount() const {

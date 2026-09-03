@@ -18,6 +18,14 @@ struct ChunkMeshBinding {
     uint16_t vertexBuffer = UINT16_MAX;
     uint32_t vertexOffset = 0;
     uint32_t vertexCount = 0;
+
+    bool isValid() const { return vertexBuffer != UINT16_MAX; }
+};
+
+struct DrawableChunk {
+    glm::ivec3 chunkPos{0};
+    ChunkFaceConnectivity connectivity = 0;
+    ChunkMeshBinding binding;
 };
 
 class ChunkMeshPool {

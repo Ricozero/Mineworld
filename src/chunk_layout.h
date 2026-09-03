@@ -11,8 +11,8 @@ struct ChunkLayout {
     static constexpr int Z_STRIDE = SIZE;
     static constexpr int Y_STRIDE = SIZE * SIZE;
 
-    static constexpr glm::ivec3 WORLD_MIN{-1024, -256, -1024};
-    static constexpr glm::ivec3 WORLD_MAX{1024, 256, 1024};
+    static constexpr glm::ivec3 WORLD_MIN{-65536, -256, -65536};
+    static constexpr glm::ivec3 WORLD_MAX{65536, 256, 65536};
 
     static constexpr size_t blockIndex(glm::ivec3 localPos) {
         return (static_cast<size_t>(localPos.y) << (SIZE_BITS * 2)) |
@@ -72,7 +72,7 @@ static_assert(ChunkLayout::WORLD_MIN.x % ChunkLayout::SIZE == 0 && ChunkLayout::
               "World bounds must be chunk aligned so that a chunk is either wholly in or wholly out of bounds");
 static_assert(ChunkLayout::isChunkInWorld({0, 0, 0}));
 static_assert(ChunkLayout::isChunkInWorld({-64, -16, -64}));
-static_assert(!ChunkLayout::isChunkInWorld({64, 0, 0}));
+static_assert(!ChunkLayout::isChunkInWorld({4096, 0, 0}));
 static_assert(!ChunkLayout::isChunkInWorld({0, -17, 0}));
 
 constexpr bool blockIndexRoundTrips() {

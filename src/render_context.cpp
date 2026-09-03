@@ -16,14 +16,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <optional>
-#include <queue>
-#include <unordered_set>
 #include <vector>
 
 #include "actor_world.h"
 #include "chunk_layout.h"
-#include "chunk_mesh.h"
 #include "chunk_mesh_pool.h"
 #include "client_chunk_manager.h"
 #include "config.h"
@@ -31,7 +27,6 @@
 #include "helper.h"
 #include "log.h"
 #include "profiler.h"
-#include "voxel_world.h"
 
 namespace {
 
@@ -47,6 +42,9 @@ constexpr size_t kBoxVertexCount = 24;
 constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
 constexpr size_t kLineBoxVertexCount = 8;
 constexpr size_t kMaxBatchVertices = UINT16_MAX;
+constexpr float kVerticalFieldOfView = 70.0f;
+constexpr float kNearPlane = 0.1f;
+constexpr float kFarPlane = 1000.0f;
 
 uint32_t depthSortKey(float distanceSq) {
     return bx::floatToBits(distanceSq);
@@ -85,44 +83,6 @@ bgfx::VertexLayout ImGuiVertex::layout;
 struct MeshBuilder {
     std::vector<PosColorVertex> vertices;
     std::vector<uint16_t> indices;
-};
-
-struct Frustum {
-    glm::vec4 planes[6];  // left, right, bottom, top, near, far
-
-    // Gribb/Hartmann extraction from a column-major view-projection float[16].
-    static Frustum fromBxMatrix(const float* vp) {
-        glm::mat4 m;
-        for (int c = 0; c < 4; ++c)
-            for (int r = 0; r < 4; ++r)
-                m[c][r] = vp[c * 4 + r];
-
-        const glm::mat4 t = glm::transpose(m);
-        Frustum f;
-        f.planes[0] = t[3] + t[0];
-        f.planes[1] = t[3] - t[0];
-        f.planes[2] = t[3] + t[1];
-        f.planes[3] = t[3] - t[1];
-        f.planes[4] = t[3] + t[2];
-        f.planes[5] = t[3] - t[2];
-        for (auto& p : f.planes) {
-            float len = glm::length(glm::vec3(p));
-            if (len > 0.0f) p /= len;
-        }
-        return f;
-    }
-
-    // Returns true if AABB [min,max] intersects or is inside the frustum.
-    bool testAABB(glm::vec3 mn, glm::vec3 mx) const {
-        for (const auto& p : planes) {
-            // Positive vertex (furthest in plane normal direction)
-            glm::vec3 pv(p.x > 0 ? mx.x : mn.x,
-                         p.y > 0 ? mx.y : mn.y,
-                         p.z > 0 ? mx.z : mn.z);
-            if (glm::dot(glm::vec3(p), pv) + p.w < 0.0f) return false;
-        }
-        return true;
-    }
 };
 
 void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::vec3 color) {
@@ -791,7 +751,7 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
     }
 }
 
-void RenderContext::render(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, ClientChunkManager& chunkManager) {
+void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager) {
     if (!window_ || !bgfxInitialized_) {
         return;
     }
@@ -819,16 +779,18 @@ void RenderContext::render(const VoxelWorld& voxelWorld, const ActorWorld& actor
     bx::mtxLookAt(view, eye, at, bx::Vec3(0.0f, 1.0f, 0.0f), bx::Handedness::Right);
     bx::mtxProj(
         projection,
-        70.0f,
+        kVerticalFieldOfView,
         static_cast<float>(framebufferWidth_) / framebufferHeight_,
-        0.1f,
-        500.0f,
+        kNearPlane,
+        kFarPlane,
         bgfx::getCaps()->homogeneousDepth,
         bx::Handedness::Right);
     bgfx::setViewTransform(kMainView, view, projection);
     bgfx::touch(kMainView);
 
-    renderWorld(voxelWorld, actorWorld, chunkManager);
+    float viewProjection[16];
+    bx::mtxMul(viewProjection, view, projection);
+    renderWorld(actorWorld, chunkManager, Frustum::fromViewProjection(viewProjection));
 
     recordBgfxStats(bgfx::getStats());
 
@@ -1009,96 +971,20 @@ void RenderContext::shutdownImGui() {
     }
 }
 
-void RenderContext::renderWorld(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, const ClientChunkManager& chunkManager) {
+void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, const Frustum& frustum) {
     MW_PROFILE_SCOPE("Render.World");
 
-    std::vector<glm::ivec3> loadedChunks;
-    voxelWorld.forEachLoadedChunk([&](glm::ivec3 chunkPos) {
-        loadedChunks.push_back(chunkPos);
-    });
-    MW_PROFILE_GAUGE("Render.LoadedChunks", static_cast<double>(loadedChunks.size()));
-    MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkManager.meshCount()));
-
-    std::unordered_set<glm::ivec3> visibleChunks;
     {
         MW_PROFILE_SCOPE("Render.World.ChunkCulling");
-
-        // Frustum culling
-        const glm::vec3 camTarget = cameraPosition_ + forward();
-        float viewMat[16], projMat[16], vpMat[16];
-        bx::mtxLookAt(viewMat,
-                      bx::Vec3(cameraPosition_.x, cameraPosition_.y, cameraPosition_.z),
-                      bx::Vec3(camTarget.x, camTarget.y, camTarget.z),
-                      bx::Vec3(0.0f, 1.0f, 0.0f),
-                      bx::Handedness::Right);
-        bx::mtxProj(projMat, 70.0f,
-                    static_cast<float>(framebufferWidth_) / static_cast<float>(framebufferHeight_),
-                    0.1f, 500.0f,
-                    bgfx::getCaps()->homogeneousDepth,
-                    bx::Handedness::Right);
-        bx::mtxMul(vpMat, viewMat, projMat);
-        const Frustum frustum = Frustum::fromBxMatrix(vpMat);
-
-        // Occlusion culling
-        const glm::ivec3 cameraChunk = ChunkLayout::worldToChunk(glm::ivec3(glm::floor(cameraPosition_)));
-        const float chunkWorldSize = static_cast<float>(ChunkLayout::SIZE);
-
-        std::unordered_set<glm::ivec3> loadedSet(loadedChunks.begin(), loadedChunks.end());
-
-        struct BfsNode {
-            glm::ivec3 pos;
-            int inFace;
-        };
-        std::queue<BfsNode> bfsQueue;
-        std::unordered_map<glm::ivec3, uint8_t> visitedFaces;
-        std::unordered_set<glm::ivec3> reachableChunks;
-
-        auto enqueueChunk = [&](glm::ivec3 pos, int inFace) {
-            if (!loadedSet.count(pos)) return;
-            uint8_t bit = (inFace < 0) ? 0x40u : static_cast<uint8_t>(1u << inFace);
-            uint8_t& seen = visitedFaces[pos];
-            if (seen & bit) return;
-            seen |= bit;
-            bfsQueue.push({pos, inFace});
-        };
-
-        if (loadedSet.count(cameraChunk)) {
-            enqueueChunk(cameraChunk, -1);
-        } else {
-            for (const glm::ivec3& chunkPos : loadedChunks) {
-                const glm::vec3 chunkMin = glm::vec3(chunkPos) * chunkWorldSize;
-                const glm::vec3 chunkMax = chunkMin + glm::vec3(chunkWorldSize);
-                if (frustum.testAABB(chunkMin, chunkMax)) {
-                    visibleChunks.insert(chunkPos);
-                }
-            }
-        }
-
-        while (!bfsQueue.empty()) {
-            const BfsNode node = bfsQueue.front();
-            bfsQueue.pop();
-
-            reachableChunks.insert(node.pos);
-
-            const ChunkFaceConnectivity conn = chunkManager.faceConnectivity(node.pos);
-
-            for (int outFace = 0; outFace < 6; ++outFace) {
-                if (node.inFace >= 0 && !chunkFacesConnected(conn, node.inFace, outFace)) continue;
-                enqueueChunk(node.pos + kChunkFaceOffsets[outFace], kOppositeChunkFace[outFace]);
-            }
-        }
-
-        for (const glm::ivec3& chunkPos : reachableChunks) {
-            const glm::vec3 chunkMin = glm::vec3(chunkPos) * chunkWorldSize;
-            const glm::vec3 chunkMax = chunkMin + glm::vec3(chunkWorldSize);
-            if (frustum.testAABB(chunkMin, chunkMax)) {
-                visibleChunks.insert(chunkPos);
-            }
-        }
-
-        MW_PROFILE_GAUGE("Render.ChunksVisible", static_cast<double>(visibleChunks.size()));
-        MW_PROFILE_GAUGE("Render.ChunksCulled", static_cast<double>(loadedChunks.size()) - static_cast<double>(visibleChunks.size()));
+        chunkManager.collectChunks(loadedChunks_);
+        chunkCuller_.cull(loadedChunks_, frustum, cameraPosition_);
     }
+
+    const std::vector<DrawableChunk>& visibleChunks = chunkCuller_.visibleChunks();
+    MW_PROFILE_GAUGE("Render.LoadedChunks", static_cast<double>(loadedChunks_.size()));
+    MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkManager.meshCount()));
+    MW_PROFILE_GAUGE("Render.ChunksVisible", static_cast<double>(visibleChunks.size()));
+    MW_PROFILE_GAUGE("Render.ChunksCulled", static_cast<double>(loadedChunks_.size()) - static_cast<double>(visibleChunks.size()));
 
     {
         MW_PROFILE_SCOPE("Render.World.SubmitChunkMesh");
@@ -1107,23 +993,24 @@ void RenderContext::renderWorld(const VoxelWorld& voxelWorld, const ActorWorld& 
         if (bgfx::isValid(quadIndexBuffer)) {
             int64_t submittedChunks = 0;
             int64_t submittedVertices = 0;
-            for (const glm::ivec3& chunkPos : visibleChunks) {
-                const std::optional<ChunkMeshBinding> binding = chunkManager.meshBinding(chunkPos);
-                if (!binding) {
+            for (const DrawableChunk& visible : visibleChunks) {
+                const ChunkMeshBinding& binding = visible.binding;
+                if (!binding.isValid()) {
                     continue;
                 }
+                const glm::ivec3 chunkPos = visible.chunkPos;
                 const glm::vec3 center = (glm::vec3(chunkPos) + glm::vec3(0.5f)) * static_cast<float>(ChunkLayout::SIZE);
                 const glm::vec3 offset = center - cameraPosition_;
 
                 float model[16];
                 bx::mtxTranslate(model, static_cast<float>(chunkPos.x * ChunkLayout::SIZE), static_cast<float>(chunkPos.y * ChunkLayout::SIZE), static_cast<float>(chunkPos.z * ChunkLayout::SIZE));
                 bgfx::setTransform(model);
-                bgfx::setVertexBuffer(0, bgfx::DynamicVertexBufferHandle{binding->vertexBuffer}, binding->vertexOffset, binding->vertexCount);
-                bgfx::setIndexBuffer(quadIndexBuffer, 0, ChunkMeshPool::indexCountForVertices(binding->vertexCount));
+                bgfx::setVertexBuffer(0, bgfx::DynamicVertexBufferHandle{binding.vertexBuffer}, binding.vertexOffset, binding.vertexCount);
+                bgfx::setIndexBuffer(quadIndexBuffer, 0, ChunkMeshPool::indexCountForVertices(binding.vertexCount));
                 bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
                 bgfx::submit(kMainView, bgfx::ProgramHandle{chunkShader_.program}, depthSortKey(glm::dot(offset, offset)));
                 ++submittedChunks;
-                submittedVertices += binding->vertexCount;
+                submittedVertices += binding.vertexCount;
             }
 
             MW_PROFILE_COUNTER("Render.ChunkSubmits", submittedChunks);
@@ -1176,14 +1063,14 @@ void RenderContext::renderWorld(const VoxelWorld& voxelWorld, const ActorWorld& 
         if (showChunkBounds_) {
             MeshBuilder lineBatch;
             const glm::vec3 boundColor(1.0f, 0.92f, 0.25f);
-            for (const glm::ivec3& chunkPos : loadedChunks) {
+            for (const DrawableChunk& chunk : loadedChunks_) {
                 if (lineBatch.vertices.size() + kLineBoxVertexCount > kMaxBatchVertices) {
                     submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
                     lineBatch.vertices.clear();
                     lineBatch.indices.clear();
                 }
 
-                const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkLayout::SIZE);
+                const glm::vec3 min = glm::vec3(chunk.chunkPos) * static_cast<float>(ChunkLayout::SIZE);
                 const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkLayout::SIZE));
                 addLineBox(lineBatch, min, max, boundColor);
             }

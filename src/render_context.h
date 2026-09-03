@@ -6,12 +6,13 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
 
+#include "chunk_culler.h"
 #include "entity.h"
 
 class ClientChunkManager;
 class ActorWorld;
-class VoxelWorld;
 struct ImDrawData;
 struct ImGuiContext;
 struct GLFWwindow;
@@ -43,7 +44,7 @@ public:
     void pollEvents();
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
-    void render(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, ClientChunkManager& chunkManager);
+    void render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager);
 
     // In-game menu (ESC) control
     void captureMouse();
@@ -77,7 +78,7 @@ private:
     void updateDisplayMetrics();
 
     // Per-frame render helpers (called within a single NewFrame/Render pair)
-    void renderWorld(const VoxelWorld& voxelWorld, const ActorWorld& actorWorld, const ClientChunkManager& chunkManager);
+    void renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, const Frustum& frustum);
     void renderProfilerOverlay();
     void renderCursorOverlay();
     void renderInGameMenu();
@@ -101,6 +102,8 @@ private:
     float framebufferScaleY_ = 1.0f;
     ShaderProgram unlitShader_;
     ShaderProgram chunkShader_;
+    ChunkCuller chunkCuller_;
+    std::vector<DrawableChunk> loadedChunks_;
 
     // Camera
     glm::vec3 cameraPosition_{8.0f, 6.0f, 24.0f};

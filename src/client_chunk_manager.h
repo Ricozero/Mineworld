@@ -47,8 +47,8 @@ public:
 
     void onFrameSubmitted(uint32_t bgfxFrameNumber) { meshPool_.onFrameSubmitted(bgfxFrameNumber); }
 
-    std::optional<ChunkMeshBinding> meshBinding(glm::ivec3 chunkPos) const;
-    ChunkFaceConnectivity faceConnectivity(glm::ivec3 chunkPos) const;
+    void collectChunks(std::vector<DrawableChunk>& out) const;
+
     uint16_t quadIndexBuffer() const { return meshPool_.quadIndexBuffer(); }
     size_t meshCount() const { return meshCount_; }
     size_t dirtyMeshCount() const;

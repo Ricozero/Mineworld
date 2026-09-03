@@ -65,5 +65,5 @@ void RenderSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float 
         break;
     }
 
-    renderContext_->render(voxelWorld, actorWorld, *chunkManager_);
+    renderContext_->render(actorWorld, *chunkManager_);
 }
