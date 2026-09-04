@@ -11,8 +11,9 @@
 
 namespace {
 
-constexpr uint32_t kBucketVertices[] = {256, 1024, 4096, 16384, 32768, kMaxChunkMeshVertices};
+constexpr uint32_t kBucketVertices[] = {256, 1024, 2048, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152};
 static_assert(std::is_sorted(std::begin(kBucketVertices), std::end(kBucketVertices)));
+static_assert(kBucketVertices[std::size(kBucketVertices) - 1] == kMaxChunkMeshVertices);
 
 constexpr uint32_t kBufferByteBudget = 4u << 20;
 constexpr size_t kMaxReservedBytes = 512u << 20;

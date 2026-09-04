@@ -68,16 +68,20 @@ private:
         uint64_t meshOrder = 0;
         uint64_t meshGeneration = 0;
         bool hasMesh = false;
+        bool inDirtyList = false;
         ChunkFaceConnectivity faceConnectivity = ~0u;
         ChunkMeshSlot slot;
+        ChunkMeshBinding binding;
     };
 
     void scheduleMeshRebuild(glm::ivec3 chunkPos);
+    void markDirty(glm::ivec3 chunkPos, Entry& entry);
     bool isCoreChunk(glm::ivec3 chunkPos) const;
 
     VoxelWorld& world_;
     std::unordered_set<glm::ivec3> coreChunks_;
     std::unordered_map<glm::ivec3, Entry> entries_;
+    std::vector<glm::ivec3> dirtyChunks_;
     ChunkMeshPool meshPool_;
     size_t meshCount_ = 0;
     uint64_t nextMeshOrder_ = 1;

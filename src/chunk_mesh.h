@@ -41,4 +41,4 @@ struct ChunkMesh {
 
 bool chunkFacesConnected(ChunkFaceConnectivity mask, int faceA, int faceB);
 
-ChunkMesh buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos);
+void buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos, ChunkMesh& out);

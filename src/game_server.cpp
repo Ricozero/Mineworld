@@ -21,7 +21,7 @@
 namespace {
 
 constexpr size_t kMaxChunkUpsertsPerTick = 1024;
-constexpr size_t kMaxChunkUpsertBytesPerTick = 32 * 1024;
+constexpr size_t kMaxChunkUpsertBytesPerTick = 128 * 1024;
 constexpr size_t kMaxChunkGenerationsPerTick = 1024;
 constexpr double kMaxChunkGenerationTimePerTick = 25.0;
 constexpr int kRobotChunkViewRadius = 1;

@@ -306,8 +306,6 @@ void GameClient::applyEntitySnapshot(const NetEntitySnapshot& snapshot) {
 }
 
 void GameClient::applyChunkUpdate(NetChunkUpdate&& update) {
-    MW_PROFILE_SCOPE("Client.ApplyChunkUpdate");
-
     bool applied = false;
     if (update.operation == NetChunkOperation::Unload) {
         applied = chunkManager_.unload(update.chunkPos, update.revision);
@@ -328,6 +326,7 @@ void GameClient::rebuildChunkMeshes() {
     const ClientChunkManager::MeshFocus focus = localPlayerMeshFocus();
     const auto start = std::chrono::steady_clock::now();
     size_t attemptedCount = 0;
+    bool exhausted = false;
     while (attemptedCount < kMaxChunkMeshRebuildsPerFrame) {
         const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         if (attemptedCount > 0 && elapsedMs >= kMaxChunkMeshRebuildTimePerFrame) {
@@ -339,15 +338,29 @@ void GameClient::rebuildChunkMeshes() {
             break;
         }
 
-        const ChunkMesh mesh = buildChunkMesh(voxelWorld_, task->chunkPos);
-        const ClientChunkManager::MeshTaskResult result = chunkManager_.completeMeshTask(*task, mesh);
+        buildChunkMesh(voxelWorld_, task->chunkPos, meshScratch_);
+        const ClientChunkManager::MeshTaskResult result = chunkManager_.completeMeshTask(*task, meshScratch_);
         ++attemptedCount;
         if (result == ClientChunkManager::MeshTaskResult::Accepted) {
             MW_PROFILE_COUNTER("Client.ChunkMeshesRebuilt", 1);
         } else if (result == ClientChunkManager::MeshTaskResult::Exhausted) {
+            if (!meshPoolExhausted_) {
+                logging::warn("Chunk mesh pool exhausted on chunk ({}, {}, {}) needing {} vertices: {:.1f} MiB reserved, {:.1f} MiB committed, {} meshes, {} chunks still dirty",
+                              task->chunkPos.x, task->chunkPos.y, task->chunkPos.z, meshScratch_.vertices.size(),
+                              static_cast<double>(chunkManager_.meshBytesReserved()) / (1024.0 * 1024.0),
+                              static_cast<double>(chunkManager_.meshBytesCommitted()) / (1024.0 * 1024.0),
+                              chunkManager_.meshCount(), chunkManager_.dirtyMeshCount());
+            }
+            exhausted = true;
             break;
         }
     }
+
+    if (meshPoolExhausted_ && !exhausted) {
+        logging::info("Chunk mesh pool recovered: {:.1f} MiB reserved, {} chunks still dirty",
+                      static_cast<double>(chunkManager_.meshBytesReserved()) / (1024.0 * 1024.0), chunkManager_.dirtyMeshCount());
+    }
+    meshPoolExhausted_ = exhausted;
 
     MW_PROFILE_GAUGE("Client.MeshRebuildBacklog", static_cast<double>(chunkManager_.dirtyMeshCount()));
 }

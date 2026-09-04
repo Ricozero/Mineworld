@@ -59,6 +59,9 @@ void ChunkCuller::cull(const std::vector<DrawableChunk>& chunks, const Frustum& 
 
     const float chunkWorldSize = static_cast<float>(ChunkLayout::SIZE);
     const auto emit = [&](const DrawableChunk& chunk) {
+        if (!chunk.binding.isValid()) {
+            return;
+        }
         const glm::vec3 chunkMin = glm::vec3(chunk.chunkPos) * chunkWorldSize;
         if (frustum.testAABB(chunkMin, chunkMin + chunkWorldSize)) {
             visible_.push_back(chunk);

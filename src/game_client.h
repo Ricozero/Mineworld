@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "actor_world.h"
+#include "chunk_mesh.h"
 #include "client_chunk_manager.h"
 #include "system.h"
 #include "voxel_world.h"
@@ -59,8 +60,10 @@ private:
     VoxelWorld voxelWorld_;
     ActorWorld actorWorld_{false};
     ClientChunkManager chunkManager_{voxelWorld_};
+    ChunkMesh meshScratch_;
     std::vector<std::unique_ptr<System>> systems_;
     uint32_t localSessionId_ = 0;
+    bool meshPoolExhausted_ = false;
     State state_ = State::Connecting;
     std::string failureReason_;
     float secondsSincePacket_ = 0.0f;

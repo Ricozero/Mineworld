@@ -47,7 +47,6 @@ bin/mineworld.exe server
 
 ### 当前
 
-- 网格构建性能优化
 - 网络LZ4
 
 ### 架构
@@ -60,6 +59,7 @@ bin/mineworld.exe server
 - 服务器区块
   - 区块共享编码缓存
   - 区块生成批量set接口
+  - 区块批量Update，优化updateChunks
   - 永久区块
   - 增量修改
   - 热区块和冷区块，冷区块使用RLE+区间树/线段树或者LZ4
@@ -70,13 +70,15 @@ bin/mineworld.exe server
     - 提交前校验区块状态、requesterCount 和 generationId，过期结果直接丢弃
     - 服务器关闭时停止接收任务，清空未开始任务，等待工作线程退出并丢弃无效结果
 - 客户端区块
+  - 批量buildAirRows
   - 热缓存和冷缓存
   - 多线程网格构建
-  - 客户端视野，影响是否构建网格
+  - 客户端视野，解决传送后cull grid过大
   - 区块边界用颜色表示不同加载状态
   - 贪婪网格，影响纹理/平滑光照/AO/透明
   - 新区块平滑显示
   - 远距离区块景深
+  - 区块LOD，优化draw call
 
 ### 玩法
 
