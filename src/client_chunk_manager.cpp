@@ -1,6 +1,5 @@
 #include "client_chunk_manager.h"
 
-#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -168,12 +167,6 @@ void ClientChunkManager::collectChunks(std::vector<DrawableChunk>& out) const {
     for (const auto& [chunkPos, entry] : entries_) {
         out.push_back(DrawableChunk{chunkPos, entry.faceConnectivity, entry.binding});
     }
-}
-
-size_t ClientChunkManager::dirtyMeshCount() const {
-    return static_cast<size_t>(std::count_if(entries_.begin(), entries_.end(), [](const auto& item) {
-        return item.second.meshState == MeshState::Dirty;
-    }));
 }
 
 void ClientChunkManager::scheduleMeshRebuild(glm::ivec3 chunkPos) {

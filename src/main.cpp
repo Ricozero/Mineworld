@@ -59,10 +59,10 @@ bool initializeServer(std::unique_ptr<GameServer>& server) {
     return true;
 }
 
-bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext) {
+bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext, const std::string& dir) {
     renderContext = std::make_unique<RenderContext>();
     const AppConfig& cfg = AppConfig::instance();
-    if (!renderContext->initialize(cfg.windowWidth, cfg.windowHeight, "Mineworld")) {
+    if (!renderContext->initialize(cfg.windowWidth, cfg.windowHeight, "Mineworld", dir)) {
         return false;
     }
     return true;
@@ -128,7 +128,7 @@ int runClient(const std::string& dir) {
 
     AppConfig::instance().load(dir);
     std::unique_ptr<RenderContext> renderContext;
-    if (!initializeRenderContext(renderContext)) {
+    if (!initializeRenderContext(renderContext, dir)) {
         return 1;
     }
 

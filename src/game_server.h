@@ -8,7 +8,6 @@
 #include <glm/gtx/hash.hpp>
 #include <memory>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "actor_world.h"
@@ -31,6 +30,8 @@ public:
 
 private:
     struct Session {
+        static constexpr glm::ivec3 INVALID_CHUNK_POS{INT_MAX, INT_MAX, INT_MAX};
+
         uint32_t sessionId = 0;
         uint32_t entitySnapshotSequence = 0;
         float entitySnapshotTimer = 0.0f;
@@ -39,9 +40,10 @@ private:
         uint32_t lastProcessedInputSequence = 0;
         std::string actorName;
 
-        glm::ivec3 lastChunkPos{INT_MAX, INT_MAX, INT_MAX};
-        std::unordered_set<glm::ivec3> cachedVisibleChunks;
-        std::unordered_set<glm::ivec3> coreChunks;
+        glm::ivec3 lastChunkPos = INVALID_CHUNK_POS;
+        std::vector<glm::ivec3> cachedVisibleChunks;
+        std::vector<glm::ivec3> cachedRetentionChunks;
+        std::vector<glm::ivec3> coreChunks;
 
         std::unordered_map<glm::ivec3, NetChunkUpdate> pendingChunkUpdates;
 
@@ -53,15 +55,19 @@ private:
     NetEntitySnapshot buildEntitySnapshot(Session& session);
     void sendChunkUpdates(Session& session);
     void updateChunks();
-    void updateSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ServerChunkManager::DemandMap& demands);
-    void processQueuedChunks();
+    void rebuildSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ServerChunkManager::TimePoint now);
+    void releaseSessionChunkDemand(Session& session, ServerChunkManager::TimePoint now);
+    void releaseSessionCoreChunkDemand(Session& session, ServerChunkManager::TimePoint now);
+    void updateRobotChunkDemand(entt::entity entity, glm::ivec3 currentChunkPos, ServerChunkManager::TimePoint now);
+    void releaseRobotChunkDemand(glm::ivec3 lastChunkPos, ServerChunkManager::TimePoint now);
+    void processQueuedChunks(const std::vector<glm::ivec3>& chunkFoci);
     void processPendingUnloads(ServerChunkManager::TimePoint now);
     bool commitChunkLoad(glm::ivec3 chunkPos, ChunkData&& data, uint64_t generationId);
     bool commitChunkUnload(glm::ivec3 chunkPos);
     void queueChunkUpdate(Session& session, NetChunkUpdate update);
 
     NetChunkUpdate buildUpsertChunkUpdate(const Chunk& chunk);
-    static NetChunkUpdate buildUnloadChunkUpdate(glm::ivec3 chunkPos, uint32_t revision);
+    static NetChunkUpdate buildUnloadChunkUpdate(const Chunk& chunk);
     void pumpNetwork();
 
     void onSessionConnect(uint32_t sessionId);
@@ -77,8 +83,8 @@ private:
     std::vector<std::unique_ptr<System>> systems_;
 
     asio::io_context ioContext_;
-
     std::unique_ptr<INetServer> netServer_;
     std::unordered_map<uint32_t, Session> sessions_;
+    std::unordered_map<entt::entity, glm::ivec3> robotChunks_;
     uint32_t nextPlayerIndex_ = 1;
 };

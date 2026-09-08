@@ -347,7 +347,8 @@ RenderContext::~RenderContext() {
     shutdown();
 }
 
-bool RenderContext::initialize(int width, int height, const char* title) {
+bool RenderContext::initialize(int width, int height, const char* title, const std::string& baseDir) {
+    baseDir_ = baseDir;
     framebufferWidth_ = width;
     framebufferHeight_ = height;
     windowWidth_ = width;
@@ -855,16 +856,11 @@ RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
     return action;
 }
 
-bool RenderContext::loadProgram(const char* vertexName, const char* fragmentName, uint16_t& program) {
+bool RenderContext::loadProgram(const char* vertexName, const char* fragmentName, uint16_t& program) const {
     const char* rendererDir = shaderDirectoryForRenderer(bgfx::getRendererType());
-    std::filesystem::path shaderDir = std::filesystem::path("shaders") / rendererDir;
-    std::vector<uint8_t> vertexShaderData = readBinaryFile(shaderDir / vertexName);
-    std::vector<uint8_t> fragmentShaderData = readBinaryFile(shaderDir / fragmentName);
-    if (vertexShaderData.empty() || fragmentShaderData.empty()) {
-        shaderDir = std::filesystem::path("bin") / "shaders" / rendererDir;
-        vertexShaderData = readBinaryFile(shaderDir / vertexName);
-        fragmentShaderData = readBinaryFile(shaderDir / fragmentName);
-    }
+    const std::filesystem::path shaderDir = std::filesystem::path(baseDir_) / "shaders" / rendererDir;
+    const std::vector<uint8_t> vertexShaderData = readBinaryFile(shaderDir / vertexName);
+    const std::vector<uint8_t> fragmentShaderData = readBinaryFile(shaderDir / fragmentName);
     if (vertexShaderData.empty() || fragmentShaderData.empty()) {
         logging::error("Failed to load shaders {}/{} from {}", vertexName, fragmentName, shaderDir.string());
         return false;

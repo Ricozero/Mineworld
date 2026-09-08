@@ -51,7 +51,7 @@ public:
 
     uint16_t quadIndexBuffer() const { return meshPool_.quadIndexBuffer(); }
     size_t meshCount() const { return meshCount_; }
-    size_t dirtyMeshCount() const;
+    size_t dirtyMeshCount() const { return dirtyChunks_.size(); }
     size_t meshBytesReserved() const { return meshPool_.reservedBytes(); }
     size_t meshBytesCommitted() const { return meshPool_.committedBytes(); }
     size_t meshBytesUsed() const { return meshPool_.usedBytes(); }

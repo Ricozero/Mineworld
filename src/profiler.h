@@ -85,9 +85,9 @@ private:
 class ScopedTimer {
 public:
 #if defined(TRACY_ENABLE)
-    ScopedTimer(std::string_view name, const ___tracy_source_location_data* sourceLocation);
+    ScopedTimer(const char* name, const ___tracy_source_location_data* sourceLocation);
 #else
-    explicit ScopedTimer(std::string_view name);
+    explicit ScopedTimer(const char* name);
 #endif
     ~ScopedTimer();
 
@@ -95,7 +95,7 @@ public:
     ScopedTimer& operator=(const ScopedTimer&) = delete;
 
 private:
-    std::string name_;
+    const char* name_;
     std::chrono::steady_clock::time_point start_;
 #if defined(TRACY_ENABLE)
     TracyCZoneCtx tracyCtx_{};

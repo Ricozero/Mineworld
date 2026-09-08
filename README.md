@@ -48,6 +48,20 @@ bin/mineworld.exe server
 ### 当前
 
 - 网络LZ4
+- entity和chunk松耦合
+  - entity不维护和区块的关系
+  - 用八叉树等结构维护
+  - 存盘时需要考虑和区块的关系
+  - 增加chunk上一级的region概念
+    - 是否有意义？
+    - 其他地方能否用到？
+- 客户端区块优化
+  - 删除MeshPriority，直接用队列
+  - markDirty 时记 entry.dirtyTime = now
+  - 选取时跳过 now - dirtyTime < 50ms 的区块
+  - 如果一个候选都没有就退化成取最旧的那个
+- 统一std::chrono表达
+- 统一limits表达
 
 ### 架构
 
@@ -59,7 +73,7 @@ bin/mineworld.exe server
 - 服务器区块
   - 区块共享编码缓存
   - 区块生成批量set接口
-  - 区块批量Update，优化updateChunks
+  - 区块同步批量Update
   - 永久区块
   - 增量修改
   - 热区块和冷区块，冷区块使用RLE+区间树/线段树或者LZ4
@@ -73,7 +87,6 @@ bin/mineworld.exe server
   - 批量buildAirRows
   - 热缓存和冷缓存
   - 多线程网格构建
-  - 客户端视野，解决传送后cull grid过大
   - 区块边界用颜色表示不同加载状态
   - 贪婪网格，影响纹理/平滑光照/AO/透明
   - 新区块平滑显示
@@ -92,6 +105,10 @@ bin/mineworld.exe server
 - 类似红石的门电路
 - NPC实体
 - 删除spawn配置，改成自动寻找最高点
+- 传送
+  - 重发coreChunks
+  - 客户端视野，避免cull grid过大
+  - lastChunkPos写成哨兵
 
 ### 网络
 

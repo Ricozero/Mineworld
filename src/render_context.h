@@ -32,7 +32,7 @@ public:
     RenderContext& operator=(const RenderContext&) = delete;
 
     // Lifecycle
-    bool initialize(int width, int height, const char* title);
+    bool initialize(int width, int height, const char* title, const std::string& baseDir);
     void shutdown();
 
     // Menu screens — each call renders and presents a complete frame
@@ -70,7 +70,7 @@ private:
     };
 
     // Init helpers
-    static bool loadProgram(const char* vertexName, const char* fragmentName, uint16_t& program);
+    bool loadProgram(const char* vertexName, const char* fragmentName, uint16_t& program) const;
     bool loadShaders();
     void destroyShaders();
     bool initializeImGui();
@@ -92,6 +92,7 @@ private:
     bool shouldHideLocalPlayerModel(const ActorWorld& actorWorld, entt::entity entity) const;
 
     // Window & renderer
+    std::string baseDir_;
     GLFWwindow* window_ = nullptr;
     bool bgfxInitialized_ = false;
     int framebufferWidth_ = 1280;

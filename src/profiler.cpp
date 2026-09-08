@@ -127,12 +127,12 @@ void Profiler::finishFrameLocked(double frameMs) {
 }
 
 #if defined(TRACY_ENABLE)
-ScopedTimer::ScopedTimer(std::string_view name, const ___tracy_source_location_data* sourceLocation)
+ScopedTimer::ScopedTimer(const char* name, const ___tracy_source_location_data* sourceLocation)
     : name_(name), start_(std::chrono::steady_clock::now()) {
-    tracyCtx_ = ___tracy_emit_zone_begin_callstack(sourceLocation, TRACY_CALLSTACK, true);
+    tracyCtx_ = ___tracy_emit_zone_begin(sourceLocation, true);
 }
 #else
-ScopedTimer::ScopedTimer(std::string_view name)
+ScopedTimer::ScopedTimer(const char* name)
     : name_(name), start_(std::chrono::steady_clock::now()) {
 }
 #endif
