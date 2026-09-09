@@ -1,11 +1,17 @@
 #include "client_chunk_manager.h"
 
-#include <array>
+#include <cassert>
+#include <iterator>
 #include <utility>
 
-#include "helper.h"
 #include "log.h"
 #include "voxel_world.h"
+
+namespace {
+
+constexpr auto kMeshRebuildDelay = std::chrono::milliseconds(50);
+
+}  // namespace
 
 ClientChunkManager::ClientChunkManager(VoxelWorld& world) : world_(world) {
     if (!meshPool_.initialize()) {
@@ -37,7 +43,13 @@ bool ClientChunkManager::upsert(glm::ivec3 chunkPos, uint32_t revision, ChunkDat
         return false;
     }
 
-    entries_.try_emplace(chunkPos);
+    const auto [entryIt, inserted] = entries_.try_emplace(chunkPos);
+    if (inserted) {
+        assert(renderChunks_.size() < std::numeric_limits<uint32_t>::max());
+        entryIt->second.renderIndex = static_cast<uint32_t>(renderChunks_.size());
+        renderChunks_.push_back(DrawableChunk{chunkPos});
+        ++layoutRevision_;
+    }
     scheduleMeshRebuild(chunkPos);
     for (const glm::ivec3& offset : kChunkFaceOffsets) {
         scheduleMeshRebuild(chunkPos + offset);
@@ -53,10 +65,20 @@ bool ClientChunkManager::unload(glm::ivec3 chunkPos, uint32_t revision) {
 
     auto entryIt = entries_.find(chunkPos);
     if (entryIt != entries_.end()) {
+        if (entryIt->second.meshState == MeshState::Dirty) {
+            removeFromMeshQueue(entryIt->second);
+        }
         if (entryIt->second.hasMesh) {
             --meshCount_;
         }
         meshPool_.release(entryIt->second.slot);
+        const uint32_t renderIndex = entryIt->second.renderIndex;
+        if (renderIndex != renderChunks_.size() - 1) {
+            renderChunks_[renderIndex] = renderChunks_.back();
+            entries_.find(renderChunks_[renderIndex].chunkPos)->second.renderIndex = renderIndex;
+        }
+        renderChunks_.pop_back();
+        ++layoutRevision_;
         entries_.erase(entryIt);
     }
 
@@ -69,63 +91,20 @@ bool ClientChunkManager::unload(glm::ivec3 chunkPos, uint32_t revision) {
     return true;
 }
 
-std::optional<ClientChunkManager::MeshTask> ClientChunkManager::takeNextMeshTask(const MeshFocus& focus) {
-    struct MeshPriority {
-        int coreRank;
-        int visibilityRank;
-        int distanceSq;
-        uint64_t inverseMeshOrder;
-        std::array<int, 3> chunkPos;
-        auto operator<=>(const MeshPriority&) const = default;
-    };
-
-    const auto priorityOf = [&](glm::ivec3 chunkPos, const Entry& entry) {
-        const glm::vec3 offset = glm::vec3(chunkPos - focus.centerChunk);
-        return MeshPriority{
-            isCoreChunk(chunkPos) ? 0 : 1,
-            glm::dot(offset, focus.forward) >= 0.0f ? 0 : 1,
-            ivec3DistanceSq(chunkPos, focus.centerChunk),
-            ~entry.meshOrder,
-            {chunkPos.x, chunkPos.y, chunkPos.z},
-        };
-    };
-
-    auto best = entries_.end();
-    size_t bestSlot = 0;
-    MeshPriority bestPriority{};
-    size_t kept = 0;
-    for (const glm::ivec3 chunkPos : dirtyChunks_) {
-        auto it = entries_.find(chunkPos);
-        if (it == entries_.end()) {
-            continue;
-        }
-        if (it->second.meshState != MeshState::Dirty) {
-            it->second.inDirtyList = false;
-            continue;
-        }
-
-        if (world_.findChunk(chunkPos) != nullptr) {
-            const MeshPriority priority = priorityOf(chunkPos, it->second);
-            if (best == entries_.end() || priority < bestPriority) {
-                best = it;
-                bestSlot = kept;
-                bestPriority = priority;
-            }
-        }
-        dirtyChunks_[kept++] = chunkPos;
-    }
-    dirtyChunks_.resize(kept);
-    if (best == entries_.end()) {
+std::optional<ClientChunkManager::MeshTask> ClientChunkManager::takeNextMeshTask() {
+    if (meshQueue_.empty()) {
         return std::nullopt;
     }
 
-    dirtyChunks_[bestSlot] = dirtyChunks_.back();
-    dirtyChunks_.pop_back();
+    const glm::ivec3 chunkPos = meshQueue_.front();
+    Entry& entry = entries_.find(chunkPos)->second;
+    if (Clock::now() - entry.dirtyTime < kMeshRebuildDelay) {
+        return std::nullopt;
+    }
 
-    Entry& entry = best->second;
-    entry.inDirtyList = false;
+    removeFromMeshQueue(entry);
     entry.meshState = MeshState::Building;
-    return MeshTask{best->first, entry.meshGeneration};
+    return MeshTask{chunkPos, entry.meshGeneration};
 }
 
 ClientChunkManager::MeshTaskResult ClientChunkManager::completeMeshTask(const MeshTask& task, const ChunkMesh& mesh) {
@@ -135,10 +114,10 @@ ClientChunkManager::MeshTaskResult ClientChunkManager::completeMeshTask(const Me
     }
 
     Entry& entry = it->second;
-    if (entry.meshState != MeshState::Building) {
+    if (entry.meshState != MeshState::Building || task.generation != entry.meshGeneration) {
         return MeshTaskResult::Discarded;
     }
-    if (task.generation != entry.meshGeneration || world_.findChunk(task.chunkPos) == nullptr) {
+    if (world_.findChunk(task.chunkPos) == nullptr) {
         markDirty(task.chunkPos, entry);
         return MeshTaskResult::Discarded;
     }
@@ -151,22 +130,22 @@ ClientChunkManager::MeshTaskResult ClientChunkManager::completeMeshTask(const Me
 
     meshPool_.release(entry.slot);
     entry.slot = newSlot;
-    entry.binding = meshPool_.binding(newSlot);
-    entry.faceConnectivity = mesh.faceConnectivity;
+    DrawableChunk& renderChunk = renderChunks_[entry.renderIndex];
+    const ChunkMeshBinding binding = meshPool_.binding(newSlot);
+    if (renderChunk.binding.isValid() != binding.isValid()) {
+        ++drawableRevision_;
+    }
+    renderChunk.binding = binding;
+    if (renderChunk.connectivity != mesh.connectivity) {
+        renderChunk.connectivity = mesh.connectivity;
+        ++topologyRevision_;
+    }
     if (!entry.hasMesh) {
         ++meshCount_;
     }
     entry.hasMesh = true;
     entry.meshState = MeshState::Ready;
     return MeshTaskResult::Accepted;
-}
-
-void ClientChunkManager::collectChunks(std::vector<DrawableChunk>& out) const {
-    out.clear();
-    out.reserve(entries_.size());
-    for (const auto& [chunkPos, entry] : entries_) {
-        out.push_back(DrawableChunk{chunkPos, entry.faceConnectivity, entry.binding});
-    }
 }
 
 void ClientChunkManager::scheduleMeshRebuild(glm::ivec3 chunkPos) {
@@ -176,21 +155,24 @@ void ClientChunkManager::scheduleMeshRebuild(glm::ivec3 chunkPos) {
     }
 
     Entry& entry = it->second;
-    ++entry.meshGeneration;
-    entry.meshOrder = nextMeshOrder_++;
-    if (entry.meshState != MeshState::Building) {
-        markDirty(chunkPos, entry);
-    }
+    entry.meshGeneration = nextMeshGeneration_++;
+    markDirty(chunkPos, entry);
 }
 
 void ClientChunkManager::markDirty(glm::ivec3 chunkPos, Entry& entry) {
+    entry.dirtyTime = Clock::now();
     entry.meshState = MeshState::Dirty;
-    if (!entry.inDirtyList) {
-        entry.inDirtyList = true;
-        dirtyChunks_.push_back(chunkPos);
+    if (entry.inMeshQueue) {
+        meshQueue_.splice(meshQueue_.end(), meshQueue_, entry.meshQueueIt);
+    } else {
+        meshQueue_.push_back(chunkPos);
+        entry.meshQueueIt = std::prev(meshQueue_.end());
+        entry.inMeshQueue = true;
     }
 }
 
-bool ClientChunkManager::isCoreChunk(glm::ivec3 chunkPos) const {
-    return coreChunks_.contains(chunkPos);
+void ClientChunkManager::removeFromMeshQueue(Entry& entry) {
+    assert(entry.inMeshQueue);
+    meshQueue_.erase(entry.meshQueueIt);
+    entry.inMeshQueue = false;
 }

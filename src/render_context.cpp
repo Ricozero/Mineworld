@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "actor_world.h"
+#include "chunk_culler.h"
 #include "chunk_layout.h"
 #include "chunk_mesh_pool.h"
 #include "client_chunk_manager.h"
@@ -37,7 +38,7 @@ T cycleMode(T current) {
 
 constexpr bgfx::ViewId kMainView = 0;
 constexpr bgfx::ViewId kImGuiView = 1;
-constexpr uint32_t kDepthLast = UINT32_MAX;
+constexpr uint32_t kDepthLast = std::numeric_limits<uint32_t>::max();
 constexpr size_t kBoxVertexCount = 24;
 constexpr size_t kPlayerModelVertexCount = kBoxVertexCount * 2;
 constexpr size_t kLineBoxVertexCount = 8;
@@ -752,7 +753,7 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
     }
 }
 
-void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager) {
+void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager, ChunkCuller& chunkCuller) {
     if (!window_ || !bgfxInitialized_) {
         return;
     }
@@ -791,7 +792,7 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
 
     float viewProjection[16];
     bx::mtxMul(viewProjection, view, projection);
-    renderWorld(actorWorld, chunkManager, Frustum::fromViewProjection(viewProjection));
+    renderWorld(actorWorld, chunkManager, chunkCuller, Frustum::fromViewProjection(viewProjection));
 
     recordBgfxStats(bgfx::getStats());
 
@@ -967,20 +968,21 @@ void RenderContext::shutdownImGui() {
     }
 }
 
-void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, const Frustum& frustum) {
+void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, ChunkCuller& chunkCuller, const Frustum& frustum) {
     MW_PROFILE_SCOPE("Render.World");
 
+    const ChunkRenderView renderData = chunkManager.renderData();
+    const auto chunks = renderData.chunks;
     {
         MW_PROFILE_SCOPE("Render.World.ChunkCulling");
-        chunkManager.collectChunks(loadedChunks_);
-        chunkCuller_.cull(loadedChunks_, frustum, cameraPosition_);
+        chunkCuller.cull(renderData, frustum, cameraPosition_);
     }
 
-    const std::vector<DrawableChunk>& visibleChunks = chunkCuller_.visibleChunks();
-    MW_PROFILE_GAUGE("Render.LoadedChunks", static_cast<double>(loadedChunks_.size()));
+    const auto visibleIndices = chunkCuller.visibleChunkIndices();
+    MW_PROFILE_GAUGE("Render.LoadedChunks", static_cast<double>(chunks.size()));
     MW_PROFILE_GAUGE("Render.MeshCacheSize", static_cast<double>(chunkManager.meshCount()));
-    MW_PROFILE_GAUGE("Render.ChunksVisible", static_cast<double>(visibleChunks.size()));
-    MW_PROFILE_GAUGE("Render.ChunksCulled", static_cast<double>(loadedChunks_.size()) - static_cast<double>(visibleChunks.size()));
+    MW_PROFILE_GAUGE("Render.ChunksVisible", static_cast<double>(visibleIndices.size()));
+    MW_PROFILE_GAUGE("Render.ChunksCulled", static_cast<double>(chunks.size()) - visibleIndices.size());
 
     {
         MW_PROFILE_SCOPE("Render.World.SubmitChunkMesh");
@@ -989,7 +991,8 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
         if (bgfx::isValid(quadIndexBuffer)) {
             int64_t submittedChunks = 0;
             int64_t submittedVertices = 0;
-            for (const DrawableChunk& visible : visibleChunks) {
+            for (uint32_t index : visibleIndices) {
+                const DrawableChunk& visible = chunks[index];
                 const ChunkMeshBinding& binding = visible.binding;
                 if (!binding.isValid()) {
                     continue;
@@ -1059,7 +1062,7 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
         if (showChunkBounds_) {
             MeshBuilder lineBatch;
             const glm::vec3 boundColor(1.0f, 0.92f, 0.25f);
-            for (const DrawableChunk& chunk : loadedChunks_) {
+            for (const DrawableChunk& chunk : chunks) {
                 if (lineBatch.vertices.size() + kLineBoxVertexCount > kMaxBatchVertices) {
                     submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
                     lineBatch.vertices.clear();

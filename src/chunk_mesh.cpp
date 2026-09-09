@@ -53,11 +53,6 @@ constexpr bool facesMatchChunkFaceOrder() {
 }
 static_assert(facesMatchChunkFaceOrder(), "buildFaceMasks hard-codes the axis per face index");
 
-constexpr int bitIndex(int faceA, int faceB) {
-    return faceA < faceB ? faceA * 6 + faceB : faceB * 6 + faceA;
-}
-static_assert(bitIndex(4, 5) < static_cast<int>(sizeof(ChunkFaceConnectivity) * 8));
-
 constexpr size_t kRowCount = ChunkLayout::BLOCK_COUNT / ChunkLayout::SIZE;
 using RowMasks = std::array<uint16_t, kRowCount>;
 static_assert(ChunkLayout::SIZE == 16, "Rows are held in a uint16_t bitmask");
@@ -184,7 +179,7 @@ ChunkFaceConnectivity computeFaceConnectivity(const RowMasks& air) {
     RowMasks visited{};
     std::array<uint16_t, kRowCount> stack{};
     std::array<uint8_t, kRowCount> queued{};
-    ChunkFaceConnectivity mask = 0;
+    ChunkFaceConnectivity connectivity{};
 
     for (size_t seedRow = 0; seedRow < kRowCount; ++seedRow) {
         for (;;) {
@@ -232,15 +227,11 @@ ChunkFaceConnectivity computeFaceConnectivity(const RowMasks& air) {
                 if ((touched & (1u << from)) == 0) {
                     continue;
                 }
-                for (int to = from + 1; to < 6; ++to) {
-                    if ((touched & (1u << to)) != 0) {
-                        mask |= ChunkFaceConnectivity{1} << bitIndex(from, to);
-                    }
-                }
+                connectivity[from] |= static_cast<uint8_t>(touched & ~(1u << from));
             }
         }
     }
-    return mask;
+    return connectivity;
 }
 
 using ShadedColorTable = std::array<std::array<uint32_t, 6>, static_cast<size_t>(BlockType::Count)>;
@@ -275,16 +266,9 @@ void appendFace(std::vector<ChunkVertex>& vertices, glm::ivec3 localPos, size_t 
 
 }  // namespace
 
-bool chunkFacesConnected(ChunkFaceConnectivity mask, int faceA, int faceB) {
-    if (faceA == faceB) {
-        return false;
-    }
-    return (mask & (ChunkFaceConnectivity{1} << bitIndex(faceA, faceB))) != 0;
-}
-
 void buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos, ChunkMesh& out) {
     out.vertices.clear();
-    out.faceConnectivity = ~0u;
+    out.connectivity = kOpenChunkFaceConnectivity;
 
     const Chunk* chunkPtr = voxelWorld.findChunk(chunkPos);
     if (chunkPtr == nullptr) {
@@ -338,6 +322,6 @@ void buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos, ChunkMesh
         }
     }
 
-    out.faceConnectivity = computeFaceConnectivity(air);
+    out.connectivity = computeFaceConnectivity(air);
     MW_PROFILE_COUNTER("Client.ChunkMeshVertices", static_cast<int64_t>(out.vertices.size()));
 }

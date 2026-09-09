@@ -6,7 +6,6 @@
 
 #include "chunk_mesh.h"
 #include "client_system.h"
-#include "direction.h"
 #include "entity.h"
 #include "log.h"
 #include "net_kcp.h"
@@ -15,7 +14,7 @@
 namespace {
 
 constexpr float kConnectionTimeoutSeconds = 10.0f;
-constexpr size_t kMaxChunkMeshRebuildsPerFrame = 128;
+constexpr size_t kMaxChunkMeshRebuildsPerFrame = 1024;
 constexpr double kMaxChunkMeshRebuildTimePerFrame = 8.0;
 
 }  // namespace
@@ -196,7 +195,7 @@ void GameClient::tryEnterRunning() {
     netClient_->flush();
 
     registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
-    registerSystem(std::make_unique<RenderSystem>(renderContext_, &chunkManager_, localSessionId_));
+    registerSystem(std::make_unique<RenderSystem>(renderContext_, chunkManager_, chunkCuller_, localSessionId_));
 
     chunkManager_.clearCoreChunks();
     state_ = State::Running;
@@ -323,7 +322,6 @@ void GameClient::applyChunkUpdate(NetChunkUpdate&& update) {
 void GameClient::rebuildChunkMeshes() {
     MW_PROFILE_SCOPE("Client.RebuildChunkMeshes");
 
-    const ClientChunkManager::MeshFocus focus = localPlayerMeshFocus();
     const auto start = std::chrono::steady_clock::now();
     size_t attemptedCount = 0;
     bool exhausted = false;
@@ -333,7 +331,7 @@ void GameClient::rebuildChunkMeshes() {
             break;
         }
 
-        const std::optional<ClientChunkManager::MeshTask> task = chunkManager_.takeNextMeshTask(focus);
+        const std::optional<ClientChunkManager::MeshTask> task = chunkManager_.takeNextMeshTask();
         if (!task) {
             break;
         }
@@ -363,21 +361,6 @@ void GameClient::rebuildChunkMeshes() {
     meshPoolExhausted_ = exhausted;
 
     MW_PROFILE_GAUGE("Client.MeshRebuildBacklog", static_cast<double>(chunkManager_.dirtyMeshCount()));
-}
-
-ClientChunkManager::MeshFocus GameClient::localPlayerMeshFocus() const {
-    const auto& registry = actorWorld_.registry();
-    auto localPlayers = registry.view<SessionComponent, TransformComponent>();
-    for (entt::entity entity : localPlayers) {
-        if (localPlayers.get<SessionComponent>(entity).sessionId == localSessionId_) {
-            const auto& transform = localPlayers.get<TransformComponent>(entity);
-            return ClientChunkManager::MeshFocus{
-                ChunkLayout::worldToChunk(glm::ivec3(glm::floor(transform.position))),
-                Direction::lookForward(transform.rotation.y, transform.rotation.x),
-            };
-        }
-    }
-    return ClientChunkManager::MeshFocus{};
 }
 
 void GameClient::queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor) {

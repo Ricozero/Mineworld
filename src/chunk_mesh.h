@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <vector>
@@ -20,9 +21,15 @@ struct ChunkVertex {
 };
 static_assert(sizeof(ChunkVertex) == 8, "ChunkVertex must match the packed bgfx vertex layout");
 
-// Bit (i*6+j) set when chunk face i and j are connected by open air (i<j).
-// Face indices: 0=+X 1=-X 2=+Y 3=-Y 4=+Z 5=-Z.
-using ChunkFaceConnectivity = uint32_t;
+using ChunkFaceConnectivity = std::array<uint8_t, 6>;
+constexpr uint8_t kAllFaces = 0x3Fu;
+inline constexpr ChunkFaceConnectivity kOpenChunkFaceConnectivity = [] {
+    ChunkFaceConnectivity connectivity{};
+    for (int face = 0; face < 6; ++face) {
+        connectivity[face] = static_cast<uint8_t>(kAllFaces & ~(1u << face));
+    }
+    return connectivity;
+}();
 
 inline constexpr glm::ivec3 kChunkFaceOffsets[6] = {
     {1, 0, 0},
@@ -36,9 +43,6 @@ inline constexpr int kOppositeChunkFace[6] = {1, 0, 3, 2, 5, 4};
 
 struct ChunkMesh {
     std::vector<ChunkVertex> vertices;
-    ChunkFaceConnectivity faceConnectivity = ~0u;
+    ChunkFaceConnectivity connectivity = kOpenChunkFaceConnectivity;
 };
-
-bool chunkFacesConnected(ChunkFaceConnectivity mask, int faceA, int faceB);
-
 void buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos, ChunkMesh& out);

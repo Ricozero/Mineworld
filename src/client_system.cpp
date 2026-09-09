@@ -41,14 +41,14 @@ void InputSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float d
     }
 }
 
-RenderSystem::RenderSystem(RenderContext* renderContext, ClientChunkManager* chunkManager, uint32_t localSessionId)
-    : renderContext_(renderContext), chunkManager_(chunkManager), localSessionId_(localSessionId) {
+RenderSystem::RenderSystem(RenderContext* renderContext, ClientChunkManager& chunkManager, ChunkCuller& chunkCuller, uint32_t localSessionId)
+    : renderContext_(renderContext), chunkManager_(chunkManager), chunkCuller_(chunkCuller), localSessionId_(localSessionId) {
 }
 
 void RenderSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {
     MW_PROFILE_SCOPE("Client.Render");
 
-    if (!renderContext_ || !chunkManager_) {
+    if (!renderContext_) {
         return;
     }
 
@@ -65,5 +65,5 @@ void RenderSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float 
         break;
     }
 
-    renderContext_->render(actorWorld, *chunkManager_);
+    renderContext_->render(actorWorld, chunkManager_, chunkCuller_);
 }

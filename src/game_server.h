@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtx/hash.hpp>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -30,7 +31,7 @@ public:
 
 private:
     struct Session {
-        static constexpr glm::ivec3 INVALID_CHUNK_POS{INT_MAX, INT_MAX, INT_MAX};
+        static constexpr glm::ivec3 INVALID_CHUNK_POS{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
 
         uint32_t sessionId = 0;
         uint32_t entitySnapshotSequence = 0;

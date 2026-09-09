@@ -47,21 +47,16 @@ bin/mineworld.exe server
 
 ### 当前
 
-- 网络LZ4
 - entity和chunk松耦合
-  - entity不维护和区块的关系
-  - 用八叉树等结构维护
-  - 存盘时需要考虑和区块的关系
-  - 增加chunk上一级的region概念
-    - 是否有意义？
-    - 其他地方能否用到？
-- 客户端区块优化
-  - 删除MeshPriority，直接用队列
-  - markDirty 时记 entry.dirtyTime = now
-  - 选取时跳过 now - dirtyTime < 50ms 的区块
-  - 如果一个候选都没有就退化成取最旧的那个
-- 统一std::chrono表达
-- 统一limits表达
+  - 如何维护和区块的关系
+  - 如何不用maintainChunkIndex_
+  - buildEntitySnapshot优化
+  - ActorComponent，Id
+- profiler
+  - 整体整理
+  - 每秒数据
+- headless client
+- 玩家移动时，机器人会卡顿
 
 ### 架构
 
@@ -69,11 +64,16 @@ bin/mineworld.exe server
 - 输入系统
 - Lua，Sol2，协程
 - Handle资源管理系统热加载（音乐，音效，材质，贴图集，着色器，脚本）
-- actor的唯一id
+- 区域Region概念
+  - 实体查询
+  - 批量存取
+  - 视锥测试
+  - 玩法分区
 - 服务器区块
   - 区块共享编码缓存
   - 区块生成批量set接口
   - 区块同步批量Update
+  - 区块同步LZ4压缩
   - 永久区块
   - 增量修改
   - 热区块和冷区块，冷区块使用RLE+区间树/线段树或者LZ4

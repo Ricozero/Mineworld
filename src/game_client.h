@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "actor_world.h"
+#include "chunk_culler.h"
 #include "chunk_mesh.h"
 #include "client_chunk_manager.h"
 #include "system.h"
@@ -53,13 +54,13 @@ private:
     void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
     void applyChunkUpdate(NetChunkUpdate&& update);
     void rebuildChunkMeshes();
-    ClientChunkManager::MeshFocus localPlayerMeshFocus() const;
     void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
 
     VoxelWorld voxelWorld_;
     ActorWorld actorWorld_{false};
     ClientChunkManager chunkManager_{voxelWorld_};
+    ChunkCuller chunkCuller_;
     ChunkMesh meshScratch_;
     std::vector<std::unique_ptr<System>> systems_;
     uint32_t localSessionId_ = 0;
