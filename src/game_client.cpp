@@ -99,7 +99,6 @@ void GameClient::pumpNetwork() {
     }
     netClient_->pump();
 
-    // Send ClientHello once handshake is complete
     if (helloPending_ && netClient_->isReady()) {
         netClient_->sendReliable(serializeClientHello());
         helloPending_ = false;

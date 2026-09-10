@@ -32,13 +32,21 @@ struct ChunkLayout {
                pos.z >= 0 && pos.z < SIZE;
     }
 
-    static constexpr glm::ivec3 worldToChunk(glm::ivec3 worldPos) {
-        return glm::ivec3(worldPos.x >> SIZE_BITS, worldPos.y >> SIZE_BITS, worldPos.z >> SIZE_BITS);
+    static constexpr glm::ivec3 blockToChunk(glm::ivec3 blockPos) {
+        return glm::ivec3(blockPos.x >> SIZE_BITS, blockPos.y >> SIZE_BITS, blockPos.z >> SIZE_BITS);
+    }
+
+    static glm::ivec3 worldToBlock(glm::vec3 worldPos) {
+        return glm::ivec3(glm::floor(worldPos));
+    }
+
+    static glm::ivec3 worldToChunk(glm::vec3 worldPos) {
+        return blockToChunk(worldToBlock(worldPos));
     }
 
     static constexpr bool isChunkInWorld(glm::ivec3 chunkPos) {
-        const glm::ivec3 minChunk = worldToChunk(WORLD_MIN);
-        const glm::ivec3 maxChunk = worldToChunk(WORLD_MAX);
+        const glm::ivec3 minChunk = blockToChunk(WORLD_MIN);
+        const glm::ivec3 maxChunk = blockToChunk(WORLD_MAX);
         return chunkPos.x >= minChunk.x && chunkPos.x < maxChunk.x &&
                chunkPos.y >= minChunk.y && chunkPos.y < maxChunk.y &&
                chunkPos.z >= minChunk.z && chunkPos.z < maxChunk.z;
@@ -62,8 +70,8 @@ static_assert(ChunkLayout::blockIndex({1, 2, 3}) == ((size_t{2} << 8) | (size_t{
 static_assert(ChunkLayout::blockIndex({2, 1, 1}) - ChunkLayout::blockIndex({1, 1, 1}) == size_t{ChunkLayout::X_STRIDE});
 static_assert(ChunkLayout::blockIndex({1, 1, 2}) - ChunkLayout::blockIndex({1, 1, 1}) == size_t{ChunkLayout::Z_STRIDE});
 static_assert(ChunkLayout::blockIndex({1, 2, 1}) - ChunkLayout::blockIndex({1, 1, 1}) == size_t{ChunkLayout::Y_STRIDE});
-static_assert(ChunkLayout::worldToChunk({-1, 0, 16}).x == -1 && ChunkLayout::worldToChunk({-1, 0, 16}).z == 1);
-static_assert(ChunkLayout::worldToChunk({-16, -17, 15}).x == -1 && ChunkLayout::worldToChunk({-16, -17, 15}).y == -2);
+static_assert(ChunkLayout::blockToChunk({-1, 0, 16}).x == -1 && ChunkLayout::blockToChunk({-1, 0, 16}).z == 1);
+static_assert(ChunkLayout::blockToChunk({-16, -17, 15}).x == -1 && ChunkLayout::blockToChunk({-16, -17, 15}).y == -2);
 static_assert(ChunkLayout::worldToLocal({-1, 0, 16}).x == 15 && ChunkLayout::worldToLocal({-1, 0, 16}).z == 0);
 static_assert(ChunkLayout::worldToLocal({-16, -17, 15}).x == 0 && ChunkLayout::worldToLocal({-16, -17, 15}).y == 15);
 static_assert(ChunkLayout::WORLD_MIN.x % ChunkLayout::SIZE == 0 && ChunkLayout::WORLD_MIN.y % ChunkLayout::SIZE == 0 &&

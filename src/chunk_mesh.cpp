@@ -4,11 +4,11 @@
 #include <bit>
 #include <cassert>
 #include <cstdint>
+#include <glm/packing.hpp>
 #include <vector>
 
 #include "block.h"
 #include "chunk.h"
-#include "helper.h"
 #include "profiler.h"
 #include "voxel_world.h"
 
@@ -243,7 +243,7 @@ const ShadedColorTable& shadedColorTable() {
             for (size_t face = 0; face < kFaces.size(); ++face) {
                 const float wrapped = glm::dot(glm::vec3(kFaces[face].normal), kLightDirection) * 0.5f + 0.5f;
                 const float shade = kAmbient + (1.0f - kAmbient) * wrapped;
-                built[type][face] = packColor(kBlockAlbedo[type] * shade);
+                built[type][face] = glm::packUnorm4x8(glm::vec4(kBlockAlbedo[type] * shade, 1.0f));
             }
         }
         return built;

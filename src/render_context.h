@@ -8,6 +8,7 @@
 #include <string>
 
 #include "entity.h"
+#include "orientation.h"
 
 class ClientChunkManager;
 class ChunkCuller;
@@ -35,18 +36,18 @@ public:
     bool initialize(int width, int height, const char* title, const std::string& baseDir);
     void shutdown();
 
-    // Menu screens — each call renders and presents a complete frame
+    // Menu screens
     StartMenuAction renderStartMenu(char* addressBuffer, size_t addressBufferSize, int& port);
     ConnectingAction renderConnecting(const std::string& address, uint16_t port, const std::string& status, bool failed);
 
-    // In-game loop — called every frame while a session is active
+    // In-game loop
     bool shouldClose() const;
     void pollEvents();
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
     void render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager, ChunkCuller& chunkCuller);
 
-    // In-game menu (ESC) control
+    // In-game menu
     void captureMouse();
     void releaseMouse();
     void resetInGameMenu();
@@ -77,7 +78,7 @@ private:
     void shutdownImGui();
     void updateDisplayMetrics();
 
-    // Per-frame render helpers (called within a single NewFrame/Render pair)
+    // Per-frame render helpers
     void renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, ChunkCuller& chunkCuller, const Frustum& frustum);
     void renderProfilerOverlay();
     void renderCursorOverlay();
@@ -86,9 +87,7 @@ private:
 
     // Input helpers
     void updateImGuiInput();
-    static void handleScroll(GLFWwindow* window, double xOffset, double yOffset);
-    glm::vec3 forward() const;
-    glm::vec3 right() const;
+    orientation::Basis cameraBasis() const;
     bool shouldHideLocalPlayerModel(const ActorWorld& actorWorld, entt::entity entity) const;
 
     // Window & renderer

@@ -33,7 +33,6 @@ public:
 private:
     entt::entity createPlayerEntity(const std::string& name, std::optional<uint32_t> sessionId, glm::vec3 position, PlayerMode mode);
     void applyPlayerModeComponents(entt::entity entity);
-    static glm::ivec3 positionToChunk(const glm::vec3& position);
     void addEntityToChunk(entt::entity entity, glm::ivec3 chunkPos);
     void removeEntityFromChunk(entt::entity entity, glm::ivec3 chunkPos);
 

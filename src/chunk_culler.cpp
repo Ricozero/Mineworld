@@ -2,21 +2,14 @@
 
 #include <bit>
 #include <cassert>
+#include <glm/gtc/type_ptr.hpp>
 #include <limits>
 
 #include "chunk_mesh.h"
 #include "profiler.h"
 
 Frustum Frustum::fromViewProjection(const float* viewProjection) {
-    glm::mat4 matrix;
-    for (int column = 0; column < 4; ++column) {
-        for (int row = 0; row < 4; ++row) {
-            matrix[column][row] = viewProjection[column * 4 + row];
-        }
-    }
-
-    // Gribb/Hartmann extraction
-    const glm::mat4 rows = glm::transpose(matrix);
+    const glm::mat4 rows = glm::transpose(glm::make_mat4(viewProjection));
     Frustum frustum;
     frustum.planes[0] = rows[3] + rows[0];
     frustum.planes[1] = rows[3] - rows[0];
@@ -46,7 +39,7 @@ bool Frustum::testAABB(glm::vec3 min, glm::vec3 max) const {
 }
 
 void ChunkCuller::cull(const ChunkRenderView& data, const Frustum& frustum, glm::vec3 cameraPosition) {
-    const glm::ivec3 cameraChunk = ChunkLayout::worldToChunk(glm::ivec3(glm::floor(cameraPosition)));
+    const glm::ivec3 cameraChunk = ChunkLayout::worldToChunk(cameraPosition);
     const bool layoutChanged = !initialized_ || data.layoutRevision != layoutRevision_;
     const bool reachabilityChanged = layoutChanged || data.topologyRevision != topologyRevision_ || cameraChunk != cameraChunk_;
     const bool candidatesChanged = reachabilityChanged || data.drawableRevision != drawableRevision_;

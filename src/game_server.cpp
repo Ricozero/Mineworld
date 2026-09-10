@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <glm/gtx/hash.hpp>
 #include <iterator>
 #include <optional>
@@ -13,7 +14,6 @@
 #include "chunk_layout.h"
 #include "config.h"
 #include "entity.h"
-#include "helper.h"
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
@@ -30,6 +30,13 @@ constexpr int kCoreChunkRadius = 1;
 
 bool chunkLess(glm::ivec3 a, glm::ivec3 b) {
     return std::tie(a.x, a.z, a.y) < std::tie(b.x, b.z, b.y);
+}
+
+int64_t chunkDistanceSquared(glm::ivec3 a, glm::ivec3 b) {
+    const int64_t dx = static_cast<int64_t>(a.x) - b.x;
+    const int64_t dy = static_cast<int64_t>(a.y) - b.y;
+    const int64_t dz = static_cast<int64_t>(a.z) - b.z;
+    return dx * dx + dy * dy + dz * dz;
 }
 
 template <typename Func>
@@ -334,8 +341,8 @@ void GameServer::sendChunkUpdates(Session& session) {
         if (aPriority != bPriority) {
             return aPriority < bPriority;
         }
-        const int aDistance = ivec3DistanceSq(a->chunkPos, session.lastChunkPos);
-        const int bDistance = ivec3DistanceSq(b->chunkPos, session.lastChunkPos);
+        const int64_t aDistance = chunkDistanceSquared(a->chunkPos, session.lastChunkPos);
+        const int64_t bDistance = chunkDistanceSquared(b->chunkPos, session.lastChunkPos);
         return aDistance < bDistance;
     });
 
@@ -601,7 +608,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
     hello.yaw = spawnYaw;
     hello.pitch = spawnPitch;
     hello.playerMode = PlayerMode::Survival;
-    const glm::ivec3 spawnChunk = ChunkLayout::worldToChunk(glm::ivec3(glm::floor(spawnPos)));
+    const glm::ivec3 spawnChunk = ChunkLayout::worldToChunk(spawnPos);
     const size_t coreChunkCount = (kCoreChunkRadius * 2 + 1) * (kCoreChunkRadius * 2 + 1) * (kCoreChunkRadius * 2 + 1);
     hello.coreChunks.reserve(coreChunkCount);
     session.coreChunks.reserve(coreChunkCount);

@@ -1,7 +1,6 @@
 #include "actor_world.h"
 
 #include <algorithm>
-#include <cmath>
 
 #include "chunk_layout.h"
 #include "entity.h"
@@ -145,7 +144,7 @@ void ActorWorld::updateEntityChunk(entt::entity entity, const glm::vec3& positio
         return;
     }
 
-    glm::ivec3 newChunk = positionToChunk(position);
+    const glm::ivec3 newChunk = ChunkLayout::worldToChunk(position);
     auto it = entityToChunk_.find(entity);
     if (it != entityToChunk_.end()) {
         if (it->second == newChunk) {
@@ -207,15 +206,6 @@ bool ActorWorld::unloadEntitiesInChunk(glm::ivec3 chunkPos) {
         destroyEntity(entity);
     }
     return true;
-}
-
-glm::ivec3 ActorWorld::positionToChunk(const glm::vec3& position) {
-    glm::ivec3 worldPos{
-        static_cast<int>(std::floor(position.x)),
-        static_cast<int>(std::floor(position.y)),
-        static_cast<int>(std::floor(position.z)),
-    };
-    return ChunkLayout::worldToChunk(worldPos);
 }
 
 void ActorWorld::addEntityToChunk(entt::entity entity, glm::ivec3 chunkPos) {

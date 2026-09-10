@@ -8,8 +8,8 @@
 #include "block.h"
 #include "chunk_layout.h"
 #include "config.h"
-#include "direction.h"
 #include "entity.h"
+#include "orientation.h"
 #include "voxel_world.h"
 
 namespace {
@@ -17,30 +17,33 @@ namespace {
 constexpr float kCollisionEpsilon = 0.001f;
 constexpr float kGroundProbeDistance = 0.05f;
 
+struct Aabb {
+    glm::vec3 min;
+    glm::vec3 max;
+};
+
+Aabb colliderBounds(const TransformComponent& transform, const BoxColliderComponent& collider) {
+    const glm::vec3 center = transform.position + collider.offset;
+    const glm::vec3 halfSize = collider.size * 0.5f;
+    return Aabb{center - halfSize, center + halfSize};
+}
+
+glm::ivec3 inclusiveMaxBlock(glm::vec3 max) {
+    return ChunkLayout::worldToBlock(max - glm::vec3(kCollisionEpsilon));
+}
+
 bool isSpectatorPlayer(entt::registry& registry, entt::entity entity) {
     return registry.all_of<PlayerComponent>(entity) && registry.get<PlayerComponent>(entity).mode == PlayerMode::Spectator;
 }
 
 BlockQueryResult findCollisionBoundary(const VoxelWorld& voxelWorld, const TransformComponent& transform, const BoxColliderComponent& collider, int axis, float delta, float& boundary) {
-    const glm::vec3 halfSize = collider.size * 0.5f;
-    const glm::vec3 currentMin = transform.position + collider.offset - halfSize;
-    const glm::vec3 currentMax = transform.position + collider.offset + halfSize;
-    glm::vec3 previousMin = currentMin;
-    glm::vec3 previousMax = currentMax;
-    previousMin[axis] -= delta;
-    previousMax[axis] -= delta;
-    const glm::vec3 sweptMin = glm::min(previousMin, currentMin);
-    const glm::vec3 sweptMax = glm::max(previousMax, currentMax);
-    const glm::ivec3 minBlock{
-        static_cast<int>(std::floor(sweptMin.x)),
-        static_cast<int>(std::floor(sweptMin.y)),
-        static_cast<int>(std::floor(sweptMin.z)),
-    };
-    const glm::ivec3 maxBlock{
-        static_cast<int>(std::floor(sweptMax.x - kCollisionEpsilon)),
-        static_cast<int>(std::floor(sweptMax.y - kCollisionEpsilon)),
-        static_cast<int>(std::floor(sweptMax.z - kCollisionEpsilon)),
-    };
+    const Aabb current = colliderBounds(transform, collider);
+    Aabb previous = current;
+    previous.min[axis] -= delta;
+    previous.max[axis] -= delta;
+    const Aabb swept{glm::min(previous.min, current.min), glm::max(previous.max, current.max)};
+    const glm::ivec3 minBlock = ChunkLayout::worldToBlock(swept.min);
+    const glm::ivec3 maxBlock = inclusiveMaxBlock(swept.max);
 
     bool collided = false;
     boundary = delta > 0.0f ? std::numeric_limits<float>::max() : std::numeric_limits<float>::lowest();
@@ -58,12 +61,12 @@ BlockQueryResult findCollisionBoundary(const VoxelWorld& voxelWorld, const Trans
 
                 const float blockBoundary = delta > 0.0f ? static_cast<float>(blockPos[axis]) : static_cast<float>(blockPos[axis] + 1);
                 if (delta > 0.0f) {
-                    if (blockBoundary < previousMax[axis] - kCollisionEpsilon ||
-                        blockBoundary > currentMax[axis]) {
+                    if (blockBoundary < previous.max[axis] - kCollisionEpsilon ||
+                        blockBoundary > current.max[axis]) {
                         continue;
                     }
-                } else if (blockBoundary > previousMin[axis] + kCollisionEpsilon ||
-                           blockBoundary < currentMin[axis]) {
+                } else if (blockBoundary > previous.min[axis] + kCollisionEpsilon ||
+                           blockBoundary < current.min[axis]) {
                     continue;
                 }
 
@@ -77,11 +80,9 @@ BlockQueryResult findCollisionBoundary(const VoxelWorld& voxelWorld, const Trans
 }
 
 BlockQueryResult testCollision(const VoxelWorld& voxelWorld, const TransformComponent& transform, const BoxColliderComponent& collider) {
-    const glm::vec3 halfSize = collider.size * 0.5f;
-    const glm::vec3 min = transform.position + collider.offset - halfSize;
-    const glm::vec3 max = transform.position + collider.offset + halfSize;
-    const glm::ivec3 minBlock = glm::ivec3(glm::floor(min));
-    const glm::ivec3 maxBlock = glm::ivec3(glm::floor(max - glm::vec3(kCollisionEpsilon)));
+    const Aabb bounds = colliderBounds(transform, collider);
+    const glm::ivec3 minBlock = ChunkLayout::worldToBlock(bounds.min);
+    const glm::ivec3 maxBlock = inclusiveMaxBlock(bounds.max);
 
     bool collided = false;
     for (int x = minBlock.x; x <= maxBlock.x; ++x) {
@@ -101,10 +102,10 @@ BlockQueryResult testCollision(const VoxelWorld& voxelWorld, const TransformComp
 }
 
 bool areChunksLoadedInBounds(const VoxelWorld& voxelWorld, const glm::vec3& min, const glm::vec3& max) {
-    const glm::ivec3 minBlock = glm::ivec3(glm::floor(min));
-    const glm::ivec3 maxBlock = glm::ivec3(glm::floor(max - glm::vec3(kCollisionEpsilon)));
-    const glm::ivec3 minChunk = ChunkLayout::worldToChunk(minBlock);
-    const glm::ivec3 maxChunk = ChunkLayout::worldToChunk(maxBlock);
+    const glm::ivec3 minBlock = ChunkLayout::worldToBlock(min);
+    const glm::ivec3 maxBlock = inclusiveMaxBlock(max);
+    const glm::ivec3 minChunk = ChunkLayout::blockToChunk(minBlock);
+    const glm::ivec3 maxChunk = ChunkLayout::blockToChunk(maxBlock);
 
     for (int x = minChunk.x; x <= maxChunk.x; ++x) {
         for (int y = minChunk.y; y <= maxChunk.y; ++y) {
@@ -119,13 +120,10 @@ bool areChunksLoadedInBounds(const VoxelWorld& voxelWorld, const glm::vec3& min,
 }
 
 bool areSweptBoxChunksLoaded(const VoxelWorld& voxelWorld, const TransformComponent& transform, const BoxColliderComponent& collider, const glm::vec3& movement) {
-    const glm::vec3 halfSize = collider.size * 0.5f;
-    const glm::vec3 currentMin = transform.position + collider.offset - halfSize;
-    const glm::vec3 currentMax = transform.position + collider.offset + halfSize;
-    glm::vec3 sweptMin = glm::min(currentMin, currentMin + movement);
-    const glm::vec3 sweptMax = glm::max(currentMax, currentMax + movement);
-    sweptMin.y -= kGroundProbeDistance;
-    return areChunksLoadedInBounds(voxelWorld, sweptMin, sweptMax);
+    const Aabb current = colliderBounds(transform, collider);
+    Aabb swept{glm::min(current.min, current.min + movement), glm::max(current.max, current.max + movement)};
+    swept.min.y -= kGroundProbeDistance;
+    return areChunksLoadedInBounds(voxelWorld, swept.min, swept.max);
 }
 
 bool moveWithCollision(const VoxelWorld& voxelWorld, entt::registry& registry, entt::entity entity, float deltaTime) {
@@ -206,16 +204,15 @@ void applyControllerInput(entt::registry& registry, entt::entity entity, float d
     const bool spectator = isSpectatorPlayer(registry, entity);
 
     if (spectator) {
-        glm::vec3 move = Direction::lookForward(transform.rotation.y, transform.rotation.x) * input.move.z +
-                         Direction::lookRight(transform.rotation.y, transform.rotation.x) * input.move.x +
-                         glm::vec3(0.0f, input.move.y, 0.0f);
+        const orientation::Basis basis = orientation::fromYawPitchDegrees(transform.rotation.y, transform.rotation.x);
+        glm::vec3 move = basis.transform(glm::vec3(input.move.x, 0.0f, input.move.z)) + glm::vec3(0.0f, input.move.y, 0.0f);
         if (glm::dot(move, move) > 1.0f) {
             move = glm::normalize(move);
         }
         transform.position += move * speed * deltaTime;
     } else if (registry.all_of<PhysicsComponent>(entity)) {
-        glm::vec3 move = Direction::yawForward(transform.rotation.y) * input.move.z +
-                         Direction::yawRight(transform.rotation.y) * input.move.x;
+        const orientation::Basis basis = orientation::fromYawPitchDegrees(transform.rotation.y, 0.0f);
+        glm::vec3 move = basis.transform(input.move);
         if (glm::dot(move, move) > 1.0f) {
             move = glm::normalize(move);
         }

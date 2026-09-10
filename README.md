@@ -57,6 +57,7 @@ bin/mineworld.exe server
   - 每秒数据
 - headless client
 - 玩家移动时，机器人会卡顿
+- 时间同步，昼夜系统
 
 ### 架构
 

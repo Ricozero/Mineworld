@@ -31,7 +31,7 @@ bool VoxelWorld::unloadChunk(glm::ivec3 chunkPos) {
 }
 
 BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
-    const Chunk* chunk = findChunk(ChunkLayout::worldToChunk(worldPos));
+    const Chunk* chunk = findChunk(ChunkLayout::blockToChunk(worldPos));
     if (chunk == nullptr) {
         return BlockData{};
     }
@@ -39,7 +39,7 @@ BlockData VoxelWorld::getBlock(glm::ivec3 worldPos) const {
 }
 
 BlockQueryResult VoxelWorld::queryBlock(glm::ivec3 worldPos) const {
-    const Chunk* chunk = findChunk(ChunkLayout::worldToChunk(worldPos));
+    const Chunk* chunk = findChunk(ChunkLayout::blockToChunk(worldPos));
     if (chunk == nullptr) {
         return BlockQueryResult::Unknown;
     }

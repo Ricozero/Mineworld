@@ -11,11 +11,11 @@
 #include <array>
 #include <cassert>
 #include <cfloat>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <glm/packing.hpp>
 #include <vector>
 
 #include "actor_world.h"
@@ -25,7 +25,6 @@
 #include "client_chunk_manager.h"
 #include "config.h"
 #include "entity.h"
-#include "helper.h"
 #include "log.h"
 #include "profiler.h"
 
@@ -90,7 +89,7 @@ void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::ve
     assert(mesh.vertices.size() + 4 <= kMaxBatchVertices);
 
     const auto start = static_cast<uint16_t>(mesh.vertices.size());
-    const uint32_t packedColor = packColor(color);
+    const uint32_t packedColor = glm::packUnorm4x8(glm::vec4(color, 1.0f));
     for (const glm::vec3& corner : corners) {
         mesh.vertices.push_back(PosColorVertex{corner.x, corner.y, corner.z, packedColor});
     }
@@ -101,21 +100,6 @@ void addQuad(MeshBuilder& mesh, const std::array<glm::vec3, 4>& corners, glm::ve
     mesh.indices.push_back(start + 0);
     mesh.indices.push_back(start + 2);
     mesh.indices.push_back(start + 3);
-}
-
-glm::vec3 rotateYaw(glm::vec3 point, float yawDegrees) {
-    const float yaw = glm::radians(yawDegrees);
-    const float c = std::cos(yaw);
-    const float s = std::sin(yaw);
-    return glm::vec3(point.x * c - point.z * s, point.y, point.x * s + point.z * c);
-}
-
-glm::vec3 rotatePitchThenYaw(glm::vec3 point, float yawDegrees, float pitchDegrees) {
-    const float pitch = glm::radians(pitchDegrees);
-    const float c = std::cos(pitch);
-    const float s = std::sin(pitch);
-    const glm::vec3 pitched(point.x * c - point.y * s, point.x * s + point.y * c, point.z);
-    return rotateYaw(pitched, yawDegrees);
 }
 
 void addOrientedBox(MeshBuilder& mesh, glm::vec3 center, glm::vec3 halfSize, float yawDegrees, glm::vec3 color) {
@@ -130,9 +114,10 @@ void addOrientedBox(MeshBuilder& mesh, glm::vec3 center, glm::vec3 halfSize, flo
         {-halfSize.x, halfSize.y, halfSize.z},
     }};
 
+    const orientation::Basis basis = orientation::fromYawPitchDegrees(yawDegrees, 0.0f);
     std::array<glm::vec3, 8> v{};
     for (size_t i = 0; i < local.size(); ++i) {
-        v[i] = center + rotateYaw(local[i], yawDegrees);
+        v[i] = center + basis.transform(local[i]);
     }
 
     addQuad(mesh, {{v[0], v[3], v[2], v[1]}}, color * 0.65f);
@@ -155,9 +140,10 @@ void addHeadBox(MeshBuilder& mesh, glm::vec3 neckPosition, glm::vec3 localCenter
         localCenter + glm::vec3(-halfSize.x, halfSize.y, halfSize.z),
     }};
 
+    const orientation::Basis basis = orientation::fromYawPitchDegrees(yawDegrees, pitchDegrees);
     std::array<glm::vec3, 8> v{};
     for (size_t i = 0; i < local.size(); ++i) {
-        v[i] = neckPosition + rotatePitchThenYaw(local[i], yawDegrees, pitchDegrees);
+        v[i] = neckPosition + basis.transform(local[i]);
     }
 
     const glm::vec3 faceColor(0.95f, 0.12f, 0.10f);
@@ -184,7 +170,7 @@ void addLineBox(MeshBuilder& mesh, glm::vec3 min, glm::vec3 max, glm::vec3 color
     assert(mesh.vertices.size() + kLineBoxVertexCount <= kMaxBatchVertices);
 
     const uint16_t start = static_cast<uint16_t>(mesh.vertices.size());
-    const uint32_t packedColor = packColor(color);
+    const uint32_t packedColor = glm::packUnorm4x8(glm::vec4(color, 1.0f));
     const std::array<glm::vec3, 8> v = {{
         {min.x, min.y, min.z},
         {max.x, min.y, min.z},
@@ -410,7 +396,13 @@ bool RenderContext::initialize(int width, int height, const char* title, const s
     }
 
     glfwSetWindowUserPointer(window_, this);
-    glfwSetScrollCallback(window_, RenderContext::handleScroll);
+    glfwSetScrollCallback(window_, [](GLFWwindow* window, double, double yOffset) {
+        auto* renderContext = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
+        if (!renderContext || renderContext->mouseCaptured_) {
+            return;
+        }
+        renderContext->imguiScrollY_ += yOffset;
+    });
     glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     logging::info("Renderer initialized with GLFW/bgfx ({})", bgfx::getRendererName(bgfx::getRendererType()));
@@ -646,7 +638,7 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     rotation.x -= mouseDeltaY * mouseSensitivity;
     rotation.x = std::clamp(rotation.x, -88.0f, 88.0f);
 
-    // Also update internal camera state (used by forward()/right() helpers and render)
+    // Also update internal camera state used for rendering.
     cameraYaw_ = rotation.y;
     cameraPitch_ = rotation.x;
 
@@ -673,16 +665,16 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     input.sprint = glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
 
     if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS) {
-        input.move.z += 1.0f;
+        input.move.x += 1.0f;
     }
     if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS) {
-        input.move.z -= 1.0f;
-    }
-    if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) {
         input.move.x -= 1.0f;
     }
+    if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) {
+        input.move.z -= 1.0f;
+    }
     if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) {
-        input.move.x += 1.0f;
+        input.move.z += 1.0f;
     }
     if (glm::dot(input.move, input.move) > 1.0f) {
         input.move = glm::normalize(input.move);
@@ -741,12 +733,12 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
         case CameraViewMode::ThirdPersonFront: {
             cameraYaw_ = yaw + 180.0f;
             cameraPitch_ = -pitch;
-            cameraPosition_ = thirdPersonTarget - forward() * cameraDistance;
+            cameraPosition_ = thirdPersonTarget - cameraBasis().forward * cameraDistance;
             break;
         }
         case CameraViewMode::ThirdPersonBack:
             cameraPitch_ = pitch;
-            cameraPosition_ = thirdPersonTarget - forward() * cameraDistance;
+            cameraPosition_ = thirdPersonTarget - cameraBasis().forward * cameraDistance;
             break;
         default:
             break;
@@ -773,26 +765,36 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x87bdf2ff, 1.0f, 0);
 
-    const glm::vec3 target = cameraPosition_ + forward();
+    const glm::vec3 target = cameraPosition_ + cameraBasis().forward;
     const bx::Vec3 eye(cameraPosition_.x, cameraPosition_.y, cameraPosition_.z);
     const bx::Vec3 at(target.x, target.y, target.z);
     float view[16];
-    float projection[16];
+    float renderProjection[16];
+    const float aspectRatio = static_cast<float>(framebufferWidth_) / framebufferHeight_;
     bx::mtxLookAt(view, eye, at, bx::Vec3(0.0f, 1.0f, 0.0f), bx::Handedness::Right);
     bx::mtxProj(
-        projection,
+        renderProjection,
         kVerticalFieldOfView,
-        static_cast<float>(framebufferWidth_) / framebufferHeight_,
+        aspectRatio,
         kNearPlane,
         kFarPlane,
         bgfx::getCaps()->homogeneousDepth,
         bx::Handedness::Right);
-    bgfx::setViewTransform(kMainView, view, projection);
+    bgfx::setViewTransform(kMainView, view, renderProjection);
     bgfx::touch(kMainView);
 
-    float viewProjection[16];
-    bx::mtxMul(viewProjection, view, projection);
-    renderWorld(actorWorld, chunkManager, chunkCuller, Frustum::fromViewProjection(viewProjection));
+    float cullingProjection[16];
+    bx::mtxProj(
+        cullingProjection,
+        kVerticalFieldOfView,
+        aspectRatio,
+        kNearPlane,
+        kFarPlane,
+        true,
+        bx::Handedness::Right);
+    float cullingViewProjection[16];
+    bx::mtxMul(cullingViewProjection, view, cullingProjection);
+    renderWorld(actorWorld, chunkManager, chunkCuller, Frustum::fromViewProjection(cullingViewProjection));
 
     recordBgfxStats(bgfx::getStats());
 
@@ -1112,10 +1114,7 @@ void RenderContext::renderProfilerOverlay() {
 
     if (ImGui::Begin("ProfilerOverlay", nullptr, flags)) {
         char buffer[128];
-        glm::ivec3 chunkCoord = ChunkLayout::worldToChunk(glm::ivec3(
-            static_cast<int>(std::floor(cameraPosition_.x)),
-            static_cast<int>(std::floor(cameraPosition_.y)),
-            static_cast<int>(std::floor(cameraPosition_.z))));
+        const glm::ivec3 chunkCoord = ChunkLayout::worldToChunk(cameraPosition_);
         if (ImGui::BeginTable("ProfilerSummaryTop", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
             ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Chunk", ImGuiTableColumnFlags_WidthStretch);
@@ -1249,9 +1248,9 @@ void RenderContext::renderCursorOverlay() {
         drawList->AddLine(ImVec2(center.x - 12.0f, center.y), ImVec2(center.x + 12.0f, center.y), IM_COL32(255, 255, 255, 255), 2.0f);
         drawList->AddLine(ImVec2(center.x, center.y - 12.0f), ImVec2(center.x, center.y + 12.0f), IM_COL32(255, 255, 255, 255), 2.0f);
     } else if (cursorMode_ == CursorMode::XYZ) {
-        const glm::vec3 cameraRight = right();
-        const glm::vec3 cameraForward = forward();
-        const glm::vec3 cameraUp = glm::normalize(glm::cross(cameraRight, cameraForward));
+        const orientation::Basis basis = cameraBasis();
+        const glm::vec3 cameraRight = basis.right;
+        const glm::vec3 cameraUp = basis.up;
 
         const glm::vec3 xAxis(1.0f, 0.0f, 0.0f);
         const glm::vec3 yAxis(0.0f, 1.0f, 0.0f);
@@ -1393,26 +1392,8 @@ void RenderContext::updateImGuiInput() {
     }
 }
 
-void RenderContext::handleScroll(GLFWwindow* window, double, double yOffset) {
-    auto* renderContext = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
-    if (!renderContext || renderContext->mouseCaptured_) {
-        return;
-    }
-
-    renderContext->imguiScrollY_ += yOffset;
-}
-
-glm::vec3 RenderContext::forward() const {
-    const float yaw = glm::radians(cameraYaw_);
-    const float pitch = glm::radians(cameraPitch_);
-    return glm::normalize(glm::vec3(
-        std::cos(yaw) * std::cos(pitch),
-        std::sin(pitch),
-        std::sin(yaw) * std::cos(pitch)));
-}
-
-glm::vec3 RenderContext::right() const {
-    return glm::normalize(glm::cross(forward(), glm::vec3(0.0f, 1.0f, 0.0f)));
+orientation::Basis RenderContext::cameraBasis() const {
+    return orientation::fromYawPitchDegrees(cameraYaw_, cameraPitch_);
 }
 
 bool RenderContext::shouldHideLocalPlayerModel(const ActorWorld& actorWorld, entt::entity entity) const {
