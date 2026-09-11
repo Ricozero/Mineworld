@@ -26,9 +26,6 @@ public:
     void registerSystem(std::unique_ptr<System> system);
     void update(float deltaTime);
 
-    entt::entity createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode);
-    entt::entity createRobot(const std::string& name, glm::vec3 position);
-
 private:
     struct Session {
         static constexpr glm::ivec3 INVALID_CHUNK_POS{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
@@ -39,6 +36,7 @@ private:
         bool helloReceived = false;
         bool ready = false;
         uint32_t lastProcessedInputSequence = 0;
+        uint64_t lastCommandRequestId = 0;
         std::string actorName;
 
         glm::ivec3 lastChunkPos = INVALID_CHUNK_POS;
@@ -77,6 +75,8 @@ private:
     bool onClientHello(uint32_t sessionId);
     void onClientReady(uint32_t sessionId);
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
+    void onCommandRequest(uint32_t sessionId, const CommandRequest& command);
+    CommandStatus executeCommand(entt::entity playerEntity, const CommandRequest& command);
 
     ServerChunkManager chunkManager_{std::chrono::seconds(3)};
     VoxelWorld voxelWorld_;
@@ -88,4 +88,5 @@ private:
     std::unordered_map<uint32_t, Session> sessions_;
     std::unordered_map<entt::entity, glm::ivec3> robotChunks_;
     uint32_t nextPlayerIndex_ = 1;
+    uint32_t nextRobotIndex_ = 1;
 };

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "chunk_data.h"
+#include "command.h"
 #include "entity.h"
 #include "net_protocol_generated.h"
 
@@ -30,6 +31,7 @@ struct NetEntitySnapshot {
 enum class NetChunkOperation : uint8_t {
     Upsert,
     Unload,
+    Count,
 };
 
 struct NetChunkUpdate {
@@ -75,3 +77,9 @@ bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot
 
 std::vector<uint8_t> serializeChunkUpdate(const NetChunkUpdate& update, flatbuffers::FlatBufferBuilder& builder);
 bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outUpdate);
+
+std::vector<uint8_t> serializeCommandRequest(const CommandRequest& command);
+bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& outCommand);
+
+std::vector<uint8_t> serializeCommandResponse(const CommandResponse& response);
+bool deserializeCommandResponse(std::span<const uint8_t> bytes, CommandResponse& outResponse);

@@ -38,13 +38,15 @@ struct ControllerInputComponent {
 };
 
 enum class EntityType : uint8_t {
-    Player = 0,
-    Robot = 1,
+    Player,
+    Robot,
+    Count,
 };
 
 enum class PlayerMode : uint8_t {
-    Survival = 0,
-    Spectator = 1,
+    Survival,
+    Spectator,
+    Count,
 };
 
 struct PlayerComponent {

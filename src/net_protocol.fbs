@@ -53,10 +53,6 @@ table ActorState {
   player_mode:ubyte = 0;
 }
 
-enum ChunkOperation : ubyte {
-  Upsert,
-  Unload
-}
 
 table EntitySnapshot {
   sequence:uint;
@@ -66,8 +62,51 @@ table EntitySnapshot {
 table ChunkUpdate {
   chunk_pos:IVec3;
   revision:uint;
-  operation:ChunkOperation = Upsert;
+  operation:ubyte;
   blocks:[ubyte];
+}
+
+table StringArgument {
+  value:string;
+}
+
+table IntegerArgument {
+  value:long;
+}
+
+table FloatArgument {
+  value:double;
+}
+
+table BoolArgument {
+  value:bool;
+}
+
+table Vec3Argument {
+  value:Vec3;
+}
+
+union CommandArgumentValue {
+  StringArgument,
+  IntegerArgument,
+  FloatArgument,
+  BoolArgument,
+  Vec3Argument
+}
+
+table CommandArgument {
+  value:CommandArgumentValue;
+}
+
+table CommandRequest {
+  request_id:ulong;
+  operation:ushort;
+  arguments:[CommandArgument];
+}
+
+table CommandResponse {
+  request_id:ulong;
+  status:ubyte;
 }
 
 union NetMessagePayload {
@@ -77,7 +116,9 @@ union NetMessagePayload {
   ServerHello,
   ClientInput,
   EntitySnapshot,
-  ChunkUpdate
+  ChunkUpdate,
+  CommandRequest,
+  CommandResponse
 }
 
 table NetMessage {

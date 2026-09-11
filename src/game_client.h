@@ -12,10 +12,10 @@
 #include "chunk_culler.h"
 #include "chunk_mesh.h"
 #include "client_chunk_manager.h"
-#include "system.h"
-#include "voxel_world.h"
 #include "net_interface.h"
 #include "net_protocol.h"
+#include "system.h"
+#include "voxel_world.h"
 
 class RenderContext;
 
@@ -50,6 +50,7 @@ private:
     void tryEnterRunning();
     void fail(std::string reason);
     void sendInputToServer();
+    void sendPendingCommands();
     void replayEntitySnapshots();
     void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
     void applyChunkUpdate(NetChunkUpdate&& update);
@@ -78,4 +79,5 @@ private:
     bool disconnectSent_ = false;
     double snapshotClock_ = 0.0;
     uint32_t nextInputSequence_ = 1;
+    uint64_t nextCommandRequestId_ = 1;
 };

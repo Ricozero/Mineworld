@@ -589,6 +589,18 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
         captureMouse();
     }
 
+    const bool f6Down = glfwGetKey(window_, GLFW_KEY_F6) == GLFW_PRESS;
+    if (f6Down && !prevF6Down_) {
+        queueCommand(CommandRequest{0, CommandOperation::CreateRobot, {}});
+    }
+    prevF6Down_ = f6Down;
+
+    const bool f7Down = glfwGetKey(window_, GLFW_KEY_F7) == GLFW_PRESS;
+    if (f7Down && !prevF7Down_) {
+        queueCommand(CommandRequest{0, CommandOperation::DestroyRobot, {}});
+    }
+    prevF7Down_ = f7Down;
+
     // While mouse is released, only handle Escape and function keys
     if (!mouseCaptured_) {
         const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
@@ -707,6 +719,19 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
         showChunkBounds_ = !showChunkBounds_;
     }
     prevF3Down_ = f3Down;
+}
+
+void RenderContext::queueCommand(CommandRequest command) {
+    pendingCommands_.push_back(std::move(command));
+}
+
+std::optional<CommandRequest> RenderContext::consumeCommand() {
+    if (pendingCommands_.empty()) {
+        return std::nullopt;
+    }
+    CommandRequest command = std::move(pendingCommands_.front());
+    pendingCommands_.pop_front();
+    return command;
 }
 
 void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId) {
@@ -851,6 +876,7 @@ void RenderContext::releaseMouse() {
 void RenderContext::resetInGameMenu() {
     inGameMenuOpen_ = false;
     pendingInGameMenuAction_ = InGameMenuAction::None;
+    pendingCommands_.clear();
 }
 
 RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {

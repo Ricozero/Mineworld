@@ -10,6 +10,7 @@
 #include "log.h"
 #include "net_kcp.h"
 #include "profiler.h"
+#include "render_context.h"
 
 namespace {
 
@@ -71,6 +72,7 @@ void GameClient::update(float deltaTime) {
         system->update(voxelWorld_, actorWorld_, deltaTime);
     }
     sendInputToServer();
+    sendPendingCommands();
 }
 
 std::string GameClient::statusText() const {
@@ -137,6 +139,13 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
             NetChunkUpdate update;
             if (deserializeChunkUpdate(packet, update)) {
                 applyChunkUpdate(std::move(update));
+            }
+            break;
+        }
+        case Payload::CommandResponse: {
+            CommandResponse response;
+            if (deserializeCommandResponse(packet, response) && response.status != CommandStatus::Success) {
+                logging::warn("Command request {} failed with status {}", response.requestId, static_cast<int>(response.status));
             }
             break;
         }
@@ -242,6 +251,17 @@ void GameClient::sendInputToServer() {
     }
 }
 
+void GameClient::sendPendingCommands() {
+    if (!netClient_ || !renderContext_ || state_ != State::Running) {
+        return;
+    }
+
+    while (std::optional<CommandRequest> command = renderContext_->consumeCommand()) {
+        command->requestId = nextCommandRequestId_++;
+        netClient_->sendReliable(serializeCommandRequest(*command));
+    }
+}
+
 void GameClient::replayEntitySnapshots() {
     MW_PROFILE_SCOPE("Client.ReplayEntitySnapshots");
 
@@ -277,6 +297,9 @@ void GameClient::applyEntitySnapshot(const NetEntitySnapshot& snapshot) {
                 case EntityType::Robot:
                     entity = actorWorld_.createRobot(actor.name, actor.position);
                     break;
+                default:
+                    logging::warn("Ignored unknown entity type {} for actor '{}'", static_cast<int>(actor.entityType), actor.name);
+                    continue;
             }
         }
         if (entity == entt::null) {

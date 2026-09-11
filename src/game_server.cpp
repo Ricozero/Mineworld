@@ -140,14 +140,6 @@ void GameServer::update(float deltaTime) {
     MW_PROFILE_GAUGE("Server.PendingChunkUpdates", static_cast<double>(pendingChunkUpdateCount));
 }
 
-entt::entity GameServer::createLocalPlayer(const std::string& name, uint32_t sessionId, glm::vec3 position, PlayerMode mode) {
-    return actorWorld_.createLocalPlayer(name, sessionId, position, mode);
-}
-
-entt::entity GameServer::createRobot(const std::string& name, glm::vec3 position) {
-    return actorWorld_.createRobot(name, position);
-}
-
 GameServer::Session& GameServer::getOrCreateSession(uint32_t sessionId) {
     auto it = sessions_.find(sessionId);
     if (it != sessions_.end()) {
@@ -569,6 +561,13 @@ bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>&
             }
             return true;
         }
+        case Payload::CommandRequest: {
+            CommandRequest command;
+            if (deserializeCommandRequest(packet, command)) {
+                onCommandRequest(sessionId, command);
+            }
+            return true;
+        }
         default:
             logging::warn("Ignored unknown client packet from session {}", sessionId);
             return true;
@@ -590,7 +589,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
     float spawnYaw = AppConfig::instance().spawnYaw;
     float spawnPitch = AppConfig::instance().spawnPitch;
 
-    const entt::entity entity = createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
+    const entt::entity entity = actorWorld_.createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
 
     auto& registry = actorWorld_.registry();
     if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
@@ -672,5 +671,85 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
         }
         actorWorld_.updateEntityChunk(entity, transform.position);
         break;
+    }
+}
+
+void GameServer::onCommandRequest(uint32_t sessionId, const CommandRequest& command) {
+    logging::info("Command request {} received from session {}: operation={}, arguments={}",
+                  command.requestId, sessionId, static_cast<uint16_t>(command.operation), command.arguments.size());
+
+    auto sessionIt = sessions_.find(sessionId);
+    if (sessionIt == sessions_.end() || !sessionIt->second.ready) {
+        return;
+    }
+    if (command.requestId == 0 || command.requestId <= sessionIt->second.lastCommandRequestId) {
+        netServer_->sendTo(sessionId, serializeCommandResponse(CommandResponse{command.requestId, CommandStatus::InvalidRequestId}));
+        return;
+    }
+    sessionIt->second.lastCommandRequestId = command.requestId;
+
+    entt::entity playerEntity = actorWorld_.getEntityByName(sessionIt->second.actorName);
+    const CommandStatus status = executeCommand(playerEntity, command);
+    netServer_->sendTo(sessionId, serializeCommandResponse(CommandResponse{command.requestId, status}));
+}
+
+CommandStatus GameServer::executeCommand(entt::entity playerEntity, const CommandRequest& command) {
+    auto& registry = actorWorld_.registry();
+    if (!registry.valid(playerEntity) || !registry.all_of<TransformComponent>(playerEntity)) {
+        return CommandStatus::InvalidPlayer;
+    }
+
+    switch (command.operation) {
+        case CommandOperation::None:
+            return CommandStatus::InvalidOperation;
+        case CommandOperation::CreateRobot: {
+            if (command.arguments.size() > 2 ||
+                (!command.arguments.empty() && !std::holds_alternative<std::string>(command.arguments[0])) ||
+                (command.arguments.size() == 2 && !std::holds_alternative<glm::vec3>(command.arguments[1]))) {
+                return CommandStatus::InvalidArguments;
+            }
+
+            std::string robotName;
+            if (!command.arguments.empty()) {
+                robotName = std::get<std::string>(command.arguments[0]);
+                if (robotName.empty() || robotName.size() > 64 || actorWorld_.getEntityByName(robotName) != entt::null) {
+                    return CommandStatus::InvalidArguments;
+                }
+            } else {
+                do {
+                    robotName = "Robot" + std::to_string(nextRobotIndex_++);
+                } while (actorWorld_.getEntityByName(robotName) != entt::null);
+            }
+
+            glm::vec3 position = registry.get<TransformComponent>(playerEntity).position;
+            if (command.arguments.size() == 2) {
+                position = std::get<glm::vec3>(command.arguments[1]);
+            }
+            return actorWorld_.createRobot(robotName, position) == entt::null ? CommandStatus::Failed : CommandStatus::Success;
+        }
+        case CommandOperation::DestroyRobot: {
+            if (command.arguments.size() > 1 ||
+                (!command.arguments.empty() && !std::holds_alternative<std::string>(command.arguments[0]))) {
+                return CommandStatus::InvalidArguments;
+            }
+
+            if (!command.arguments.empty()) {
+                const entt::entity entity = actorWorld_.getEntityByName(std::get<std::string>(command.arguments[0]));
+                if (entity == entt::null || !registry.all_of<RobotComponent>(entity)) {
+                    return CommandStatus::ObjectNotFound;
+                }
+                actorWorld_.destroyEntity(entity);
+                return CommandStatus::Success;
+            }
+
+            auto robotView = registry.view<RobotComponent>();
+            if (robotView.begin() == robotView.end()) {
+                return CommandStatus::ObjectNotFound;
+            }
+            actorWorld_.destroyEntity(*robotView.begin());
+            return CommandStatus::Success;
+        }
+        default:
+            return CommandStatus::InvalidOperation;
     }
 }

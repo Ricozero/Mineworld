@@ -3,10 +3,13 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
 
+#include "command.h"
 #include "entity.h"
 #include "orientation.h"
 
@@ -44,6 +47,8 @@ public:
     bool shouldClose() const;
     void pollEvents();
     void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
+    void queueCommand(CommandRequest command);
+    std::optional<CommandRequest> consumeCommand();
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
     void render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager, ChunkCuller& chunkCuller);
 
@@ -124,6 +129,9 @@ private:
     bool prevF3Down_ = false;
     bool prevF4Down_ = false;
     bool prevF5Down_ = false;
+    bool prevF6Down_ = false;
+    bool prevF7Down_ = false;
+    std::deque<CommandRequest> pendingCommands_;
 
     // Overlay & in-game menu state
     ProfilerMode profilerMode_ = ProfilerMode::Hidden;

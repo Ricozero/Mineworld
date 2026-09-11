@@ -9,7 +9,7 @@ Mineworld 是一个使用 C++20 开发的多人在线体素游戏实验项目
 - 基于 EnTT 的玩家、机器人和物理实体
 - 基于 bgfx、GLFW 和 ImGui 的渲染及界面
 - 基于 Asio、UDP 和 KCP 的可靠网络通信
-- 使用 FlatBuffers 序列化握手、输入、实体和区块数据
+- 使用 FlatBuffers 序列化握手、输入、命令、实体和区块数据
 - 集成 Tracy 性能分析
 
 ## 构建
@@ -52,12 +52,14 @@ bin/mineworld.exe server
   - 如何不用maintainChunkIndex_
   - buildEntitySnapshot优化
   - ActorComponent，Id
+  - 实体名称显示
 - profiler
   - 整体整理
   - 每秒数据
 - headless client
 - 玩家移动时，机器人会卡顿
 - 时间同步，昼夜系统
+- 拆分ChunkUpdate
 
 ### 架构
 
@@ -126,7 +128,6 @@ bin/mineworld.exe server
 - 阴影映射
 - 环境光遮蔽
 - 方块光照传播算法
-- 显示实体名称
 - LOD
 - 光线追踪
 
