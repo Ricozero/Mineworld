@@ -231,55 +231,104 @@ bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot
     return true;
 }
 
-std::vector<uint8_t> serializeChunkUpdate(const NetChunkUpdate& update, flatbuffers::FlatBufferBuilder& builder) {
-    builder.Reset();
-    const mineworld::net::IVec3 chunkPos = toFbIVec3(update.chunkPos);
-    flatbuffers::Offset<flatbuffers::Vector<uint8_t>> blocks;
-    if (update.operation == NetChunkOperation::Upsert) {
-        std::vector<uint8_t> blockBytes;
-        update.blocks.serialize(blockBytes);
-        blocks = builder.CreateVector(blockBytes);
+std::vector<uint8_t> serializeChunkUpsertBatch(std::span<const NetChunkUpsert> chunks, flatbuffers::FlatBufferBuilder& builder) {
+    builder.Clear();
+    if (chunks.empty() || chunks.size() > MAX_CHUNK_UPSERTS_PER_BATCH) {
+        return {};
     }
-    const auto payload = mineworld::net::CreateChunkUpdate(
-        builder,
-        &chunkPos,
-        update.revision,
-        toWireEnum(update.operation),
-        blocks);
-    return finishMessage(builder, payload);
+    std::vector<flatbuffers::Offset<mineworld::net::ChunkUpsert>> entries;
+    entries.reserve(chunks.size());
+    for (const auto& chunk : chunks) {
+        if (!chunk.snapshot || !ChunkLayout::isChunkInWorld(chunk.chunkPos)) {
+            return {};
+        }
+        const auto& data = chunk.snapshot->data;
+        if (data.compression >= ChunkCompression::Count || data.bytes.empty() || data.bytes.size() > ChunkData::MAX_SERIALIZED_SIZE ||
+            data.uncompressedSize < ChunkData::SERIALIZED_HEADER_SIZE || data.uncompressedSize > ChunkData::MAX_SERIALIZED_SIZE ||
+            (data.compression == ChunkCompression::None && data.bytes.size() != data.uncompressedSize)) {
+            return {};
+        }
+        const auto pos = toFbIVec3(chunk.chunkPos);
+        const auto blocks = builder.CreateVector(data.bytes);
+        entries.push_back(mineworld::net::CreateChunkUpsert(builder, &pos, chunk.snapshot->revision, toWireEnum(data.compression), data.uncompressedSize, blocks));
+    }
+    auto bytes = finishMessage(builder, mineworld::net::CreateChunkUpsertBatch(builder, builder.CreateVector(entries)));
+    return bytes.size() <= MAX_CHUNK_BATCH_BYTES ? std::move(bytes) : std::vector<uint8_t>{};
 }
 
-bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outUpdate) {
+bool deserializeChunkUpsertBatch(std::span<const uint8_t> bytes, std::vector<NetDecodedChunkUpsert>& outChunks) {
+    if (bytes.size() > MAX_CHUNK_BATCH_BYTES) {
+        return false;
+    }
     const mineworld::net::NetMessage* message = tryGetMessage(bytes);
-    if (!message || message->payload_type() != mineworld::net::NetMessagePayload::ChunkUpdate) {
+    if (!message || message->payload_type() != mineworld::net::NetMessagePayload::ChunkUpsertBatch) {
         return false;
     }
-    const mineworld::net::ChunkUpdate* update = message->payload_as_ChunkUpdate();
-    if (!update || !update->chunk_pos()) {
+    const auto* batch = message->payload_as_ChunkUpsertBatch();
+    const auto* chunks = batch ? batch->chunks() : nullptr;
+    if (!chunks || chunks->empty() || chunks->size() > MAX_CHUNK_UPSERTS_PER_BATCH) {
         return false;
     }
+    std::vector<NetDecodedChunkUpsert> result;
+    result.reserve(chunks->size());
+    for (const auto* chunk : *chunks) {
+        if (!chunk || !chunk->chunk_pos() || !chunk->blocks()) {
+            return false;
+        }
+        NetDecodedChunkUpsert decoded;
+        decoded.chunkPos = fromFbIVec3(chunk->chunk_pos());
+        decoded.revision = chunk->revision();
+        const auto* blocks = chunk->blocks();
+        if (!ChunkLayout::isChunkInWorld(decoded.chunkPos) ||
+            !ChunkCodec::decode(fromWireEnum(chunk->compression(), ChunkCompression::Count), chunk->uncompressed_size(), std::span(blocks->data(), blocks->size()), decoded.blocks)) {
+            return false;
+        }
+        result.push_back(std::move(decoded));
+    }
+    outChunks = std::move(result);
+    return true;
+}
 
-    NetChunkUpdate result;
-    result.chunkPos = fromFbIVec3(update->chunk_pos());
-    if (!ChunkLayout::isChunkInWorld(result.chunkPos)) {
+std::vector<uint8_t> serializeChunkUnloadBatch(std::span<const NetChunkUnload> chunks, flatbuffers::FlatBufferBuilder& builder) {
+    builder.Clear();
+    if (chunks.empty() || chunks.size() > MAX_CHUNK_UNLOADS_PER_BATCH) {
+        return {};
+    }
+    std::vector<mineworld::net::ChunkUnload> entries;
+    entries.reserve(chunks.size());
+    for (const auto& chunk : chunks) {
+        if (!ChunkLayout::isChunkInWorld(chunk.chunkPos)) {
+            return {};
+        }
+        entries.emplace_back(toFbIVec3(chunk.chunkPos), chunk.revision);
+    }
+    auto bytes = finishMessage(builder, mineworld::net::CreateChunkUnloadBatch(builder, builder.CreateVectorOfStructs(entries)));
+    return bytes.size() <= MAX_CHUNK_BATCH_BYTES ? std::move(bytes) : std::vector<uint8_t>{};
+}
+
+bool deserializeChunkUnloadBatch(std::span<const uint8_t> bytes, std::vector<NetChunkUnload>& outChunks) {
+    if (bytes.size() > MAX_CHUNK_BATCH_BYTES) {
         return false;
     }
-    result.revision = update->revision();
-    result.operation = fromWireEnum(update->operation(), NetChunkOperation::Upsert);
-    const auto* blockBytes = update->blocks();
-    if (result.operation == NetChunkOperation::Unload) {
-        if (blockBytes && !blockBytes->empty()) {
-            return false;
-        }
-    } else {
-        if (!blockBytes || blockBytes->size() > ChunkData::MAX_SERIALIZED_SIZE) {
-            return false;
-        }
-        if (!ChunkData::deserialize(std::span<const uint8_t>(blockBytes->data(), blockBytes->size()), result.blocks)) {
-            return false;
-        }
+    const auto* message = tryGetMessage(bytes);
+    if (!message || message->payload_type() != mineworld::net::NetMessagePayload::ChunkUnloadBatch) {
+        return false;
     }
-    outUpdate = std::move(result);
+    const auto* batch = message->payload_as_ChunkUnloadBatch();
+    const auto* chunks = batch ? batch->chunks() : nullptr;
+    if (!chunks || chunks->empty() || chunks->size() > MAX_CHUNK_UNLOADS_PER_BATCH) {
+        return false;
+    }
+    std::vector<NetChunkUnload> result;
+    result.reserve(chunks->size());
+    for (const auto* chunk : *chunks) {
+        const auto pos = fromFbIVec3(&chunk->chunk_pos());
+        if (!ChunkLayout::isChunkInWorld(pos)) {
+            return false;
+        }
+        result.push_back(NetChunkUnload{pos, chunk->revision()});
+    }
+    outChunks = std::move(result);
     return true;
 }
 

@@ -87,19 +87,12 @@ void forEachChunkInRing(glm::ivec3 center, int horizontalRadius, int verticalRad
 
 }  // namespace
 
-GameServer::GameServer() {
-    auto kcpServer = std::make_unique<KcpServer>(ioContext_, AppConfig::instance().port);
-    kcpServer->setOnConnect([this](uint32_t sessionId) {
-        onSessionConnect(sessionId);
-    });
-    kcpServer->setOnPacket([this](uint32_t sessionId, const std::vector<uint8_t>& packet) {
-        return onSessionPacket(sessionId, packet);
-    });
-    kcpServer->setOnDisconnect([this](uint32_t sessionId) {
-        onSessionDisconnect(sessionId);
-    });
-    netServer_ = std::move(kcpServer);
+GameServer::GameServer() : GameServer(nullptr) {}
 
+GameServer::GameServer(std::unique_ptr<INetServer> netServer) : netServer_(std::move(netServer)) {
+    if (!netServer_) {
+        netServer_ = std::make_unique<KcpServer>(ioContext_, AppConfig::instance().port);
+    }
     registerSystem(std::make_unique<PhysicsSystem>());
 }
 
@@ -113,6 +106,7 @@ void GameServer::update(float deltaTime) {
     MW_PROFILE_SCOPE("Server.Update");
 
     pumpNetwork();
+    processNetworkEvents();
     for (auto& system : systems_) {
         system->update(voxelWorld_, actorWorld_, deltaTime);
     }
@@ -130,9 +124,10 @@ void GameServer::update(float deltaTime) {
 
             const NetEntitySnapshot snapshot = buildEntitySnapshot(session);
             std::vector<uint8_t> payload = serializeEntitySnapshot(snapshot, session.entitySnapshotBuilder);
-            MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
-            MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
-            netServer_->sendTo(sessionId, payload);
+            if (netServer_->send(sessionId, payload)) {
+                MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
+                MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
+            }
         }
         sendChunkUpdates(session);
         pendingChunkUpdateCount += session.pendingChunkUpdates.size();
@@ -185,7 +180,7 @@ void GameServer::rebuildSessionChunkDemand(Session& session, glm::ivec3 currentC
     for (const glm::ivec3& chunkPos : diff) {
         chunkManager_.addRequester(chunkPos, ServerChunkManager::PriorityClass::Player);
         if (const Chunk* chunk = voxelWorld_.findChunk(chunkPos)) {
-            queueChunkUpdate(session, buildUpsertChunkUpdate(*chunk));
+            queueChunkUpdate(session, *chunk, ChunkOperation::Upsert);
         }
     }
 
@@ -200,7 +195,7 @@ void GameServer::rebuildSessionChunkDemand(Session& session, glm::ivec3 currentC
     for (const glm::ivec3& chunkPos : diff) {
         chunkManager_.removeRequester(chunkPos, ServerChunkManager::PriorityClass::Player, now);
         if (const Chunk* chunk = voxelWorld_.findChunk(chunkPos)) {
-            queueChunkUpdate(session, buildUnloadChunkUpdate(*chunk));
+            queueChunkUpdate(session, *chunk, ChunkOperation::Unload);
         }
     }
 
@@ -307,70 +302,98 @@ NetEntitySnapshot GameServer::buildEntitySnapshot(Session& session) {
 void GameServer::sendChunkUpdates(Session& session) {
     MW_PROFILE_SCOPE("Server.SendChunkUpdates");
 
-    std::vector<NetChunkUpdate*> candidates;
-    candidates.reserve(session.pendingChunkUpdates.size());
-    for (auto& [chunkPos, update] : session.pendingChunkUpdates) {
-        const auto& visibleChunks = session.cachedVisibleChunks;
-        if (update.operation == NetChunkOperation::Upsert && (!std::binary_search(visibleChunks.begin(), visibleChunks.end(), chunkPos, chunkLess) || voxelWorld_.findChunk(chunkPos) == nullptr)) {
+    std::vector<glm::ivec3> coreUpserts;
+    std::vector<glm::ivec3> upserts;
+    std::vector<NetChunkUnload> unloads;
+    for (auto it = session.pendingChunkUpdates.begin(); it != session.pendingChunkUpdates.end();) {
+        const auto& [pos, update] = *it;
+        if (update.operation == ChunkOperation::Unload) {
+            unloads.push_back(NetChunkUnload{pos, update.revision});
+        } else if (!std::binary_search(session.cachedVisibleChunks.begin(), session.cachedVisibleChunks.end(), pos, chunkLess) || voxelWorld_.findChunk(pos) == nullptr) {
+            it = session.pendingChunkUpdates.erase(it);
             continue;
+        } else if (std::binary_search(session.coreChunks.begin(), session.coreChunks.end(), pos, chunkLess)) {
+            coreUpserts.push_back(pos);
+        } else {
+            upserts.push_back(pos);
         }
-        candidates.push_back(&update);
+        ++it;
     }
-
-    const auto priority = [&](const NetChunkUpdate& update) {
-        if (std::binary_search(session.coreChunks.begin(), session.coreChunks.end(), update.chunkPos, chunkLess)) {
-            return 0;
-        }
-        if (update.operation == NetChunkOperation::Unload) {
-            return 1;
-        }
-        return 2;
+    const auto nearFirst = [&](glm::ivec3 a, glm::ivec3 b) {
+        const auto aDistance = chunkDistanceSquared(a, session.lastChunkPos);
+        const auto bDistance = chunkDistanceSquared(b, session.lastChunkPos);
+        return aDistance != bDistance ? aDistance < bDistance : chunkLess(a, b);
     };
+    std::sort(coreUpserts.begin(), coreUpserts.end(), nearFirst);
+    std::sort(upserts.begin(), upserts.end(), nearFirst);
 
-    std::sort(candidates.begin(), candidates.end(), [&](const NetChunkUpdate* a, const NetChunkUpdate* b) {
-        const int aPriority = priority(*a);
-        const int bPriority = priority(*b);
-        if (aPriority != bPriority) {
-            return aPriority < bPriority;
-        }
-        const int64_t aDistance = chunkDistanceSquared(a->chunkPos, session.lastChunkPos);
-        const int64_t bDistance = chunkDistanceSquared(b->chunkPos, session.lastChunkPos);
-        return aDistance < bDistance;
-    });
-
-    std::vector<glm::ivec3> sentChunks;
-    sentChunks.reserve(candidates.size());
     size_t upsertCount = 0;
     size_t upsertBytes = 0;
-    for (NetChunkUpdate* candidate : candidates) {
-        NetChunkUpdate& update = *candidate;
-        const bool isUpsert = update.operation == NetChunkOperation::Upsert;
-        if (isUpsert && upsertCount >= kMaxChunkUpsertsPerTick) {
-            continue;
-        }
-
-        std::vector<uint8_t> payload = serializeChunkUpdate(update, session.chunkUpdateBuilder);
-        if (isUpsert && upsertBytes + payload.size() > kMaxChunkUpsertBytesPerTick) {
-            continue;
-        }
-
-        MW_PROFILE_COUNTER("Server.ChunkUpdatesOut", 1);
+    const auto recordBatch = [&](ChunkOperation operation, size_t count, const std::vector<uint8_t>& payload) {
+        MW_PROFILE_COUNTER(operation == ChunkOperation::Upsert ? "Server.ChunkUpsertBatchesOut" : "Server.ChunkUnloadBatchesOut", 1);
+        MW_PROFILE_COUNTER("Server.ChunkUpdatesOut", static_cast<int64_t>(count));
         MW_PROFILE_COUNTER("Server.ChunkUpdateBytesOut", static_cast<int64_t>(payload.size()));
         MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
-        netServer_->sendTo(session.sessionId, payload);
-        if (isUpsert) {
-            ++upsertCount;
+    };
+    const auto sendUpserts = [&](const std::vector<glm::ivec3>& positions) {
+        size_t cursor = 0;
+        while (cursor < positions.size() && upsertCount < kMaxChunkUpsertsPerTick && upsertBytes < kMaxChunkUpsertBytesPerTick) {
+            const size_t byteLimit = std::min(MAX_CHUNK_BATCH_BYTES, kMaxChunkUpsertBytesPerTick - upsertBytes);
+            const size_t countLimit = std::min(MAX_CHUNK_UPSERTS_PER_BATCH, kMaxChunkUpsertsPerTick - upsertCount);
+            std::vector<NetChunkUpsert> batch;
+            batch.reserve(countLimit);
+            size_t estimatedBytes = 128;
+            for (size_t i = cursor; i < positions.size() && batch.size() < countLimit; ++i) {
+                const Chunk* chunk = voxelWorld_.findChunk(positions[i]);
+                assert(chunk != nullptr);
+                auto snapshot = chunk->getEncodedSnapshot();
+                const size_t entryBytes = snapshot->data.bytes.size() + 64;
+                if (!batch.empty() && estimatedBytes + entryBytes > byteLimit) {
+                    break;
+                }
+                estimatedBytes += entryBytes;
+                batch.push_back(NetChunkUpsert{positions[i], std::move(snapshot)});
+            }
+            auto payload = serializeChunkUpsertBatch(batch, session.chunkUpdateBuilder);
+            while (batch.size() > 1 && (payload.empty() || payload.size() > byteLimit)) {
+                batch.resize(batch.size() / 2);
+                payload = serializeChunkUpsertBatch(batch, session.chunkUpdateBuilder);
+            }
+            if (payload.empty() || payload.size() > byteLimit || !netServer_->send(session.sessionId, payload)) {
+                return false;
+            }
+            recordBatch(ChunkOperation::Upsert, batch.size(), payload);
+            upsertCount += batch.size();
             upsertBytes += payload.size();
+            cursor += batch.size();
+            for (const auto& entry : batch) {
+                session.pendingChunkUpdates.erase(entry.chunkPos);
+            }
         }
-        sentChunks.push_back(update.chunkPos);
+        return true;
+    };
+
+    const bool coreSent = sendUpserts(coreUpserts);
+    for (size_t cursor = 0; cursor < unloads.size();) {
+        const size_t count = std::min(MAX_CHUNK_UNLOADS_PER_BATCH, unloads.size() - cursor);
+        const auto batch = std::span(unloads).subspan(cursor, count);
+        const auto payload = serializeChunkUnloadBatch(batch, session.chunkUpdateBuilder);
+        if (payload.empty() || !netServer_->send(session.sessionId, payload)) {
+            return;
+        }
+        recordBatch(ChunkOperation::Unload, count, payload);
+        for (const auto& entry : batch) {
+            session.pendingChunkUpdates.erase(entry.chunkPos);
+        }
+        cursor += count;
     }
-    for (const glm::ivec3& chunkPos : sentChunks) {
-        session.pendingChunkUpdates.erase(chunkPos);
+    if (coreSent) {
+        sendUpserts(upserts);
     }
 }
 
-void GameServer::queueChunkUpdate(Session& session, NetChunkUpdate update) {
-    session.pendingChunkUpdates[update.chunkPos] = std::move(update);
+void GameServer::queueChunkUpdate(Session& session, const Chunk& chunk, ChunkOperation operation) {
+    session.pendingChunkUpdates[chunk.getPosition()] = PendingChunkUpdate{operation, operation == ChunkOperation::Unload ? chunk.getRevision() : 0};
 }
 
 void GameServer::updateChunks() {
@@ -474,7 +497,7 @@ bool GameServer::commitChunkLoad(glm::ivec3 chunkPos, ChunkData&& data, uint64_t
         for (auto& [sessionId, session] : sessions_) {
             const auto& visibleChunks = session.cachedVisibleChunks;
             if (session.helloReceived && std::binary_search(visibleChunks.begin(), visibleChunks.end(), chunkPos, chunkLess)) {
-                queueChunkUpdate(session, buildUpsertChunkUpdate(*chunk));
+                queueChunkUpdate(session, *chunk, ChunkOperation::Upsert);
             }
         }
     }
@@ -491,23 +514,6 @@ bool GameServer::commitChunkUnload(glm::ivec3 chunkPos) {
     return actorWorld_.unloadEntitiesInChunk(chunkPos) && voxelWorld_.unloadChunk(chunkPos);
 }
 
-NetChunkUpdate GameServer::buildUpsertChunkUpdate(const Chunk& chunk) {
-    NetChunkUpdate update;
-    update.chunkPos = chunk.getPosition();
-    update.revision = chunk.getRevision();
-    update.operation = NetChunkOperation::Upsert;
-    update.blocks = chunk.getData();
-    return update;
-}
-
-NetChunkUpdate GameServer::buildUnloadChunkUpdate(const Chunk& chunk) {
-    NetChunkUpdate update;
-    update.chunkPos = chunk.getPosition();
-    update.revision = chunk.getRevision();
-    update.operation = NetChunkOperation::Unload;
-    return update;
-}
-
 void GameServer::pumpNetwork() {
     MW_PROFILE_SCOPE("Server.PumpNetwork");
 
@@ -516,6 +522,35 @@ void GameServer::pumpNetwork() {
     }
 
     netServer_->pump();
+}
+
+void GameServer::processNetworkEvents() {
+    MW_PROFILE_SCOPE("Server.ProcessNetworkEvents");
+    NetEvent event;
+    while (netServer_->popEvent(event)) {
+        switch (event.type) {
+            case NetEventType::Connected:
+                onSessionConnect(event.sessionId);
+                break;
+            case NetEventType::Packet:
+                if (sessions_.contains(event.sessionId) && !onSessionPacket(event.sessionId, event.payload)) {
+                    netServer_->close(event.sessionId);
+                }
+                break;
+            case NetEventType::Disconnected:
+                onSessionDisconnect(event.sessionId);
+                break;
+        }
+    }
+}
+
+bool GameServer::sendControlPacket(uint32_t sessionId, std::vector<uint8_t> payload) {
+    if (!netServer_->send(sessionId, payload)) {
+        return false;
+    }
+    MW_PROFILE_COUNTER("Server.ControlPacketsOut", 1);
+    MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
+    return true;
 }
 
 void GameServer::onSessionConnect(uint32_t sessionId) {
@@ -564,7 +599,7 @@ bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>&
         case Payload::CommandRequest: {
             CommandRequest command;
             if (deserializeCommandRequest(packet, command)) {
-                onCommandRequest(sessionId, command);
+                return onCommandRequest(sessionId, command);
             }
             return true;
         }
@@ -620,10 +655,8 @@ bool GameServer::onClientHello(uint32_t sessionId) {
         chunkManager_.addRequester(chunkPos, ServerChunkManager::PriorityClass::LoadingCore);
     });
     assert(std::is_sorted(session.coreChunks.begin(), session.coreChunks.end(), chunkLess));
-    netServer_->sendTo(sessionId, serializeServerHello(hello));
-
     logging::info("Client hello from session {}, assigned actor '{}'", sessionId, actorName);
-    return true;
+    return sendControlPacket(sessionId, serializeServerHello(hello));
 }
 
 void GameServer::onClientReady(uint32_t sessionId) {
@@ -674,23 +707,22 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
     }
 }
 
-void GameServer::onCommandRequest(uint32_t sessionId, const CommandRequest& command) {
+bool GameServer::onCommandRequest(uint32_t sessionId, const CommandRequest& command) {
     logging::info("Command request {} received from session {}: operation={}, arguments={}",
                   command.requestId, sessionId, static_cast<uint16_t>(command.operation), command.arguments.size());
 
     auto sessionIt = sessions_.find(sessionId);
     if (sessionIt == sessions_.end() || !sessionIt->second.ready) {
-        return;
+        return true;
     }
     if (command.requestId == 0 || command.requestId <= sessionIt->second.lastCommandRequestId) {
-        netServer_->sendTo(sessionId, serializeCommandResponse(CommandResponse{command.requestId, CommandStatus::InvalidRequestId}));
-        return;
+        return sendControlPacket(sessionId, serializeCommandResponse(CommandResponse{command.requestId, CommandStatus::InvalidRequestId}));
     }
     sessionIt->second.lastCommandRequestId = command.requestId;
 
     entt::entity playerEntity = actorWorld_.getEntityByName(sessionIt->second.actorName);
     const CommandStatus status = executeCommand(playerEntity, command);
-    netServer_->sendTo(sessionId, serializeCommandResponse(CommandResponse{command.requestId, status}));
+    return sendControlPacket(sessionId, serializeCommandResponse(CommandResponse{command.requestId, status}));
 }
 
 CommandStatus GameServer::executeCommand(entt::entity playerEntity, const CommandRequest& command) {

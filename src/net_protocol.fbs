@@ -59,11 +59,25 @@ table EntitySnapshot {
   actors:[ActorState];
 }
 
-table ChunkUpdate {
+table ChunkUpsert {
   chunk_pos:IVec3;
   revision:uint;
-  operation:ubyte;
+  compression:ubyte;
+  uncompressed_size:uint;
   blocks:[ubyte];
+}
+
+struct ChunkUnload {
+  chunk_pos:IVec3;
+  revision:uint;
+}
+
+table ChunkUpsertBatch {
+  chunks:[ChunkUpsert];
+}
+
+table ChunkUnloadBatch {
+  chunks:[ChunkUnload];
 }
 
 table StringArgument {
@@ -116,7 +130,8 @@ union NetMessagePayload {
   ServerHello,
   ClientInput,
   EntitySnapshot,
-  ChunkUpdate,
+  ChunkUpsertBatch,
+  ChunkUnloadBatch,
   CommandRequest,
   CommandResponse
 }

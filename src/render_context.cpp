@@ -664,10 +664,6 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
     const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
     if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
         cameraViewMode_ = cycleMode(cameraViewMode_);
-        logging::info("Switched camera view to {}",
-                      cameraViewMode_ == CameraViewMode::FirstPerson        ? "first-person"
-                      : cameraViewMode_ == CameraViewMode::ThirdPersonFront ? "third-person-front"
-                                                                            : "third-person-back");
     }
     prevF5Down_ = f5Down;
 

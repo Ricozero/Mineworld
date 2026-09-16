@@ -45,6 +45,7 @@ public:
 
 private:
     void pumpNetwork();
+    void processNetworkEvents();
     void onServerPacket(const std::vector<uint8_t>& packet);
     void handleServerHello(const NetServerHello& hello);
     void tryEnterRunning();
@@ -53,7 +54,6 @@ private:
     void sendPendingCommands();
     void replayEntitySnapshots();
     void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
-    void applyChunkUpdate(NetChunkUpdate&& update);
     void rebuildChunkMeshes();
     void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
@@ -73,6 +73,7 @@ private:
     asio::io_context ioContext_;
     std::unique_ptr<INetClient> netClient_;
     std::deque<NetEntitySnapshot> entitySnapshotBuffer_;
+    std::deque<std::vector<uint8_t>> pendingCommandPackets_;
     uint32_t lastAppliedEntitySnapshot_ = 0;
     RenderContext* renderContext_ = nullptr;
     bool helloPending_ = true;

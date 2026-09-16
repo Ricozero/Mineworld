@@ -21,12 +21,23 @@
 class GameServer {
 public:
     GameServer();
+    explicit GameServer(std::unique_ptr<INetServer> netServer);
     ~GameServer();
 
     void registerSystem(std::unique_ptr<System> system);
     void update(float deltaTime);
 
 private:
+    enum class ChunkOperation {
+        Upsert,
+        Unload,
+    };
+
+    struct PendingChunkUpdate {
+        ChunkOperation operation = ChunkOperation::Upsert;
+        uint32_t revision = 0;
+    };
+
     struct Session {
         static constexpr glm::ivec3 INVALID_CHUNK_POS{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
 
@@ -44,10 +55,10 @@ private:
         std::vector<glm::ivec3> cachedRetentionChunks;
         std::vector<glm::ivec3> coreChunks;
 
-        std::unordered_map<glm::ivec3, NetChunkUpdate> pendingChunkUpdates;
+        std::unordered_map<glm::ivec3, PendingChunkUpdate> pendingChunkUpdates;
 
         flatbuffers::FlatBufferBuilder entitySnapshotBuilder{8192};
-        flatbuffers::FlatBufferBuilder chunkUpdateBuilder{ChunkData::MAX_SERIALIZED_SIZE + 256};
+        flatbuffers::FlatBufferBuilder chunkUpdateBuilder{MAX_CHUNK_BATCH_BYTES};
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
@@ -63,19 +74,19 @@ private:
     void processPendingUnloads(ServerChunkManager::TimePoint now);
     bool commitChunkLoad(glm::ivec3 chunkPos, ChunkData&& data, uint64_t generationId);
     bool commitChunkUnload(glm::ivec3 chunkPos);
-    void queueChunkUpdate(Session& session, NetChunkUpdate update);
+    void queueChunkUpdate(Session& session, const Chunk& chunk, ChunkOperation operation);
 
-    NetChunkUpdate buildUpsertChunkUpdate(const Chunk& chunk);
-    static NetChunkUpdate buildUnloadChunkUpdate(const Chunk& chunk);
     void pumpNetwork();
+    void processNetworkEvents();
 
+    bool sendControlPacket(uint32_t sessionId, std::vector<uint8_t> payload);
     void onSessionConnect(uint32_t sessionId);
     void onSessionDisconnect(uint32_t sessionId);
     bool onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
     bool onClientHello(uint32_t sessionId);
     void onClientReady(uint32_t sessionId);
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
-    void onCommandRequest(uint32_t sessionId, const CommandRequest& command);
+    bool onCommandRequest(uint32_t sessionId, const CommandRequest& command);
     CommandStatus executeCommand(entt::entity playerEntity, const CommandRequest& command);
 
     ServerChunkManager chunkManager_{std::chrono::seconds(3)};

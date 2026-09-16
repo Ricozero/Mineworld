@@ -19,6 +19,8 @@
             "features": [
                 "gui-tools"
             ]
-        }
+        },
+        "lz4",
+        "gtest"
     ]
 }

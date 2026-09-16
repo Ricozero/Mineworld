@@ -19,14 +19,15 @@ public:
     ~KcpClient() override;
 
     void connect(const Endpoint& endpoint) override;
-    bool isReady() const override { return kcp_ != nullptr; }
-    void sendReliable(const std::vector<uint8_t>& payload) override;
+    bool isConnected() const override { return kcp_ != nullptr; }
+    bool send(std::span<const uint8_t> payload) override;
     void flush() override;
     void pump() override;
-    bool popPacket(std::vector<uint8_t>& outPacket) override;
+    bool popEvent(NetEvent& outEvent) override;
+    void close() override;
 
 private:
-    void reset();
+    void reset(bool discardEvents = true);
     void initKcp(uint32_t conv);
     void sendHandshakeRequest(uint32_t now);
 
@@ -38,10 +39,11 @@ private:
     ikcpcb* kcp_ = nullptr;
 
     std::optional<Endpoint> remote_;
-    std::deque<std::vector<uint8_t>> recvPackets_;
+    std::deque<NetEvent> events_;
     std::vector<uint8_t> recvBuffer_;
     uint64_t handshakeNonce_ = 0;
     uint32_t lastHandshakeSendMs_ = 0;
+    uint32_t lastReceiveMs_ = 0;
     bool handshakeStarted_ = false;
     bool versionMismatchLogged_ = false;
 };
@@ -54,13 +56,12 @@ public:
     KcpServer(asio::io_context& ioContext, uint16_t localPort);
     ~KcpServer() override;
 
-    void setOnConnect(SessionConnectCallback callback) override;
-    void setOnPacket(SessionPacketCallback callback) override;
-    void setOnDisconnect(SessionDisconnectCallback callback) override;
-    void sendTo(uint32_t sessionId, const std::vector<uint8_t>& payload) override;
+    bool send(uint32_t sessionId, std::span<const uint8_t> payload) override;
+    void flush() override;
     void pump() override;
+    bool popEvent(NetEvent& outEvent) override;
+    void close(uint32_t sessionId) override;
     bool hasSession(uint32_t sessionId) const override;
-    std::vector<uint32_t> getSessionIds() const override;
 
 private:
     struct KcpOutputContext {
@@ -74,7 +75,6 @@ private:
         uint64_t handshakeNonce = 0;
         ikcpcb* kcp = nullptr;
         uint32_t lastReceiveMs = 0;
-        bool pendingDisconnect = false;
         KcpOutputContext outputContext;
     };
 
@@ -110,7 +110,5 @@ private:
     std::unordered_map<asio::ip::address, HandshakeRateState> handshakeRateStates_;
     uint32_t lastRateLimitCleanupMs_ = 0;
 
-    SessionConnectCallback onConnect_;
-    SessionPacketCallback onPacket_;
-    SessionDisconnectCallback onDisconnect_;
+    std::deque<NetEvent> events_;
 };

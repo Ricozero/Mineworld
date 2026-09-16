@@ -43,12 +43,20 @@ void GameClient::registerSystem(std::unique_ptr<System> system) {
 void GameClient::update(float deltaTime) {
     MW_PROFILE_SCOPE("Client.Update");
 
-    if (state_ == State::Failed || state_ == State::Disconnecting) {
+    if (state_ == State::Failed) {
         return;
     }
 
     secondsSincePacket_ += deltaTime;
     pumpNetwork();
+    processNetworkEvents();
+    if (state_ == State::Failed) {
+        return;
+    }
+    if (state_ == State::Disconnecting) {
+        disconnect();
+        return;
+    }
     if (secondsSincePacket_ >= kConnectionTimeoutSeconds) {
         fail("Connection timed out");
         return;
@@ -100,18 +108,36 @@ void GameClient::pumpNetwork() {
         return;
     }
     netClient_->pump();
+}
 
-    if (helloPending_ && netClient_->isReady()) {
-        netClient_->sendReliable(serializeClientHello());
+void GameClient::processNetworkEvents() {
+    MW_PROFILE_SCOPE("Client.ProcessNetworkEvents");
+    if (!netClient_) {
+        return;
+    }
+    NetEvent event;
+    while (netClient_->popEvent(event)) {
+        switch (event.type) {
+            case NetEventType::Connected:
+                secondsSincePacket_ = 0.0f;
+                break;
+            case NetEventType::Packet:
+                secondsSincePacket_ = 0.0f;
+                if (state_ != State::Disconnecting && state_ != State::Failed) {
+                    onServerPacket(event.payload);
+                }
+                break;
+            case NetEventType::Disconnected:
+                if (state_ != State::Disconnecting) {
+                    fail("Transport disconnected");
+                }
+                break;
+        }
+    }
+    if (state_ == State::Connecting && helloPending_ && netClient_->isConnected() && netClient_->send(serializeClientHello())) {
         helloPending_ = false;
         state_ = State::Awaiting;
         secondsSincePacket_ = 0.0f;
-    }
-
-    std::vector<uint8_t> packet;
-    while (netClient_->popPacket(packet)) {
-        secondsSincePacket_ = 0.0f;
-        onServerPacket(packet);
     }
 }
 
@@ -135,10 +161,29 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
             }
             break;
         }
-        case Payload::ChunkUpdate: {
-            NetChunkUpdate update;
-            if (deserializeChunkUpdate(packet, update)) {
-                applyChunkUpdate(std::move(update));
+        case Payload::ChunkUpsertBatch: {
+            std::vector<NetDecodedChunkUpsert> chunks;
+            if (!deserializeChunkUpsertBatch(packet, chunks)) {
+                fail("Invalid chunk upsert batch");
+                break;
+            }
+            for (auto& chunk : chunks) {
+                const bool applied = chunkManager_.upsert(chunk.chunkPos, chunk.revision, std::move(chunk.blocks));
+                MW_PROFILE_COUNTER("Client.ChunkUpsertApplied", applied ? 1 : 0);
+                MW_PROFILE_COUNTER("Client.ChunkUpsertDropped", applied ? 0 : 1);
+            }
+            break;
+        }
+        case Payload::ChunkUnloadBatch: {
+            std::vector<NetChunkUnload> chunks;
+            if (!deserializeChunkUnloadBatch(packet, chunks)) {
+                fail("Invalid chunk unload batch");
+                break;
+            }
+            for (const auto& chunk : chunks) {
+                const bool applied = chunkManager_.unload(chunk.chunkPos, chunk.revision);
+                MW_PROFILE_COUNTER("Client.ChunkUnloadApplied", applied ? 1 : 0);
+                MW_PROFILE_COUNTER("Client.ChunkUnloadDropped", applied ? 0 : 1);
             }
             break;
         }
@@ -156,15 +201,18 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
 }
 
 void GameClient::disconnect() {
-    if (disconnectSent_ || !netClient_ || helloPending_) {
+    if (!netClient_ || state_ == State::Failed) {
         return;
     }
-
-    netClient_->sendReliable(serializeClientDisconnect());
-    netClient_->flush();
-    disconnectSent_ = true;
     state_ = State::Disconnecting;
-    logging::info("Requested disconnect from server");
+    pendingCommandPackets_.clear();
+    if (helloPending_) {
+        netClient_->close();
+    } else if (!disconnectSent_ && netClient_->send(serializeClientDisconnect())) {
+        disconnectSent_ = true;
+        logging::info("Requested disconnect from server");
+    }
+    netClient_->flush();
 }
 
 void GameClient::handleServerHello(const NetServerHello& hello) {
@@ -199,7 +247,9 @@ void GameClient::tryEnterRunning() {
         return;
     }
 
-    netClient_->sendReliable(serializeClientReady());
+    if (!netClient_->send(serializeClientReady())) {
+        return;
+    }
     netClient_->flush();
 
     registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
@@ -216,6 +266,10 @@ void GameClient::fail(std::string reason) {
     }
     failureReason_ = std::move(reason);
     state_ = State::Failed;
+    pendingCommandPackets_.clear();
+    if (netClient_) {
+        netClient_->close();
+    }
     if (localSessionId_ != 0) {
         logging::warn("Client disconnected from server (session {}): {}", localSessionId_, failureReason_);
     } else {
@@ -246,7 +300,7 @@ void GameClient::sendInputToServer() {
         input.pitch = transform.rotation.x;
         input.playerMode = player.mode;
         input.sequence = nextInputSequence_++;
-        netClient_->sendReliable(serializeClientInput(input));
+        netClient_->send(serializeClientInput(input));
         break;
     }
 }
@@ -258,7 +312,13 @@ void GameClient::sendPendingCommands() {
 
     while (std::optional<CommandRequest> command = renderContext_->consumeCommand()) {
         command->requestId = nextCommandRequestId_++;
-        netClient_->sendReliable(serializeCommandRequest(*command));
+        pendingCommandPackets_.push_back(serializeCommandRequest(*command));
+    }
+    while (!pendingCommandPackets_.empty()) {
+        if (!netClient_->send(pendingCommandPackets_.front())) {
+            break;
+        }
+        pendingCommandPackets_.pop_front();
     }
 }
 
@@ -323,21 +383,6 @@ void GameClient::applyEntitySnapshot(const NetEntitySnapshot& snapshot) {
     }
     for (entt::entity entity : remoteActorsToDestroy) {
         actorWorld_.destroyEntity(entity);
-    }
-}
-
-void GameClient::applyChunkUpdate(NetChunkUpdate&& update) {
-    bool applied = false;
-    if (update.operation == NetChunkOperation::Unload) {
-        applied = chunkManager_.unload(update.chunkPos, update.revision);
-    } else {
-        applied = chunkManager_.upsert(update.chunkPos, update.revision, std::move(update.blocks));
-    }
-
-    if (applied) {
-        MW_PROFILE_COUNTER("Client.ChunkUpdatesApplied", 1);
-    } else {
-        MW_PROFILE_COUNTER("Client.ChunkUpdatesDropped", 1);
     }
 }
 

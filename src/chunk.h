@@ -3,10 +3,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <memory>
 
 #include "block.h"
+#include "chunk_codec.h"
 #include "chunk_data.h"
 #include "chunk_layout.h"
+
+struct EncodedChunkSnapshot {
+    uint32_t revision = 0;
+    EncodedChunkData data;
+};
 
 class Chunk {
 public:
@@ -18,6 +25,7 @@ public:
     glm::ivec3 getPosition() const { return chunkPos_; }
     uint32_t getRevision() const { return revision_; }
     const ChunkData& getData() const { return data_; }
+    std::shared_ptr<const EncodedChunkSnapshot> getEncodedSnapshot() const;
     BlockData getBlock(size_t index) const { return data_.get(index); }
     BlockData getBlock(glm::ivec3 localPos) const;
     void setBlock(glm::ivec3 localPos, BlockData blockData);
@@ -33,4 +41,5 @@ private:
     glm::ivec3 chunkPos_{0};
     uint32_t revision_ = 0;
     ChunkData data_;
+    mutable std::shared_ptr<const EncodedChunkSnapshot> encodedSnapshot_;
 };

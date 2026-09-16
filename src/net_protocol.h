@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "chunk_data.h"
+#include "chunk.h"
 #include "command.h"
 #include "entity.h"
 #include "net_protocol_generated.h"
@@ -28,17 +28,24 @@ struct NetEntitySnapshot {
     std::vector<NetActorState> actors;
 };
 
-enum class NetChunkOperation : uint8_t {
-    Upsert,
-    Unload,
-    Count,
+inline constexpr size_t MAX_CHUNK_BATCH_BYTES = 32 * 1024;
+inline constexpr size_t MAX_CHUNK_UPSERTS_PER_BATCH = 64;
+inline constexpr size_t MAX_CHUNK_UNLOADS_PER_BATCH = 256;
+
+struct NetChunkUpsert {
+    glm::ivec3 chunkPos{0};
+    std::shared_ptr<const EncodedChunkSnapshot> snapshot;
 };
 
-struct NetChunkUpdate {
+struct NetDecodedChunkUpsert {
     glm::ivec3 chunkPos{0};
     uint32_t revision = 0;
-    NetChunkOperation operation = NetChunkOperation::Upsert;
     ChunkData blocks;
+};
+
+struct NetChunkUnload {
+    glm::ivec3 chunkPos{0};
+    uint32_t revision = 0;
 };
 
 struct NetClientInput {
@@ -75,8 +82,11 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
 std::vector<uint8_t> serializeEntitySnapshot(const NetEntitySnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder);
 bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot& outSnapshot);
 
-std::vector<uint8_t> serializeChunkUpdate(const NetChunkUpdate& update, flatbuffers::FlatBufferBuilder& builder);
-bool deserializeChunkUpdate(std::span<const uint8_t> bytes, NetChunkUpdate& outUpdate);
+std::vector<uint8_t> serializeChunkUpsertBatch(std::span<const NetChunkUpsert> chunks, flatbuffers::FlatBufferBuilder& builder);
+bool deserializeChunkUpsertBatch(std::span<const uint8_t> bytes, std::vector<NetDecodedChunkUpsert>& outChunks);
+
+std::vector<uint8_t> serializeChunkUnloadBatch(std::span<const NetChunkUnload> chunks, flatbuffers::FlatBufferBuilder& builder);
+bool deserializeChunkUnloadBatch(std::span<const uint8_t> bytes, std::vector<NetChunkUnload>& outChunks);
 
 std::vector<uint8_t> serializeCommandRequest(const CommandRequest& command);
 bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& outCommand);

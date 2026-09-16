@@ -10,6 +10,7 @@
 namespace {
 
 constexpr int kRecvMtu = 1400;
+constexpr size_t kMaxMessageFragments = 127;  // IKCP_WND_RCV - 1
 constexpr uint32_t kMagic = 0x4B435048;
 constexpr uint32_t kProtocolVersion = 1;
 constexpr size_t kRequestSize = 16;
@@ -90,15 +91,18 @@ void KcpClient::connect(const Endpoint& endpoint) {
     sendHandshakeRequest(nowMs());
 }
 
-void KcpClient::reset() {
+void KcpClient::reset(bool discardEvents) {
     if (kcp_) {
         ikcp_release(kcp_);
         kcp_ = nullptr;
     }
     remote_.reset();
-    recvPackets_.clear();
+    if (discardEvents) {
+        events_.clear();
+    }
     handshakeNonce_ = 0;
     lastHandshakeSendMs_ = 0;
+    lastReceiveMs_ = 0;
     handshakeStarted_ = false;
     versionMismatchLogged_ = false;
 }
@@ -139,17 +143,36 @@ void KcpClient::initKcp(uint32_t conv) {
     kcp_->rx_minrto = 10;
 
     handshakeStarted_ = false;
+    lastReceiveMs_ = nowMs();
+    events_.push_back(NetEvent{NetEventType::Connected, conv, {}});
     logging::info("Handshake complete, conv = {}", conv);
 }
 
-void KcpClient::sendReliable(const std::vector<uint8_t>& payload) {
-    if (!kcp_ || !remote_) {
+void KcpClient::close() {
+    const bool active = remote_.has_value();
+    const uint32_t sessionId = kcp_ ? kcp_->conv : 0;
+    if (!active) {
+        std::erase_if(events_, [](const NetEvent& event) { return event.type != NetEventType::Disconnected; });
         return;
     }
-    const int result = ikcp_send(kcp_, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
-    if (result < 0) {
-        logging::warn("ikcp_send failed: {}", result);
+    reset();
+    events_.push_back(NetEvent{NetEventType::Disconnected, sessionId, {}});
+}
+
+bool KcpClient::send(std::span<const uint8_t> payload) {
+    if (!kcp_ || !remote_ || payload.empty() || payload.size() > kMaxMessageFragments * kcp_->mss) {
+        return false;
     }
+    const auto queuedBefore = kcp_->nsnd_que;
+    const int result = ikcp_send(kcp_, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
+    if (result != static_cast<int>(payload.size())) {
+        logging::warn("ikcp_send failed: {}", result);
+        if (kcp_->nsnd_que != queuedBefore) {
+            close();
+        }
+        return false;
+    }
+    return true;
 }
 
 void KcpClient::flush() {
@@ -201,6 +224,8 @@ void KcpClient::pump() {
         const int inputResult = ikcp_input(kcp_, reinterpret_cast<const char*>(recvBuffer_.data()), static_cast<long>(received));
         if (inputResult < 0) {
             logging::warn("ikcp_input failed: {}", inputResult);
+        } else {
+            lastReceiveMs_ = nowMs();
         }
     }
 
@@ -225,16 +250,21 @@ void KcpClient::pump() {
             break;
         }
         packet.resize(static_cast<size_t>(received));
-        recvPackets_.push_back(std::move(packet));
+        events_.push_back(NetEvent{NetEventType::Packet, kcp_->conv, std::move(packet)});
+    }
+    if (now - lastReceiveMs_ >= kSessionTimeoutMs || kcp_->state == static_cast<IUINT32>(-1)) {
+        const uint32_t sessionId = kcp_->conv;
+        reset(false);
+        events_.push_back(NetEvent{NetEventType::Disconnected, sessionId, {}});
     }
 }
 
-bool KcpClient::popPacket(std::vector<uint8_t>& outPacket) {
-    if (recvPackets_.empty()) {
+bool KcpClient::popEvent(NetEvent& outEvent) {
+    if (events_.empty()) {
         return false;
     }
-    outPacket = std::move(recvPackets_.front());
-    recvPackets_.pop_front();
+    outEvent = std::move(events_.front());
+    events_.pop_front();
     return true;
 }
 
@@ -275,27 +305,49 @@ KcpServer::~KcpServer() {
     }
 }
 
-void KcpServer::setOnConnect(SessionConnectCallback callback) {
-    onConnect_ = std::move(callback);
-}
-
-void KcpServer::setOnPacket(SessionPacketCallback callback) {
-    onPacket_ = std::move(callback);
-}
-
-void KcpServer::setOnDisconnect(SessionDisconnectCallback callback) {
-    onDisconnect_ = std::move(callback);
-}
-
-void KcpServer::sendTo(uint32_t sessionId, const std::vector<uint8_t>& payload) {
+bool KcpServer::send(uint32_t sessionId, std::span<const uint8_t> payload) {
     auto it = sessions_.find(sessionId);
-    if (it == sessions_.end() || !it->second.kcp) {
+    if (it == sessions_.end() || !it->second.kcp || payload.empty() || payload.size() > kMaxMessageFragments * it->second.kcp->mss) {
+        return false;
+    }
+    const auto queuedBefore = it->second.kcp->nsnd_que;
+    const int result = ikcp_send(it->second.kcp, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
+    if (result != static_cast<int>(payload.size())) {
+        logging::warn("ikcp_send to session {} failed: {}", sessionId, result);
+        if (it->second.kcp->nsnd_que != queuedBefore) {
+            close(sessionId);
+        }
+        return false;
+    }
+    return true;
+}
+
+void KcpServer::flush() {
+    const uint32_t now = nowMs();
+    for (auto& [sessionId, session] : sessions_) {
+        ikcp_update(session.kcp, now);
+        ikcp_flush(session.kcp);
+    }
+}
+
+bool KcpServer::popEvent(NetEvent& outEvent) {
+    if (events_.empty()) {
+        return false;
+    }
+    outEvent = std::move(events_.front());
+    events_.pop_front();
+    return true;
+}
+
+void KcpServer::close(uint32_t sessionId) {
+    if (!hasSession(sessionId)) {
+        std::erase_if(events_, [sessionId](const NetEvent& event) {
+            return event.sessionId == sessionId && event.type != NetEventType::Disconnected;
+        });
         return;
     }
-    const int result = ikcp_send(it->second.kcp, reinterpret_cast<const char*>(payload.data()), static_cast<int>(payload.size()));
-    if (result < 0) {
-        logging::warn("ikcp_send to session {} failed: {}", sessionId, result);
-    }
+    std::erase_if(events_, [sessionId](const NetEvent& event) { return event.sessionId == sessionId; });
+    destroySession(sessionId, true);
 }
 
 void KcpServer::pump() {
@@ -337,10 +389,7 @@ void KcpServer::pump() {
             continue;
         }
 
-        const int inputResult = ikcp_input(
-            session->kcp,
-            reinterpret_cast<const char*>(recvBuffer_.data()),
-            static_cast<long>(received));
+        const int inputResult = ikcp_input(session->kcp, reinterpret_cast<const char*>(recvBuffer_.data()), static_cast<long>(received));
         if (inputResult < 0) {
             logging::warn("ikcp_input for session {} failed: {}", session->sessionId, inputResult);
             continue;
@@ -349,20 +398,12 @@ void KcpServer::pump() {
     }
 
     const uint32_t now = nowMs();
-    std::vector<uint32_t> disconnectedSessions;
     for (auto& [sessionId, session] : sessions_) {
         if (!session.kcp) {
             continue;
         }
         ikcp_update(session.kcp, now);
         processReceivedPackets(session);
-        if (session.pendingDisconnect) {
-            disconnectedSessions.push_back(sessionId);
-        }
-    }
-    for (uint32_t sessionId : disconnectedSessions) {
-        logging::info("Session {} disconnected by client", sessionId);
-        destroySession(sessionId, true);
     }
     removeTimedOutSessions(now);
     cleanupHandshakeRateLimits(now);
@@ -370,15 +411,6 @@ void KcpServer::pump() {
 
 bool KcpServer::hasSession(uint32_t sessionId) const {
     return sessions_.find(sessionId) != sessions_.end();
-}
-
-std::vector<uint32_t> KcpServer::getSessionIds() const {
-    std::vector<uint32_t> sessionIds;
-    sessionIds.reserve(sessions_.size());
-    for (const auto& [sessionId, session] : sessions_) {
-        sessionIds.push_back(sessionId);
-    }
-    return sessionIds;
 }
 
 std::optional<uint32_t> KcpServer::allocateSessionId() {
@@ -420,8 +452,7 @@ KcpServer::SessionState* KcpServer::findSessionByEndpoint(const Endpoint& endpoi
 KcpServer::SessionState* KcpServer::createSession(const Endpoint& endpoint, uint64_t handshakeNonce) {
     const std::optional<uint32_t> sessionId = allocateSessionId();
     if (!sessionId) {
-        logging::warn("Rejected connection from {}:{}: session limit reached",
-                      endpoint.address().to_string(), endpoint.port());
+        logging::warn("Rejected connection from {}:{}: session limit reached", endpoint.address().to_string(), endpoint.port());
         return nullptr;
     }
 
@@ -451,9 +482,7 @@ KcpServer::SessionState* KcpServer::createSession(const Endpoint& endpoint, uint
 
     endpointSessions_[endpoint] = *sessionId;
     logging::info("New session {} from {}:{}", *sessionId, endpoint.address().to_string(), endpoint.port());
-    if (onConnect_) {
-        onConnect_(*sessionId);
-    }
+    events_.push_back(NetEvent{NetEventType::Connected, *sessionId, {}});
     return &session;
 }
 
@@ -504,15 +533,15 @@ void KcpServer::destroySession(uint32_t sessionId, bool notify) {
     }
     sessions_.erase(sessionIt);
 
-    if (notify && onDisconnect_) {
-        onDisconnect_(sessionId);
+    if (notify) {
+        events_.push_back(NetEvent{NetEventType::Disconnected, sessionId, {}});
     }
 }
 
 void KcpServer::removeTimedOutSessions(uint32_t now) {
     std::vector<uint32_t> timedOutSessions;
     for (const auto& [sessionId, session] : sessions_) {
-        if (now - session.lastReceiveMs >= kSessionTimeoutMs) {
+        if (now - session.lastReceiveMs >= kSessionTimeoutMs || session.kcp->state == static_cast<IUINT32>(-1)) {
             timedOutSessions.push_back(sessionId);
         }
     }
@@ -585,10 +614,7 @@ void KcpServer::processReceivedPackets(SessionState& session) {
         }
         packet.resize(static_cast<size_t>(received));
 
-        if (onPacket_ && !onPacket_(session.sessionId, packet)) {
-            session.pendingDisconnect = true;
-            break;
-        }
+        events_.push_back(NetEvent{NetEventType::Packet, session.sessionId, std::move(packet)});
     }
 }
 

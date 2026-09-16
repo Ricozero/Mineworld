@@ -2,8 +2,20 @@
 
 #include <asio.hpp>
 #include <cstdint>
-#include <functional>
+#include <span>
 #include <vector>
+
+enum class NetEventType {
+    Connected,
+    Packet,
+    Disconnected,
+};
+
+struct NetEvent {
+    NetEventType type = NetEventType::Packet;
+    uint32_t sessionId = 0;
+    std::vector<uint8_t> payload;
+};
 
 class INetClient {
 public:
@@ -12,26 +24,22 @@ public:
     virtual ~INetClient() = default;
 
     virtual void connect(const Endpoint& endpoint) = 0;
-    virtual bool isReady() const = 0;
-    virtual void sendReliable(const std::vector<uint8_t>& payload) = 0;
+    virtual bool isConnected() const = 0;
+    virtual bool send(std::span<const uint8_t> payload) = 0;
     virtual void flush() = 0;
     virtual void pump() = 0;
-    virtual bool popPacket(std::vector<uint8_t>& outPacket) = 0;
+    virtual bool popEvent(NetEvent& outEvent) = 0;
+    virtual void close() = 0;
 };
-
-using SessionConnectCallback = std::function<void(uint32_t sessionId)>;
-using SessionPacketCallback = std::function<bool(uint32_t sessionId, const std::vector<uint8_t>& packet)>;
-using SessionDisconnectCallback = std::function<void(uint32_t sessionId)>;
 
 class INetServer {
 public:
     virtual ~INetServer() = default;
 
-    virtual void setOnConnect(SessionConnectCallback callback) = 0;
-    virtual void setOnPacket(SessionPacketCallback callback) = 0;
-    virtual void setOnDisconnect(SessionDisconnectCallback callback) = 0;
-    virtual void sendTo(uint32_t sessionId, const std::vector<uint8_t>& payload) = 0;
+    virtual bool send(uint32_t sessionId, std::span<const uint8_t> payload) = 0;
+    virtual void flush() = 0;
     virtual void pump() = 0;
+    virtual bool popEvent(NetEvent& outEvent) = 0;
+    virtual void close(uint32_t sessionId) = 0;
     virtual bool hasSession(uint32_t sessionId) const = 0;
-    virtual std::vector<uint32_t> getSessionIds() const = 0;
 };

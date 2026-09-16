@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
+
 foreach(OUTPUT_CONFIG Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER ${OUTPUT_CONFIG} OUTPUT_CONFIG_UPPER)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${OUTPUT_CONFIG_UPPER} ${CMAKE_SOURCE_DIR}/bin)
@@ -21,5 +22,14 @@ find_package(glfw3 CONFIG REQUIRED)
 find_package(bgfx CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 find_package(Tracy CONFIG REQUIRED)
+find_package(lz4 CONFIG REQUIRED)
 
 add_subdirectory(src)
+
+option(MINEWORLD_BUILD_TESTS "Build Mineworld unit tests" OFF)
+
+if(MINEWORLD_BUILD_TESTS)
+    find_package(GTest CONFIG REQUIRED)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

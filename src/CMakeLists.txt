@@ -1,6 +1,9 @@
-file(GLOB_RECURSE APPLICATION_SOURCE CONFIGURE_DEPENDS *.cpp)
+file(GLOB_RECURSE MINEWORLD_CORE_SOURCE CONFIGURE_DEPENDS *.cpp)
+list(REMOVE_ITEM MINEWORLD_CORE_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp)
 
-add_executable(mineworld ${APPLICATION_SOURCE})
+add_library(mineworld_core STATIC ${MINEWORLD_CORE_SOURCE})
+add_executable(mineworld main.cpp)
+target_link_libraries(mineworld PRIVATE mineworld_core)
 
 # Copy config template to bin
 configure_file(${CMAKE_SOURCE_DIR}/config.ini ${CMAKE_SOURCE_DIR}/bin/config.ini COPYONLY)
@@ -58,11 +61,14 @@ add_custom_command(
 )
 
 add_custom_target(mineworld_fbs DEPENDS ${MINEWORLD_FBS_GEN_HEADER})
-add_dependencies(mineworld mineworld_fbs)
-target_include_directories(mineworld PRIVATE ${MINEWORLD_FBS_GEN_DIR})
+add_dependencies(mineworld_core mineworld_fbs)
+target_include_directories(mineworld_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${MINEWORLD_FBS_GEN_DIR}
+)
 
 # Compile and link
-target_link_libraries(mineworld PRIVATE
+target_link_libraries(mineworld_core PUBLIC
     EnTT::EnTT
     glm::glm
     spdlog::spdlog
@@ -73,15 +79,16 @@ target_link_libraries(mineworld PRIVATE
     bgfx::bgfx
     imgui::imgui
     Tracy::TracyClient
+    lz4::lz4
 )
 
-target_compile_definitions(mineworld PRIVATE
+target_compile_definitions(mineworld_core PUBLIC
     GLM_ENABLE_EXPERIMENTAL
     GLFW_EXPOSE_NATIVE_WIN32
 )
 
 if(WIN32)
-    target_compile_definitions(mineworld PRIVATE
+    target_compile_definitions(mineworld_core PUBLIC
         _WIN32_WINNT=0x0A00
         WIN32_LEAN_AND_MEAN
         NOMINMAX
@@ -89,7 +96,7 @@ if(WIN32)
 endif()
 
 if(MSVC)
-    target_compile_options(mineworld PRIVATE
+    target_compile_options(mineworld_core PUBLIC
         /utf-8
         /Zc:__cplusplus
         /Zc:preprocessor

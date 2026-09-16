@@ -22,6 +22,16 @@ cmake --build build --config Debug
 
 可执行文件和运行配置生成到 `bin/`。
 
+### 测试
+
+测试统一由 `mineworld_tests` 目标构建，并使用 GoogleTest 注册独立用例，CTest 可以单独筛选用例并报告具体断言位置。
+
+```console
+cmake -S . -B build -DMINEWORLD_BUILD_TESTS=ON
+cmake --build build --config Debug
+ctest --test-dir build --output-on-failure
+```
+
 ## 运行
 
 启动客户端：
@@ -53,13 +63,11 @@ bin/mineworld.exe server
   - buildEntitySnapshot优化
   - ActorComponent，Id
   - 实体名称显示
-- profiler
-  - 整体整理
-  - 每秒数据
+- 整理profiler，平均改成每秒
+- 整理日志
 - headless client
 - 玩家移动时，机器人会卡顿
 - 时间同步，昼夜系统
-- 拆分ChunkUpdate
 
 ### 架构
 
@@ -73,10 +81,7 @@ bin/mineworld.exe server
   - 视锥测试
   - 玩法分区
 - 服务器区块
-  - 区块共享编码缓存
   - 区块生成批量set接口
-  - 区块同步批量Update
-  - 区块同步LZ4压缩
   - 永久区块
   - 增量修改
   - 热区块和冷区块，冷区块使用RLE+区间树/线段树或者LZ4
