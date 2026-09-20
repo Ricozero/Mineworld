@@ -94,7 +94,7 @@ std::vector<uint8_t> serializeClientReady() {
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
     return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
-        const auto name = builder.CreateString(hello.actorName);
+        const auto name = hello.actorName.empty() ? flatbuffers::Offset<flatbuffers::String>{} : builder.CreateString(hello.actorName);
         const mineworld::net::Vec3 position = toFbVec3(hello.position);
         std::vector<mineworld::net::IVec3> coreChunks;
         coreChunks.reserve(hello.coreChunks.size());
@@ -104,6 +104,7 @@ std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
         return mineworld::net::CreateServerHello(
             builder,
             hello.sessionId,
+            hello.actorId,
             name,
             &position,
             hello.yaw,
@@ -119,13 +120,14 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
         return false;
     }
     const mineworld::net::ServerHello* hello = message->payload_as_ServerHello();
-    if (!hello || !hello->actor_name()) {
+    if (!hello || hello->actor_id() == 0) {
         return false;
     }
 
     NetServerHello result;
     result.sessionId = hello->session_id();
-    result.actorName = hello->actor_name()->str();
+    result.actorId = hello->actor_id();
+    result.actorName = hello->actor_name() ? hello->actor_name()->str() : std::string{};
     result.position = fromFbVec3(hello->position());
     result.yaw = hello->yaw();
     result.pitch = hello->pitch();
@@ -173,26 +175,26 @@ bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outI
     return true;
 }
 
-std::vector<uint8_t> serializeEntitySnapshot(const NetEntitySnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder) {
-    builder.Reset();
-    std::vector<flatbuffers::Offset<mineworld::net::ActorState>> actors;
-    actors.reserve(snapshot.actors.size());
-    for (const NetActorState& actor : snapshot.actors) {
-        const auto name = builder.CreateString(actor.name);
-        const mineworld::net::Vec3 position = toFbVec3(actor.position);
-        const mineworld::net::Vec3 velocity = toFbVec3(actor.velocity);
-        actors.push_back(mineworld::net::CreateActorState(
-            builder,
-            name,
-            &position,
-            &velocity,
-            actor.yaw,
-            actor.pitch,
-            toWireEnum(actor.entityType),
-            toWireEnum(actor.playerMode)));
+std::vector<uint8_t> serializeEntitySnapshot(uint32_t sequence, std::span<const NetActorState* const> actors, flatbuffers::FlatBufferBuilder& builder) {
+    builder.Clear();
+    if (actors.size() > kMaxActors) {
+        return {};
     }
-    const auto payload = mineworld::net::CreateEntitySnapshot(builder, snapshot.sequence, builder.CreateVector(actors));
-    return finishMessage(builder, payload);
+    std::vector<flatbuffers::Offset<mineworld::net::ActorState>> entries;
+    entries.reserve(actors.size());
+    for (const auto* state : actors) {
+        if (!state || state->id == 0) {
+            return {};
+        }
+        const auto& actor = *state;
+        const auto name = actor.name.empty() ? flatbuffers::Offset<flatbuffers::String>{} : builder.CreateString(actor.name);
+        const auto position = toFbVec3(actor.position);
+        const auto velocity = toFbVec3(actor.velocity);
+        entries.push_back(mineworld::net::CreateActorState(
+            builder, actor.id, name, &position, &velocity, actor.yaw, actor.pitch,
+            toWireEnum(actor.entityType), toWireEnum(actor.playerMode)));
+    }
+    return finishMessage(builder, mineworld::net::CreateEntitySnapshot(builder, sequence, builder.CreateVector(entries)));
 }
 
 bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot& outSnapshot) {
@@ -213,16 +215,17 @@ bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot
         }
         result.actors.reserve(actors->size());
         for (const mineworld::net::ActorState* actor : *actors) {
-            if (!actor || !actor->name()) {
-                return false;
+            if (!actor || actor->id() == 0) {
+                continue;
             }
             result.actors.push_back(NetActorState{
-                actor->name()->str(),
+                actor->id(),
+                actor->name() ? actor->name()->str() : std::string{},
                 fromFbVec3(actor->position()),
                 fromFbVec3(actor->velocity()),
                 actor->yaw(),
                 actor->pitch(),
-                fromWireEnum(actor->entity_type(), EntityType::Player),
+                fromWireEnum(actor->entity_type(), EntityType::Actor),
                 fromWireEnum(actor->player_mode(), PlayerMode::Survival),
             });
         }

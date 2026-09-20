@@ -61,12 +61,10 @@ BlockQueryResult findCollisionBoundary(const VoxelWorld& voxelWorld, const Trans
 
                 const float blockBoundary = delta > 0.0f ? static_cast<float>(blockPos[axis]) : static_cast<float>(blockPos[axis] + 1);
                 if (delta > 0.0f) {
-                    if (blockBoundary < previous.max[axis] - kCollisionEpsilon ||
-                        blockBoundary > current.max[axis]) {
+                    if (blockBoundary < previous.max[axis] - kCollisionEpsilon || blockBoundary > current.max[axis]) {
                         continue;
                     }
-                } else if (blockBoundary > previous.min[axis] + kCollisionEpsilon ||
-                           blockBoundary < current.min[axis]) {
+                } else if (blockBoundary > previous.min[axis] + kCollisionEpsilon || blockBoundary < current.min[axis]) {
                     continue;
                 }
 

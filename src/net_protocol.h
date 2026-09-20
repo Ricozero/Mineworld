@@ -14,12 +14,13 @@
 #include "net_protocol_generated.h"
 
 struct NetActorState {
+    ActorId id = 0;
     std::string name;
     glm::vec3 position{0.0f};
     glm::vec3 velocity{0.0f};
     float yaw = 0.0f;
     float pitch = 0.0f;
-    EntityType entityType = EntityType::Player;
+    EntityType entityType = EntityType::Actor;
     PlayerMode playerMode = PlayerMode::Survival;
 };
 
@@ -59,6 +60,7 @@ struct NetClientInput {
 
 struct NetServerHello {
     uint32_t sessionId = 0;
+    ActorId actorId = 0;
     std::string actorName;
     glm::vec3 position{0.0f};
     float yaw = 0.0f;
@@ -79,7 +81,7 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
 std::vector<uint8_t> serializeClientInput(const NetClientInput& input);
 bool deserializeClientInput(std::span<const uint8_t> bytes, NetClientInput& outInput);
 
-std::vector<uint8_t> serializeEntitySnapshot(const NetEntitySnapshot& snapshot, flatbuffers::FlatBufferBuilder& builder);
+std::vector<uint8_t> serializeEntitySnapshot(uint32_t sequence, std::span<const NetActorState* const> actors, flatbuffers::FlatBufferBuilder& builder);
 bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot& outSnapshot);
 
 std::vector<uint8_t> serializeChunkUpsertBatch(std::span<const NetChunkUpsert> chunks, flatbuffers::FlatBufferBuilder& builder);

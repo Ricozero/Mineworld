@@ -5,6 +5,16 @@
 #include <glm/glm.hpp>
 #include <string>
 
+using ActorId = uint64_t;
+
+struct ActorComponent {
+    ActorId id = 0;
+};
+
+struct ReplicationStateComponent {
+    uint32_t lastSnapshotSequence = 0;
+};
+
 struct NameComponent {
     std::string name;
 };
@@ -38,6 +48,7 @@ struct ControllerInputComponent {
 };
 
 enum class EntityType : uint8_t {
+    Actor,
     Player,
     Robot,
     Count,

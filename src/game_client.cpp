@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <unordered_set>
 
 #include "chunk_mesh.h"
 #include "client_system.h"
@@ -21,7 +20,7 @@ constexpr double kMaxChunkMeshRebuildTimePerFrame = 8.0;
 }  // namespace
 
 GameClient::GameClient(RenderContext* renderContext, std::string address, uint16_t port)
-    : renderContext_(renderContext) {
+    : GameClient(renderContext, nullptr) {
     auto netClient = std::make_unique<KcpClient>(ioContext_, 0);
     asio::error_code addressError;
     asio::ip::address resolvedAddress = asio::ip::make_address(address, addressError);
@@ -32,6 +31,10 @@ GameClient::GameClient(RenderContext* renderContext, std::string address, uint16
     const auto serverEndpoint = INetClient::Endpoint(resolvedAddress, port);
     netClient->connect(serverEndpoint);
     netClient_ = std::move(netClient);
+}
+
+GameClient::GameClient(RenderContext* renderContext, std::unique_ptr<INetClient> netClient)
+    : netClient_(std::move(netClient)), renderContext_(renderContext) {
 }
 
 GameClient::~GameClient() = default;
@@ -229,7 +232,7 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
     chunkManager_.setCoreChunks(hello.coreChunks);
     logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
 
-    entt::entity entity = actorWorld_.createLocalPlayer(hello.actorName, hello.sessionId, hello.position, hello.playerMode);
+    entt::entity entity = actorWorld_.createLocalPlayer(hello.actorId, hello.actorName, hello.sessionId, hello.position, hello.playerMode);
     auto& registry = actorWorld_.registry();
     if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
         fail("Failed to create local player");
@@ -331,59 +334,53 @@ void GameClient::replayEntitySnapshots() {
 
     NetEntitySnapshot snapshot = std::move(entitySnapshotBuffer_.front());
     entitySnapshotBuffer_.pop_front();
-    if (snapshot.sequence <= lastAppliedEntitySnapshot_) {
+    if (snapshot.sequence <= lastEntitySnapshotSequence_) {
         return;
     }
-
-    applyEntitySnapshot(snapshot);
-    lastAppliedEntitySnapshot_ = snapshot.sequence;
-}
-
-void GameClient::applyEntitySnapshot(const NetEntitySnapshot& snapshot) {
-    MW_PROFILE_SCOPE("Client.ApplyEntitySnapshot");
     MW_PROFILE_COUNTER("Client.EntitySnapshotActors", static_cast<int64_t>(snapshot.actors.size()));
-
     auto& registry = actorWorld_.registry();
-    std::unordered_set<std::string> entityNames;
-    entityNames.reserve(snapshot.actors.size());
     for (const auto& actor : snapshot.actors) {
-        entityNames.insert(actor.name);
-        entt::entity entity = actorWorld_.getEntityByName(actor.name);
+        auto entity = actorWorld_.getEntity(actor.id);
         if (entity == entt::null) {
             switch (actor.entityType) {
+                case EntityType::Actor:
+                    entity = actorWorld_.createActor(actor.id, actor.position);
+                    break;
                 case EntityType::Player:
-                    entity = actorWorld_.createRemotePlayer(actor.name, actor.position, actor.playerMode);
+                    entity = actorWorld_.createRemotePlayer(actor.id, actor.name, actor.position, actor.playerMode);
                     break;
                 case EntityType::Robot:
-                    entity = actorWorld_.createRobot(actor.name, actor.position);
+                    entity = actorWorld_.createRobot(actor.id, actor.name, actor.position);
                     break;
                 default:
-                    logging::warn("Ignored unknown entity type {} for actor '{}'", static_cast<int>(actor.entityType), actor.name);
                     continue;
             }
         }
         if (entity == entt::null) {
             continue;
         }
-        if (!registry.all_of<SessionComponent>(entity)) {
-            if (actor.entityType == EntityType::Player) {
-                actorWorld_.setPlayerMode(entity, actor.playerMode);
-            }
-            queueRemoteActorSample(registry, entity, actor);
+        actorWorld_.setName(entity, actor.name);
+        if (registry.all_of<SessionComponent>(entity)) {
+            continue;
+        }
+        registry.emplace_or_replace<ReplicationStateComponent>(entity, snapshot.sequence);
+        if (actor.entityType == EntityType::Player) {
+            actorWorld_.setPlayerMode(entity, actor.playerMode);
+        }
+        auto& interpolation = registry.get_or_emplace<InterpolationComponent>(entity);
+        interpolation.samples.push_back(InterpolationSample{actor.position, glm::vec3(actor.pitch, actor.yaw, 0.0f), actor.velocity, actor.playerMode, snapshotClock_});
+        constexpr size_t maxSamples = 8;
+        while (interpolation.samples.size() > maxSamples) {
+            interpolation.samples.pop_front();
         }
     }
-
-    std::vector<entt::entity> remoteActorsToDestroy;
-    auto view = registry.view<NameComponent, TransformComponent>(entt::exclude<SessionComponent>);
-    for (auto entity : view) {
-        const auto& name = view.get<NameComponent>(entity);
-        if (entityNames.count(name.name) == 0) {
-            remoteActorsToDestroy.push_back(entity);
+    const auto view = registry.view<ReplicationStateComponent>(entt::exclude<SessionComponent>);
+    for (const auto entity : view) {
+        if (view.get<ReplicationStateComponent>(entity).lastSnapshotSequence != snapshot.sequence) {
+            actorWorld_.destroyEntity(entity);
         }
     }
-    for (entt::entity entity : remoteActorsToDestroy) {
-        actorWorld_.destroyEntity(entity);
-    }
+    lastEntitySnapshotSequence_ = snapshot.sequence;
 }
 
 void GameClient::rebuildChunkMeshes() {
@@ -428,26 +425,6 @@ void GameClient::rebuildChunkMeshes() {
     meshPoolExhausted_ = exhausted;
 
     MW_PROFILE_GAUGE("Client.MeshRebuildBacklog", static_cast<double>(chunkManager_.dirtyMeshCount()));
-}
-
-void GameClient::queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor) {
-    if (!registry.all_of<InterpolationComponent>(entity)) {
-        registry.emplace<InterpolationComponent>(entity);
-    }
-
-    auto& interpolation = registry.get<InterpolationComponent>(entity);
-    interpolation.samples.push_back(InterpolationSample{
-        actor.position,
-        glm::vec3(actor.pitch, actor.yaw, 0.0f),
-        actor.velocity,
-        actor.playerMode,
-        snapshotClock_,
-    });
-
-    constexpr size_t maxSamples = 8;
-    while (interpolation.samples.size() > maxSamples) {
-        interpolation.samples.pop_front();
-    }
 }
 
 void GameClient::updateRemoteInterpolation(float deltaTime) {

@@ -819,8 +819,7 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
 
     recordBgfxStats(bgfx::getStats());
 
-    const bool anyOverlay = profilerMode_ != ProfilerMode::Hidden || cursorMode_ != CursorMode::Hidden || inGameMenuOpen_;
-    if (anyOverlay && imguiContext_) {
+    if (imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
@@ -829,6 +828,7 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
         updateImGuiInput();
         ImGui::NewFrame();
 
+        renderEntityNames(actorWorld, cullingViewProjection);
         if (profilerMode_ != ProfilerMode::Hidden) {
             renderProfilerOverlay();
         }
@@ -1099,6 +1099,44 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
             }
             submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
         }
+    }
+}
+
+void RenderContext::renderEntityNames(const ActorWorld& actorWorld, const float* viewProjection) {
+    MW_PROFILE_SCOPE("Render.EntityNames");
+    constexpr float maxDistance = 64.0f;
+    const auto& registry = actorWorld.registry();
+    const auto view = registry.view<NameComponent, TransformComponent, MeshComponent>();
+    auto* drawList = ImGui::GetBackgroundDrawList();
+    for (const auto entity : view) {
+        const auto& name = view.get<NameComponent>(entity).name;
+        if (name.empty() || !view.get<MeshComponent>(entity).isVisible || shouldHideLocalPlayerModel(actorWorld, entity)) {
+            continue;
+        }
+        const auto& transform = view.get<TransformComponent>(entity);
+        float height = 1.8f;
+        if (const auto* collider = registry.try_get<BoxColliderComponent>(entity)) {
+            height = collider->offset.y + collider->size.y * 0.5f;
+        }
+        const glm::vec3 anchor = transform.position + glm::vec3(0.0f, height + 0.25f, 0.0f);
+        const glm::vec3 offset = anchor - cameraPosition_;
+        if (glm::dot(offset, offset) > maxDistance * maxDistance) {
+            continue;
+        }
+        float clip[4];
+        for (int row = 0; row < 4; ++row) {
+            clip[row] = viewProjection[row] * anchor.x + viewProjection[4 + row] * anchor.y + viewProjection[8 + row] * anchor.z + viewProjection[12 + row];
+        }
+        if (clip[3] <= 0.0f || clip[2] < -clip[3] || clip[2] > clip[3] || std::abs(clip[0]) > clip[3] || std::abs(clip[1]) > clip[3]) {
+            continue;
+        }
+        const ImVec2 size = ImGui::CalcTextSize(name.c_str());
+        const ImVec2 origin((clip[0] / clip[3] * 0.5f + 0.5f) * windowWidth_ - size.x * 0.5f,
+                            (0.5f - clip[1] / clip[3] * 0.5f) * windowHeight_ - size.y);
+        drawList->AddRectFilled(ImVec2(origin.x - 4.0f, origin.y - 2.0f),
+                                ImVec2(origin.x + size.x + 4.0f, origin.y + size.y + 2.0f),
+                                IM_COL32(0, 0, 0, 150), 3.0f);
+        drawList->AddText(origin, IM_COL32(255, 255, 255, 255), name.c_str());
     }
 }
 

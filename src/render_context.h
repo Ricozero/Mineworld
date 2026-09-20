@@ -85,6 +85,7 @@ private:
 
     // Per-frame render helpers
     void renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, ChunkCuller& chunkCuller, const Frustum& frustum);
+    void renderEntityNames(const ActorWorld& actorWorld, const float* viewProjection);
     void renderProfilerOverlay();
     void renderCursorOverlay();
     void renderInGameMenu();

@@ -112,6 +112,7 @@ void GameServer::update(float deltaTime) {
     }
     updateChunks();
 
+    actorManager_.collectSnapshot();
     const float entitySnapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
     size_t pendingChunkUpdateCount = 0;
     for (auto& [sessionId, session] : sessions_) {
@@ -121,10 +122,14 @@ void GameServer::update(float deltaTime) {
         session.entitySnapshotTimer += deltaTime;
         if (session.entitySnapshotTimer >= entitySnapshotInterval) {
             session.entitySnapshotTimer -= entitySnapshotInterval;
-
-            const NetEntitySnapshot snapshot = buildEntitySnapshot(session);
-            std::vector<uint8_t> payload = serializeEntitySnapshot(snapshot, session.entitySnapshotBuilder);
-            if (netServer_->send(sessionId, payload)) {
+            ++session.entitySnapshotSequence;
+            std::vector<const NetActorState*> snapshotActors;
+            const auto* transform = actorWorld_.registry().try_get<TransformComponent>(session.actor);
+            if (transform) {
+                actorManager_.selectSnapshot(transform->position, AppConfig::instance().entityViewRadius, snapshotActors);
+            }
+            std::vector<uint8_t> payload = serializeEntitySnapshot(session.entitySnapshotSequence, snapshotActors, session.entitySnapshotBuilder);
+            if (!payload.empty() && netServer_->send(sessionId, payload)) {
                 MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
                 MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
             }
@@ -258,47 +263,6 @@ void GameServer::releaseRobotChunkDemand(glm::ivec3 lastChunkPos, ServerChunkMan
     });
 }
 
-NetEntitySnapshot GameServer::buildEntitySnapshot(Session& session) {
-    MW_PROFILE_SCOPE("Server.BuildEntitySnapshot");
-
-    NetEntitySnapshot snapshot;
-    snapshot.sequence = ++session.entitySnapshotSequence;
-
-    const auto& visibleChunks = session.cachedVisibleChunks;
-
-    auto& registry = actorWorld_.registry();
-    for (const glm::ivec3& chunkPos : visibleChunks) {
-        for (entt::entity entity : actorWorld_.getEntitiesInChunk(chunkPos)) {
-            if (!registry.all_of<NameComponent, TransformComponent>(entity)) {
-                continue;
-            }
-
-            const auto& name = registry.get<NameComponent>(entity);
-            const auto& transform = registry.get<TransformComponent>(entity);
-            glm::vec3 velocity{0.0f};
-            if (registry.all_of<PhysicsComponent>(entity)) {
-                velocity = registry.get<PhysicsComponent>(entity).velocity;
-            }
-            EntityType entityType;
-            if (registry.all_of<PlayerComponent>(entity)) entityType = EntityType::Player;
-            else if (registry.all_of<RobotComponent>(entity)) entityType = EntityType::Robot;
-            else continue;
-            const PlayerMode playerMode = entityType == EntityType::Player ? registry.get<PlayerComponent>(entity).mode : PlayerMode::Survival;
-            snapshot.actors.push_back(NetActorState{
-                name.name,
-                transform.position,
-                velocity,
-                transform.rotation.y,
-                transform.rotation.x,
-                entityType,
-                playerMode,
-            });
-        }
-    }
-
-    return snapshot;
-}
-
 void GameServer::sendChunkUpdates(Session& session) {
     MW_PROFILE_SCOPE("Server.SendChunkUpdates");
 
@@ -410,7 +374,7 @@ void GameServer::updateChunks() {
         if (sessionIt == sessions_.end() || !sessionIt->second.helloReceived) {
             continue;
         }
-        const glm::ivec3 entityChunk = actorWorld_.getEntityChunk(entity);
+        const glm::ivec3 entityChunk = ChunkLayout::worldToChunk(playerView.get<TransformComponent>(entity).position);
         if (entityChunk != sessionIt->second.lastChunkPos) {
             rebuildSessionChunkDemand(sessionIt->second, entityChunk, now);
         }
@@ -428,7 +392,7 @@ void GameServer::updateChunks() {
 
     auto robotView = registry.view<RobotComponent, TransformComponent>();
     for (auto entity : robotView) {
-        const glm::ivec3 entityChunk = actorWorld_.getEntityChunk(entity);
+        const glm::ivec3 entityChunk = ChunkLayout::worldToChunk(robotView.get<TransformComponent>(entity).position);
         updateRobotChunkDemand(entity, entityChunk, now);
         chunkFoci.push_back(entityChunk);
     }
@@ -484,12 +448,7 @@ bool GameServer::commitChunkLoad(glm::ivec3 chunkPos, ChunkData&& data, uint64_t
         !voxelWorld_.loadChunk(chunkPos, ChunkGenerator::INITIAL_REVISION, std::move(data))) {
         return false;
     }
-    if (!actorWorld_.loadEntitiesInChunk(chunkPos)) {
-        voxelWorld_.unloadChunk(chunkPos);
-        return false;
-    }
     if (!chunkManager_.commitLoaded(chunkPos, generationId)) {
-        actorWorld_.unloadEntitiesInChunk(chunkPos);
         voxelWorld_.unloadChunk(chunkPos);
         return false;
     }
@@ -511,7 +470,7 @@ bool GameServer::commitChunkUnload(glm::ivec3 chunkPos) {
     if (voxelWorld_.findChunk(chunkPos) == nullptr) {
         return true;
     }
-    return actorWorld_.unloadEntitiesInChunk(chunkPos) && voxelWorld_.unloadChunk(chunkPos);
+    return voxelWorld_.unloadChunk(chunkPos);
 }
 
 void GameServer::pumpNetwork() {
@@ -564,12 +523,7 @@ void GameServer::onSessionDisconnect(uint32_t sessionId) {
         return;
     }
 
-    if (!sessionIt->second.actorName.empty()) {
-        entt::entity entity = actorWorld_.getEntityByName(sessionIt->second.actorName);
-        if (entity != entt::null) {
-            actorWorld_.destroyEntity(entity);
-        }
-    }
+    actorWorld_.destroyEntity(sessionIt->second.actor);
     releaseSessionChunkDemand(sessionIt->second, ServerChunkManager::Clock::now());
 
     logging::info("Session {} disconnected", sessionId);
@@ -617,14 +571,14 @@ bool GameServer::onClientHello(uint32_t sessionId) {
     }
     session.helloReceived = true;
 
-    std::string actorName = "Player" + std::to_string(nextPlayerIndex_++);
-    session.actorName = actorName;
-
     glm::vec3 spawnPos = AppConfig::instance().spawnPosition;
     float spawnYaw = AppConfig::instance().spawnYaw;
     float spawnPitch = AppConfig::instance().spawnPitch;
 
-    const entt::entity entity = actorWorld_.createLocalPlayer(actorName, sessionId, spawnPos, PlayerMode::Survival);
+    const ActorId actorId = actorManager_.allocateId();
+    std::string actorName = "Player" + std::to_string(actorId);
+    const entt::entity entity = actorWorld_.createLocalPlayer(actorId, actorName, sessionId, spawnPos, PlayerMode::Survival);
+    session.actor = entity;
 
     auto& registry = actorWorld_.registry();
     if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
@@ -637,6 +591,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
 
     NetServerHello hello;
     hello.sessionId = sessionId;
+    hello.actorId = actorId;
     hello.actorName = actorName;
     hello.position = spawnPos;
     hello.yaw = spawnYaw;
@@ -685,26 +640,19 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
     }
 
     auto& registry = actorWorld_.registry();
-    auto view = registry.view<SessionComponent, TransformComponent, PlayerComponent>();
-    for (auto entity : view) {
-        const auto& session = view.get<SessionComponent>(entity);
-        if (session.sessionId != sessionId) {
-            continue;
-        }
-        actorWorld_.setPlayerMode(entity, input.playerMode);
-        auto& transform = view.get<TransformComponent>(entity);
-        transform.position = input.position;
-        transform.rotation.x = input.pitch;
-        transform.rotation.y = input.yaw;
-        if (registry.all_of<PhysicsComponent>(entity)) {
-            registry.get<PhysicsComponent>(entity).velocity = input.velocity;
-        }
-        if (sessionIt != sessions_.end()) {
-            sessionIt->second.lastProcessedInputSequence = input.sequence;
-        }
-        actorWorld_.updateEntityChunk(entity, transform.position);
-        break;
+    const auto entity = sessionIt->second.actor;
+    if (!registry.valid(entity)) {
+        return;
     }
+    actorWorld_.setPlayerMode(entity, input.playerMode);
+    auto& transform = registry.get<TransformComponent>(entity);
+    transform.position = input.position;
+    transform.rotation.x = input.pitch;
+    transform.rotation.y = input.yaw;
+    if (auto* physics = registry.try_get<PhysicsComponent>(entity)) {
+        physics->velocity = input.velocity;
+    }
+    sessionIt->second.lastProcessedInputSequence = input.sequence;
 }
 
 bool GameServer::onCommandRequest(uint32_t sessionId, const CommandRequest& command) {
@@ -720,7 +668,7 @@ bool GameServer::onCommandRequest(uint32_t sessionId, const CommandRequest& comm
     }
     sessionIt->second.lastCommandRequestId = command.requestId;
 
-    entt::entity playerEntity = actorWorld_.getEntityByName(sessionIt->second.actorName);
+    entt::entity playerEntity = sessionIt->second.actor;
     const CommandStatus status = executeCommand(playerEntity, command);
     return sendControlPacket(sessionId, serializeCommandResponse(CommandResponse{command.requestId, status}));
 }
@@ -733,7 +681,7 @@ CommandStatus GameServer::executeCommand(entt::entity playerEntity, const Comman
 
     switch (command.operation) {
         case CommandOperation::None:
-            return CommandStatus::InvalidOperation;
+            return CommandStatus::InvalidCommand;
         case CommandOperation::CreateRobot: {
             if (command.arguments.size() > 2 ||
                 (!command.arguments.empty() && !std::holds_alternative<std::string>(command.arguments[0])) ||
@@ -744,33 +692,49 @@ CommandStatus GameServer::executeCommand(entt::entity playerEntity, const Comman
             std::string robotName;
             if (!command.arguments.empty()) {
                 robotName = std::get<std::string>(command.arguments[0]);
-                if (robotName.empty() || robotName.size() > 64 || actorWorld_.getEntityByName(robotName) != entt::null) {
+                if (robotName.size() > 64) {
                     return CommandStatus::InvalidArguments;
                 }
-            } else {
-                do {
-                    robotName = "Robot" + std::to_string(nextRobotIndex_++);
-                } while (actorWorld_.getEntityByName(robotName) != entt::null);
             }
 
             glm::vec3 position = registry.get<TransformComponent>(playerEntity).position;
             if (command.arguments.size() == 2) {
                 position = std::get<glm::vec3>(command.arguments[1]);
             }
-            return actorWorld_.createRobot(robotName, position) == entt::null ? CommandStatus::Failed : CommandStatus::Success;
+            const auto id = actorManager_.allocateId();
+            const auto name = robotName.empty() ? "Robot" + std::to_string(id) : robotName;
+            const auto entity = actorWorld_.createRobot(id, name, position);
+            if (entity == entt::null) {
+                return CommandStatus::Failed;
+            }
+            logging::info("Created robot {} '{}'", id, name);
+            return CommandStatus::Success;
         }
         case CommandOperation::DestroyRobot: {
-            if (command.arguments.size() > 1 ||
-                (!command.arguments.empty() && !std::holds_alternative<std::string>(command.arguments[0]))) {
+            if (command.arguments.size() > 1) {
                 return CommandStatus::InvalidArguments;
             }
 
             if (!command.arguments.empty()) {
-                const entt::entity entity = actorWorld_.getEntityByName(std::get<std::string>(command.arguments[0]));
-                if (entity == entt::null || !registry.all_of<RobotComponent>(entity)) {
-                    return CommandStatus::ObjectNotFound;
+                ActorId id = 0;
+                if (const auto* value = std::get_if<int64_t>(&command.arguments[0])) {
+                    if (*value <= 0) return CommandStatus::InvalidArguments;
+                    id = static_cast<ActorId>(*value);
+                } else if (const auto* name = std::get_if<std::string>(&command.arguments[0])) {
+                    const auto matches = actorWorld_.findActorsByName(*name);
+                    if (!matches.empty() && registry.all_of<RobotComponent>(actorWorld_.getEntity(matches.front()))) {
+                        id = matches.front();
+                    }
+                } else {
+                    return CommandStatus::InvalidArguments;
                 }
-                actorWorld_.destroyEntity(entity);
+                const auto entity = actorWorld_.getEntity(id);
+                if (!registry.valid(entity)) {
+                    return CommandStatus::ObjectNotFound;
+                } else if (!registry.all_of<RobotComponent>(entity)) {
+                    return CommandStatus::InvalidOperation;
+                }
+                actorWorld_.destroyActor(id);
                 return CommandStatus::Success;
             }
 
@@ -778,7 +742,7 @@ CommandStatus GameServer::executeCommand(entt::entity playerEntity, const Comman
             if (robotView.begin() == robotView.end()) {
                 return CommandStatus::ObjectNotFound;
             }
-            actorWorld_.destroyEntity(*robotView.begin());
+            actorWorld_.destroyActor(registry.get<ActorComponent>(*robotView.begin()).id);
             return CommandStatus::Success;
         }
         default:

@@ -18,11 +18,25 @@
 - 项目使用 C++20、CMake、Ninja 和 vcpkg，生成同一个 `mineworld` 可执行文件，通过启动参数选择客户端或服务端。
 - 修改代码后的首选验证命令是 `cmake --build build --config Debug`。
 - 先检查 `build/CMakeCache.txt` 的生成器与实际构建配置。单配置 `Ninja` 使用 `CMAKE_BUILD_TYPE`，`--config Debug` 不会覆盖它；不要仅根据命令参数宣称通过了 Debug 构建，也不要为验证擅自切换现有构建配置。
-- Codex 的普通 PowerShell 可能没有加载 MSVC 的 INCLUDE/LIB 环境。若构建报告找不到 `algorithm` 等标准库头文件，在同一个 `cmd` 进程中调用匹配当前编译器安装的 `VsDevCmd.bat`，再执行首选构建命令；不要把该问题误判为源码错误。会话中确认需要该环境后，后续构建和临时编译沿用同一方式，不再重复无环境的失败尝试。
+- Codex 在普通 Windows PowerShell 中统一使用下方“Windows 构建命令”准备 MSVC 环境并构建；不新建临时 `.cmd` / `.bat`。后续构建和临时编译沿用这一方式，不依赖上一次会话的环境。
 - 临时 C++ 验证文件放在仓库内、`src/` 外的专用目录，避免被源码 glob 编入正式程序。编译时复用目标所需的 C++20、`/utf-8`、宏定义、运行库及依赖设置；fmt 的 Unicode 支持要求 `/utf-8`。
 - 临时验证优先使用公开接口。不要通过 `#define private public` 调用另一个编译单元中的私有方法；MSVC 的符号修饰包含访问级别，这种做法会导致链接失败。
 - 不要直接修改 `build/`、`bin/` 或其他生成产物。
 - FlatBuffers 协议源文件是 `src/net_protocol.fbs`。协议变更同时更新 `src/net_protocol.h` 和 `src/net_protocol.cpp`，不要修改 `build/src/generated/net_protocol_generated.h`。
+
+### Windows 构建命令
+
+在仓库根目录执行以下 PowerShell 命令。从 CMake 缓存中的编译器路径定位同一 Visual Studio 安装的 `VsDevCmd.bat`，不写死用户名、安装目录或 Visual Studio 版本。环境初始化与构建在同一个 `cmd` 进程中完成；初始化失败时不继续构建，构建失败时向调用方报错。标准错误在 `cmd` 内合并到标准输出，按退出码判断是否成功。
+
+```powershell
+$buildCompiler = (Select-String -LiteralPath build/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=(.+)$').Matches.Groups[1].Value
+$buildVsDevCmd = $buildCompiler.Replace('\', '/') -replace '/VC/Tools/MSVC/.*$', '/Common7/Tools/VsDevCmd.bat'
+if (-not (Test-Path -LiteralPath $buildVsDevCmd)) { throw 'Cannot locate VsDevCmd.bat for the cached compiler.' }
+& $env:ComSpec /d /s /c ('call "{0}" -arch=x64 -host_arch=x64 >nul && cmake --build build --config Debug 2>&1' -f $buildVsDevCmd)
+if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE." }
+```
+
+换机器或 Visual Studio 安装路径变更后，需要用本机工具链重新配置 CMake，不能沿用另一台机器的 `build/CMakeCache.txt`。首次配置在 Visual Studio 的 Developer PowerShell / Command Prompt 中进行，并指定本机的 vcpkg 工具链。已有完整开发环境时可以直接执行首选构建命令。
 
 ## 项目协作
 

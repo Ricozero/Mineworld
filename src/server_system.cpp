@@ -22,14 +22,7 @@ std::mt19937& randomEngine() {
 void PhysicsSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {
     MW_PROFILE_SCOPE("Server.Physics");
 
-    auto& registry = actorWorld.registry();
     updateMovement(voxelWorld, actorWorld, deltaTime);
-
-    auto view = registry.view<TransformComponent, PhysicsComponent>();
-    for (auto entity : view) {
-        const auto& transform = view.get<TransformComponent>(entity);
-        actorWorld.updateEntityChunk(entity, transform.position);
-    }
 }
 
 void PhysicsSystem::updateMovement(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float deltaTime) {

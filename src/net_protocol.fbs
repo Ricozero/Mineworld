@@ -26,6 +26,7 @@ table ClientReady {
 
 table ServerHello {
   session_id:uint;
+  actor_id:ulong;
   actor_name:string;
   position:Vec3;
   yaw:float;
@@ -44,6 +45,7 @@ table ClientInput {
 }
 
 table ActorState {
+  id:ulong;
   name:string;
   position:Vec3;
   velocity:Vec3;

@@ -20,11 +20,13 @@ Mineworld 是一个使用 C++20 开发的多人在线体素游戏实验项目
 cmake --build build --config Debug
 ```
 
-可执行文件和运行配置生成到 `bin/`。
+可执行文件和运行配置生成到 `bin/`
+
+修改头文件或类布局后，如果编译链接成功，但开始游戏就崩溃，编译时增加参数 `--clean-first`
 
 ### 测试
 
-测试统一由 `mineworld_tests` 目标构建，并使用 GoogleTest 注册独立用例，CTest 可以单独筛选用例并报告具体断言位置。
+测试统一由 `mineworld_tests` 目标构建，并使用 GoogleTest 注册独立用例，CTest 可以单独筛选用例并报告具体断言位置
 
 ```console
 cmake -S . -B build -DMINEWORLD_BUILD_TESTS=ON
@@ -57,16 +59,9 @@ bin/mineworld.exe server
 
 ### 当前
 
-- entity和chunk松耦合
-  - 如何维护和区块的关系
-  - 如何不用maintainChunkIndex_
-  - buildEntitySnapshot优化
-  - ActorComponent，Id
-  - 实体名称显示
 - 整理profiler，平均改成每秒
 - 整理日志
 - headless client
-- 玩家移动时，机器人会卡顿
 - 时间同步，昼夜系统
 
 ### 架构
@@ -75,6 +70,7 @@ bin/mineworld.exe server
 - 输入系统
 - Lua，Sol2，协程
 - Handle资源管理系统热加载（音乐，音效，材质，贴图集，着色器，脚本）
+- actor增量同步
 - 区域Region概念
   - 实体查询
   - 批量存取
@@ -117,6 +113,7 @@ bin/mineworld.exe server
   - 重发coreChunks
   - 客户端视野，避免cull grid过大
   - lastChunkPos写成哨兵
+- 多世界
 
 ### 网络
 

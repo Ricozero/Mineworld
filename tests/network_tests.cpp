@@ -1,3 +1,4 @@
+#include <bgfx/bgfx.h>
 #include <gtest/gtest.h>
 #include <spdlog/sinks/null_sink.h>
 #include <spdlog/spdlog.h>
@@ -14,6 +15,7 @@
 
 #include "chunk.h"
 #include "config.h"
+#include "game_client.h"
 #include "game_server.h"
 #include "net_kcp.h"
 #include "net_protocol.h"
@@ -403,6 +405,391 @@ TEST(GameServerNetworkTest, BudgetsCacheAndChunkSendRetry) {
     server.update(0.0f);
     require(!wire->hasSession(1), "game did not explicitly close session");
     require(std::none_of(wire->sent.begin(), wire->sent.end(), [](const NetEvent& event) { return event.sessionId == 1; }), "processed command after disconnect");
+}
+
+struct ActorTestConfig {
+    AppConfig saved = AppConfig::instance();
+    ActorTestConfig() {
+        auto& config = AppConfig::instance();
+        config.entityViewRadius = 64.0f;
+        config.chunkViewRadiusHorizontal = 1;
+        config.chunkViewRadiusVertical = 1;
+        config.spawnPosition = {0.0f, 128.0f, 0.0f};
+    }
+    ~ActorTestConfig() { AppConfig::instance() = saved; }
+};
+
+class ActorWorldProbe final : public System {
+public:
+    void update(VoxelWorld& voxels, ActorWorld& actors, float) override {
+        world = &actors;
+        terrain = &voxels;
+    }
+    ActorWorld* world = nullptr;
+    VoxelWorld* terrain = nullptr;
+};
+
+class FakeClient final : public INetClient {
+public:
+    void connect(const Endpoint&) override { connected_ = true; }
+    bool isConnected() const override { return connected_; }
+    bool send(std::span<const uint8_t>) override { return connected_; }
+    void flush() override {}
+    void pump() override {}
+    bool popEvent(NetEvent& event) override {
+        if (events_.empty()) return false;
+        event = std::move(events_.front());
+        events_.pop_front();
+        return true;
+    }
+    void close() override { connected_ = false; }
+    void receive(std::vector<uint8_t> bytes) {
+        events_.push_back(NetEvent{NetEventType::Packet, 0, std::move(bytes)});
+    }
+
+private:
+    bool connected_ = true;
+    std::deque<NetEvent> events_;
+};
+
+class GameClientNetworkTest : public testing::Test {
+protected:
+    void SetUp() override {
+        ensureLogger();
+        bgfx::Init init;
+        init.type = bgfx::RendererType::Noop;
+        init.resolution.width = 1;
+        init.resolution.height = 1;
+        rendererInitialized_ = bgfx::init(init);
+        ASSERT_TRUE(rendererInitialized_);
+        auto transport = std::make_unique<FakeClient>();
+        clientWire_ = transport.get();
+        client_ = std::make_unique<GameClient>(nullptr, std::move(transport));
+        auto system = std::make_unique<ActorWorldProbe>();
+        clientProbe_ = system.get();
+        client_->registerSystem(std::move(system));
+    }
+
+    void TearDown() override {
+        client_.reset();
+        if (rendererInitialized_) bgfx::shutdown();
+    }
+
+    void beginSession(const NetServerHello& hello) {
+        client_->update(0.0f);
+        require(client_->state() == GameClient::State::Awaiting, "client did not send hello");
+        clientWire_->receive(serializeServerHello(hello));
+        client_->update(0.0f);
+        require(client_->state() == GameClient::State::Loading, "client did not enter loading");
+    }
+
+    void loadCoreChunks(const NetServerHello& hello) {
+        std::vector<NetChunkUpsert> chunks;
+        for (const auto pos : hello.coreChunks) {
+            chunks.push_back({pos, Chunk(pos).getEncodedSnapshot()});
+        }
+        clientWire_->receive(serializeChunkUpsertBatch(chunks, builder_));
+        const auto deadline = Clock::now() + std::chrono::seconds(2);
+        while (!client_->isSessionReady() && !client_->hasFailed() && Clock::now() < deadline) {
+            client_->update(0.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        require(client_->isSessionReady(), "client did not finish core terrain loading");
+        client_->update(0.0f);
+        require(clientProbe_->world != nullptr, "client systems did not run");
+    }
+
+    void receiveSnapshot(const NetEntitySnapshot& snapshot) {
+        std::vector<const NetActorState*> actors;
+        actors.reserve(snapshot.actors.size());
+        for (const auto& actor : snapshot.actors) {
+            actors.push_back(&actor);
+        }
+        clientWire_->receive(serializeEntitySnapshot(snapshot.sequence, actors, builder_));
+        client_->update(0.0f);
+    }
+
+    bool rendererInitialized_ = false;
+    std::unique_ptr<GameClient> client_;
+    FakeClient* clientWire_ = nullptr;
+    ActorWorldProbe* clientProbe_ = nullptr;
+    flatbuffers::FlatBufferBuilder builder_;
+};
+
+NetEntitySnapshot latestActorSnapshot(const FakeServer& wire, uint32_t sessionId) {
+    for (auto it = wire.sent.rbegin(); it != wire.sent.rend(); ++it) {
+        NetEntitySnapshot snapshot;
+        if (it->sessionId == sessionId && deserializeEntitySnapshot(it->payload, snapshot)) {
+            return snapshot;
+        }
+    }
+    throw std::runtime_error("No entity snapshot received");
+}
+
+TEST_F(GameClientNetworkTest, RenameUnnamedActorsRemovalAndReentry) {
+    constexpr entt::entity nullEntity = entt::null;
+    NetServerHello hello;
+    hello.sessionId = 7;
+    hello.actorId = 1;
+    hello.actorName = "local";
+    hello.position = {1.0f, 2.0f, 3.0f};
+    hello.coreChunks = {{0, 0, 0}};
+    beginSession(hello);
+    NetEntitySnapshot snapshot{1, {{1, "renamed local"}, {2, "same"}, {3, "same"}, {4, ""}}};
+    for (auto& actor : snapshot.actors) actor.entityType = EntityType::Robot;
+    snapshot.actors[0].entityType = EntityType::Player;
+    receiveSnapshot(snapshot);
+    EXPECT_EQ(client_->state(), GameClient::State::Loading);
+    loadCoreChunks(hello);
+    auto& world = *clientProbe_->world;
+    const auto local = world.getEntity(1);
+    const auto localEffect = world.createActor(99, {});
+    const auto remote = world.getEntity(2);
+    ASSERT_NE(remote, nullEntity);
+    EXPECT_EQ(world.registry().get<TransformComponent>(local).position, glm::vec3(1.0f, 2.0f, 3.0f));
+    EXPECT_EQ(world.registry().get<NameComponent>(local).name, "renamed local");
+    EXPECT_TRUE(world.registry().all_of<RandomMovementComponent>(remote));
+    EXPECT_EQ(world.registry().get<ReplicationStateComponent>(remote).lastSnapshotSequence, 1u);
+    EXPECT_FALSE(world.registry().all_of<ReplicationStateComponent>(local));
+    EXPECT_FALSE(world.registry().all_of<NameComponent>(world.getEntity(4)));
+    snapshot.sequence = 2;
+    snapshot.actors = {{2, "new name", {16.0f, 0.0f, 0.0f}}, {4, ""}};
+    receiveSnapshot(snapshot);
+    EXPECT_EQ(world.getEntity(2), remote);
+    EXPECT_EQ(world.registry().get<NameComponent>(remote).name, "new name");
+    EXPECT_EQ(world.registry().get<InterpolationComponent>(remote).samples.size(), 2u);
+    EXPECT_EQ(world.getEntity(3), nullEntity);
+    EXPECT_TRUE(world.registry().valid(local));
+    EXPECT_TRUE(world.registry().valid(localEffect));
+    receiveSnapshot(NetEntitySnapshot{1, {}});
+    EXPECT_EQ(world.getEntity(2), remote);
+    receiveSnapshot(NetEntitySnapshot{3, {{2, ""}}});
+    EXPECT_FALSE(world.registry().all_of<NameComponent>(remote));
+    receiveSnapshot(NetEntitySnapshot{4, {}});
+    EXPECT_EQ(world.getEntity(2), nullEntity);
+    receiveSnapshot(NetEntitySnapshot{5, {{2, "back"}}});
+    EXPECT_NE(world.getEntity(2), nullEntity);
+    EXPECT_EQ(world.registry().get<InterpolationComponent>(world.getEntity(2)).samples.size(), 1u);
+    client_->disconnect();
+    receiveSnapshot(NetEntitySnapshot{6, {}});
+    EXPECT_EQ(client_->state(), GameClient::State::Disconnecting);
+    EXPECT_NE(world.getEntity(2), nullEntity);
+}
+
+TEST(GameServerNetworkTest, ActorIdsOptionalNamesCommandsAndSessionCleanup) {
+    ensureLogger();
+    ActorTestConfig config;
+    auto transport = std::make_unique<FakeServer>();
+    auto* wire = transport.get();
+    GameServer server(std::move(transport));
+    auto system = std::make_unique<ActorWorldProbe>();
+    auto* probe = system.get();
+    server.registerSystem(std::move(system));
+    wire->connect(1);
+    wire->connect(2);
+    server.update(0.1f);
+    NetServerHello firstHello, secondHello;
+    for (const auto& packet : wire->sent) {
+        if (packet.sessionId == 1) deserializeServerHello(packet.payload, firstHello);
+        if (packet.sessionId == 2) deserializeServerHello(packet.payload, secondHello);
+    }
+    ASSERT_NE(firstHello.actorId, 0u);
+    ASSERT_NE(firstHello.actorId, secondHello.actorId);
+    ASSERT_EQ(latestActorSnapshot(*wire, 1).actors.size(), 2u);
+    ASSERT_EQ(latestActorSnapshot(*wire, 2).actors.size(), 2u);
+    wire->receive(1, serializeClientReady());
+    wire->receive(2, serializeClientReady());
+    for (uint64_t request = 1; request <= 3; ++request) {
+        CommandRequest command{request, CommandOperation::CreateRobot, {std::string(request == 3 ? "" : "same")}};
+        wire->receive(1, serializeCommandRequest(command));
+    }
+    wire->sent.clear();
+    server.update(0.1f);
+    auto snapshot = latestActorSnapshot(*wire, 1);
+    ASSERT_EQ(snapshot.actors.size(), 5u);
+    std::vector<ActorId> namedRobots;
+    for (const auto& actor : snapshot.actors) {
+        if (actor.entityType != EntityType::Robot) continue;
+        else namedRobots.push_back(actor.id);
+    }
+    const auto commandStatus = [&](CommandRequest command) {
+        wire->sent.clear();
+        wire->receive(1, serializeCommandRequest(command));
+        server.update(0.1f);
+        for (const auto& packet : wire->sent) {
+            CommandResponse response;
+            if (deserializeCommandResponse(packet.payload, response)) return response.status;
+        }
+        throw std::runtime_error("No command response");
+    };
+    EXPECT_EQ(commandStatus({4, CommandOperation::DestroyRobot, {static_cast<int64_t>(namedRobots[0])}}), CommandStatus::Success);
+    EXPECT_EQ(latestActorSnapshot(*wire, 1).actors.size(), 4u);
+    EXPECT_EQ(commandStatus({5, CommandOperation::DestroyRobot, {std::string("same")}}), CommandStatus::Success);
+    ASSERT_NE(probe->world, nullptr);
+    probe->world->setName(probe->world->getEntity(firstHello.actorId), "same player");
+    probe->world->setName(probe->world->getEntity(secondHello.actorId), "same player");
+    NetClientInput input;
+    input.sequence = 1;
+    input.position = {160.0f, 128.0f, 0.0f};
+    input.playerMode = PlayerMode::Spectator;
+    wire->receive(1, serializeClientInput(input));
+    wire->sent.clear();
+    server.update(0.1f);
+    snapshot = latestActorSnapshot(*wire, 1);
+    ASSERT_EQ(snapshot.actors.size(), 1u);
+    EXPECT_EQ(snapshot.actors[0].id, firstHello.actorId);
+    EXPECT_EQ(snapshot.actors[0].position, input.position);
+    EXPECT_EQ(snapshot.actors[0].name, "same player");
+    wire->receive(1, serializeClientDisconnect());
+    server.update(0.0f);
+    EXPECT_TRUE(probe->world->getEntity(firstHello.actorId) == entt::null);
+    EXPECT_TRUE(probe->world->getEntity(secondHello.actorId) != entt::null);
+    wire->connect(3);
+    wire->sent.clear();
+    server.update(0.1f);
+    NetServerHello reconnect;
+    for (const auto& packet : wire->sent) {
+        if (packet.sessionId == 3) deserializeServerHello(packet.payload, reconnect);
+    }
+    EXPECT_GT(reconnect.actorId, firstHello.actorId);
+}
+
+TEST_F(GameClientNetworkTest, EntityInterestIndependentOfTerrainAndCoreChunks) {
+    ensureLogger();
+    ActorTestConfig savedConfig;
+    auto& config = AppConfig::instance();
+    config.entityViewRadius = 40.0f;
+    auto transport = std::make_unique<FakeServer>();
+    auto* wire = transport.get();
+    wire->rejectedType = Payload::ChunkUpsertBatch;
+    GameServer server(std::move(transport));
+    auto system = std::make_unique<ActorWorldProbe>();
+    auto* probe = system.get();
+    server.registerSystem(std::move(system));
+    wire->connect(1);
+    server.update(0.1f);
+    NetServerHello hello;
+    for (const auto& packet : wire->sent) deserializeServerHello(packet.payload, hello);
+    ASSERT_NE(hello.actorId, 0u);
+    ASSERT_NE(probe->world, nullptr);
+    const glm::vec3 origin = config.spawnPosition;
+    // No physics components: these actors stay exactly on their test boundaries.
+    probe->world->createActor(100, origin + glm::vec3(40.0f, 0.0f, 0.0f));
+    probe->world->createActor(101, origin + glm::vec3(-40.0f, 0.0f, 0.0f));
+    probe->world->createActor(102, origin + glm::vec3(0.0f, 40.0f, 0.0f));
+    const auto coreActor = probe->world->createActor(103, origin + glm::vec3(31.0f, 31.0f, 31.0f));
+    probe->world->createActor(104, origin + glm::vec3(31.0f, 0.0f, 0.0f));
+    const auto corePos = ChunkLayout::worldToChunk(probe->world->registry().get<TransformComponent>(coreActor).position);
+    ASSERT_NE(std::find(hello.coreChunks.begin(), hello.coreChunks.end(), corePos), hello.coreChunks.end());
+
+    NetServerHello clientHello = hello;
+    clientHello.coreChunks = {ChunkLayout::worldToChunk(origin)};
+    beginSession(clientHello);
+    loadCoreChunks(clientHello);
+    auto& clientWorld = *clientProbe_->world;
+    const auto local = clientWorld.getEntity(hello.actorId);
+    // Finish startup, then unload all client terrain before applying snapshots.
+    const std::vector<NetChunkUnload> unloads{{clientHello.coreChunks.front(), 1}};
+    clientWire_->receive(serializeChunkUnloadBatch(unloads, builder_));
+    client_->update(0.0f);
+    EXPECT_EQ(clientProbe_->terrain->findChunk(clientHello.coreChunks.front()), nullptr);
+    const auto receiveSnapshot = [&] {
+        wire->sent.clear();
+        server.update(0.1f);
+        EXPECT_TRUE(std::none_of(wire->sent.begin(), wire->sent.end(), [](const NetEvent& event) {
+            return getPacketType(event.payload) == Payload::ChunkUpsertBatch;
+        }));
+        const auto snapshot = latestActorSnapshot(*wire, 1);
+        this->receiveSnapshot(snapshot);
+        return snapshot;
+    };
+
+    const auto first = receiveSnapshot();
+    EXPECT_EQ(first.actors.size(), 5u);
+    EXPECT_EQ(getPacketType(wire->lastRejected), Payload::ChunkUpsertBatch);
+    EXPECT_TRUE(clientWorld.getEntity(100) != entt::null);  // Outside the client's chunk interest.
+    EXPECT_TRUE(clientWorld.getEntity(101) != entt::null);
+    EXPECT_TRUE(clientWorld.getEntity(102) != entt::null);
+    EXPECT_TRUE(clientWorld.getEntity(103) == entt::null);  // Core terrain does not force entity visibility.
+    EXPECT_TRUE(clientWorld.getEntity(104) != entt::null);
+
+    wire->receive(1, serializeClientReady());
+    NetClientInput input;
+    input.sequence = 1;
+    input.position = origin + glm::vec3(0.5f, 0.0f, 0.0f);
+    input.playerMode = PlayerMode::Spectator;
+    ASSERT_EQ(ChunkLayout::worldToChunk(input.position), ChunkLayout::worldToChunk(origin));
+    wire->receive(1, serializeClientInput(input));
+    const auto moved = receiveSnapshot();
+    EXPECT_EQ(moved.actors.size(), 3u);
+    EXPECT_TRUE(clientWorld.getEntity(100) != entt::null);
+    EXPECT_TRUE(clientWorld.getEntity(101) == entt::null);
+    EXPECT_TRUE(clientWorld.getEntity(102) == entt::null);  // Y contributes to the spherical distance.
+    EXPECT_TRUE(probe->world->getEntity(101) != entt::null);
+    EXPECT_TRUE(probe->world->getEntity(102) != entt::null);
+
+    input.sequence = 2;
+    input.position = origin;
+    wire->receive(1, serializeClientInput(input));
+    EXPECT_EQ(receiveSnapshot().actors.size(), 5u);
+    EXPECT_TRUE(clientWorld.getEntity(101) != entt::null);
+    EXPECT_TRUE(clientWorld.getEntity(102) != entt::null);
+
+    config.entityViewRadius = 20.0f;
+    EXPECT_EQ(receiveSnapshot().actors.size(), 1u);
+    EXPECT_TRUE(clientWorld.getEntity(104) == entt::null);  // Still inside terrain view, outside entity radius.
+    EXPECT_TRUE(clientWorld.registry().valid(local));
+}
+
+TEST(GameServerNetworkTest, RobotChunkDemandAndTerrainUnloadPreserveActors) {
+    ensureLogger();
+    ActorTestConfig config;
+    auto transport = std::make_unique<FakeServer>();
+    auto* wire = transport.get();
+    GameServer server(std::move(transport));
+    auto system = std::make_unique<ActorWorldProbe>();
+    auto* probe = system.get();
+    server.registerSystem(std::move(system));
+    wire->connect(1);
+    for (int i = 0; i < 10; ++i) server.update(0.0f);
+    ASSERT_NE(probe->world, nullptr);
+    constexpr ActorId actorId = 10000;
+    const auto entity = probe->world->createRobot(actorId, "retained", {0.0f, 128.0f, 0.0f});
+    probe->world->registry().get<TransformComponent>(entity).scale = glm::vec3(2.0f);
+    wire->receive(1, serializeClientReady());
+    NetClientInput input;
+    input.sequence = 1;
+    input.position = {512.0f, 128.0f, 0.0f};
+    input.playerMode = PlayerMode::Spectator;
+    wire->receive(1, serializeClientInput(input));
+    server.update(0.0f);
+    ASSERT_TRUE(probe->world->getEntity(actorId) != entt::null);
+    // Removing RobotComponent releases demand; adding it back must restore demand.
+    probe->world->registry().remove<RobotComponent>(entity);
+    server.update(0.0f);
+    probe->world->registry().emplace<RobotComponent>(entity);
+    server.update(0.0f);
+    std::this_thread::sleep_for(std::chrono::milliseconds(3100));
+    server.update(0.0f);
+    ASSERT_NE(probe->terrain->findChunk({0, 8, 0}), nullptr);
+    ASSERT_TRUE(probe->world->getEntity(actorId) != entt::null);
+    probe->world->registry().remove<RobotComponent>(entity);
+    server.update(0.0f);
+    std::this_thread::sleep_for(std::chrono::milliseconds(3100));
+    server.update(0.0f);
+    EXPECT_EQ(probe->terrain->findChunk({0, 8, 0}), nullptr);
+    EXPECT_EQ(probe->world->getEntity(actorId), entity);
+    input.sequence = 2;
+    input.position = {0.0f, 128.0f, 0.0f};
+    wire->receive(1, serializeClientInput(input));
+    for (int i = 0; i < 10; ++i) server.update(0.0f);
+    const auto retained = probe->world->getEntity(actorId);
+    ASSERT_EQ(retained, entity);
+    EXPECT_NE(probe->terrain->findChunk({0, 8, 0}), nullptr);
+    EXPECT_FALSE(probe->world->registry().all_of<RobotComponent>(retained));
+    EXPECT_EQ(probe->world->registry().get<NameComponent>(retained).name, "retained");
+    EXPECT_EQ(probe->world->registry().get<TransformComponent>(retained).scale, glm::vec3(2.0f));
+    EXPECT_EQ(probe->world->registry().get<TransformComponent>(retained).position, glm::vec3(0.0f, 128.0f, 0.0f));
 }
 
 TEST(ChunkCodecBenchmark, ConcentratedEncodeDecodeBurst) {

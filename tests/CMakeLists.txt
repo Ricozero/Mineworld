@@ -1,7 +1,6 @@
-add_executable(mineworld_tests
-    unit_tests.cpp
-    network_tests.cpp
-)
+file(GLOB_RECURSE MINEWORLD_TEST_SOURCE CONFIGURE_DEPENDS *.cpp)
+
+add_executable(mineworld_tests ${MINEWORLD_TEST_SOURCE})
 add_dependencies(mineworld_tests mineworld_fbs)
 target_link_libraries(mineworld_tests PRIVATE mineworld_core GTest::gtest_main)
 set_target_properties(mineworld_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})

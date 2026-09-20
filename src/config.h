@@ -118,6 +118,7 @@ struct AppConfig {
     int ticksPerSecond = 20;
     int chunkViewRadiusHorizontal = 2;
     int chunkViewRadiusVertical = 2;
+    float entityViewRadius = 128.0f;
 
     // [spawn]
     glm::vec3 spawnPosition{0.0f, 10.0f, 0.0f};
@@ -148,6 +149,7 @@ struct AppConfig {
         ticksPerSecond = cfg.getInt("server.ticks_per_second", ticksPerSecond);
         chunkViewRadiusHorizontal = cfg.getInt("server.chunk_view_radius_horizontal", chunkViewRadiusHorizontal);
         chunkViewRadiusVertical = cfg.getInt("server.chunk_view_radius_vertical", chunkViewRadiusVertical);
+        entityViewRadius = cfg.getFloat("server.entity_view_radius", entityViewRadius);
         spawnPosition.x = cfg.getFloat("spawn.x", spawnPosition.x);
         spawnPosition.y = cfg.getFloat("spawn.y", spawnPosition.y);
         spawnPosition.z = cfg.getFloat("spawn.z", spawnPosition.z);

@@ -16,6 +16,7 @@ enum class CommandOperation : uint16_t {
 enum class CommandStatus : uint8_t {
     Success,
     Failed,
+    InvalidCommand,
     InvalidRequestId,
     InvalidPlayer,
     InvalidOperation,

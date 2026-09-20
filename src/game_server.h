@@ -14,6 +14,7 @@
 #include "actor_world.h"
 #include "net_interface.h"
 #include "net_protocol.h"
+#include "server_actor_manager.h"
 #include "server_chunk_manager.h"
 #include "system.h"
 #include "voxel_world.h"
@@ -42,27 +43,25 @@ private:
         static constexpr glm::ivec3 INVALID_CHUNK_POS{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
 
         uint32_t sessionId = 0;
-        uint32_t entitySnapshotSequence = 0;
-        float entitySnapshotTimer = 0.0f;
         bool helloReceived = false;
         bool ready = false;
         uint32_t lastProcessedInputSequence = 0;
         uint64_t lastCommandRequestId = 0;
-        std::string actorName;
+
+        entt::entity actor = entt::null;
+        uint32_t entitySnapshotSequence = 0;
+        float entitySnapshotTimer = 0.0f;
+        flatbuffers::FlatBufferBuilder entitySnapshotBuilder{8192};
 
         glm::ivec3 lastChunkPos = INVALID_CHUNK_POS;
         std::vector<glm::ivec3> cachedVisibleChunks;
         std::vector<glm::ivec3> cachedRetentionChunks;
         std::vector<glm::ivec3> coreChunks;
-
         std::unordered_map<glm::ivec3, PendingChunkUpdate> pendingChunkUpdates;
-
-        flatbuffers::FlatBufferBuilder entitySnapshotBuilder{8192};
         flatbuffers::FlatBufferBuilder chunkUpdateBuilder{MAX_CHUNK_BATCH_BYTES};
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
-    NetEntitySnapshot buildEntitySnapshot(Session& session);
     void sendChunkUpdates(Session& session);
     void updateChunks();
     void rebuildSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ServerChunkManager::TimePoint now);
@@ -91,13 +90,12 @@ private:
 
     ServerChunkManager chunkManager_{std::chrono::seconds(3)};
     VoxelWorld voxelWorld_;
-    ActorWorld actorWorld_{true};
+    ActorWorld actorWorld_;
+    ServerActorManager actorManager_{actorWorld_};
     std::vector<std::unique_ptr<System>> systems_;
 
     asio::io_context ioContext_;
     std::unique_ptr<INetServer> netServer_;
     std::unordered_map<uint32_t, Session> sessions_;
     std::unordered_map<entt::entity, glm::ivec3> robotChunks_;
-    uint32_t nextPlayerIndex_ = 1;
-    uint32_t nextRobotIndex_ = 1;
 };

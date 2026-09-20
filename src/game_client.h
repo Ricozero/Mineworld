@@ -31,6 +31,7 @@ public:
     };
 
     GameClient(RenderContext* renderContext, std::string address, uint16_t port);
+    GameClient(RenderContext* renderContext, std::unique_ptr<INetClient> netClient);
     ~GameClient();
 
     uint32_t localSessionId() const { return localSessionId_; }
@@ -53,13 +54,11 @@ private:
     void sendInputToServer();
     void sendPendingCommands();
     void replayEntitySnapshots();
-    void applyEntitySnapshot(const NetEntitySnapshot& snapshot);
     void rebuildChunkMeshes();
-    void queueRemoteActorSample(entt::registry& registry, entt::entity entity, const NetActorState& actor);
     void updateRemoteInterpolation(float deltaTime);
 
     VoxelWorld voxelWorld_;
-    ActorWorld actorWorld_{false};
+    ActorWorld actorWorld_;
     ClientChunkManager chunkManager_{voxelWorld_};
     ChunkCuller chunkCuller_;
     ChunkMesh meshScratch_;
@@ -73,8 +72,8 @@ private:
     asio::io_context ioContext_;
     std::unique_ptr<INetClient> netClient_;
     std::deque<NetEntitySnapshot> entitySnapshotBuffer_;
+    uint32_t lastEntitySnapshotSequence_ = 0;
     std::deque<std::vector<uint8_t>> pendingCommandPackets_;
-    uint32_t lastAppliedEntitySnapshot_ = 0;
     RenderContext* renderContext_ = nullptr;
     bool helloPending_ = true;
     bool disconnectSent_ = false;
