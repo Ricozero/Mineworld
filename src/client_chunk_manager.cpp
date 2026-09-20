@@ -13,8 +13,8 @@ constexpr auto kMeshRebuildDelay = std::chrono::milliseconds(50);
 
 }  // namespace
 
-ClientChunkManager::ClientChunkManager(VoxelWorld& world) : world_(world) {
-    if (!meshPool_.initialize()) {
+ClientChunkManager::ClientChunkManager(VoxelWorld& world, bool meshingEnabled) : world_(world), meshingEnabled_(meshingEnabled) {
+    if (meshingEnabled_ && !meshPool_.initialize()) {
         logging::error("Chunk mesh pool failed to initialize");
     }
 }
@@ -30,6 +30,12 @@ void ClientChunkManager::clearCoreChunks() {
 
 bool ClientChunkManager::areCoreChunksReady() const {
     for (const glm::ivec3& chunkPos : coreChunks_) {
+        if (!meshingEnabled_) {
+            if (world_.findChunk(chunkPos) == nullptr) {
+                return false;
+            }
+            continue;
+        }
         auto it = entries_.find(chunkPos);
         if (it == entries_.end() || it->second.meshState != MeshState::Ready) {
             return false;
@@ -41,6 +47,9 @@ bool ClientChunkManager::areCoreChunksReady() const {
 bool ClientChunkManager::upsert(glm::ivec3 chunkPos, uint32_t revision, ChunkData&& data) {
     if (!world_.loadChunk(chunkPos, revision, std::move(data))) {
         return false;
+    }
+    if (!meshingEnabled_) {
+        return true;
     }
 
     const auto [entryIt, inserted] = entries_.try_emplace(chunkPos);

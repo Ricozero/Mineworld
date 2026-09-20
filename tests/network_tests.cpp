@@ -433,7 +433,11 @@ class FakeClient final : public INetClient {
 public:
     void connect(const Endpoint&) override { connected_ = true; }
     bool isConnected() const override { return connected_; }
-    bool send(std::span<const uint8_t>) override { return connected_; }
+    bool send(std::span<const uint8_t> packet) override {
+        if (!connected_) return false;
+        sent.emplace_back(packet.begin(), packet.end());
+        return true;
+    }
     void flush() override {}
     void pump() override {}
     bool popEvent(NetEvent& event) override {
@@ -447,6 +451,8 @@ public:
         events_.push_back(NetEvent{NetEventType::Packet, 0, std::move(bytes)});
     }
 
+    std::vector<std::vector<uint8_t>> sent;
+
 private:
     bool connected_ = true;
     std::deque<NetEvent> events_;
@@ -456,23 +462,12 @@ class GameClientNetworkTest : public testing::Test {
 protected:
     void SetUp() override {
         ensureLogger();
-        bgfx::Init init;
-        init.type = bgfx::RendererType::Noop;
-        init.resolution.width = 1;
-        init.resolution.height = 1;
-        rendererInitialized_ = bgfx::init(init);
-        ASSERT_TRUE(rendererInitialized_);
         auto transport = std::make_unique<FakeClient>();
         clientWire_ = transport.get();
         client_ = std::make_unique<GameClient>(nullptr, std::move(transport));
         auto system = std::make_unique<ActorWorldProbe>();
         clientProbe_ = system.get();
         client_->registerSystem(std::move(system));
-    }
-
-    void TearDown() override {
-        client_.reset();
-        if (rendererInitialized_) bgfx::shutdown();
     }
 
     void beginSession(const NetServerHello& hello) {
@@ -489,11 +484,7 @@ protected:
             chunks.push_back({pos, Chunk(pos).getEncodedSnapshot()});
         }
         clientWire_->receive(serializeChunkUpsertBatch(chunks, builder_));
-        const auto deadline = Clock::now() + std::chrono::seconds(2);
-        while (!client_->isSessionReady() && !client_->hasFailed() && Clock::now() < deadline) {
-            client_->update(0.0f);
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        client_->update(0.0f);
         require(client_->isSessionReady(), "client did not finish core terrain loading");
         client_->update(0.0f);
         require(clientProbe_->world != nullptr, "client systems did not run");
@@ -509,12 +500,106 @@ protected:
         client_->update(0.0f);
     }
 
-    bool rendererInitialized_ = false;
     std::unique_ptr<GameClient> client_;
     FakeClient* clientWire_ = nullptr;
     ActorWorldProbe* clientProbe_ = nullptr;
     flatbuffers::FlatBufferBuilder builder_;
 };
+
+TEST_F(GameClientNetworkTest, HeadlessWaitsForAllCoreDataThenSendsInputAndDisconnect) {
+    NetServerHello hello;
+    hello.sessionId = 7;
+    hello.actorId = 1;
+    hello.position = {1.0f, 2.0f, 3.0f};
+    hello.coreChunks = {{0, 0, 0}, {1, 0, 0}};
+    beginSession(hello);
+    ASSERT_EQ(clientWire_->sent.size(), 1u);
+    EXPECT_EQ(getPacketType(clientWire_->sent.front()), Payload::ClientHello);
+
+    Chunk first(hello.coreChunks.front());
+    first.applyData(1, ChunkData{BlockType::Stone});
+    const std::vector<NetChunkUpsert> partial{{hello.coreChunks.front(), first.getEncodedSnapshot()}};
+    clientWire_->receive(serializeChunkUpsertBatch(partial, builder_));
+    client_->update(0.0f);
+    EXPECT_EQ(client_->state(), GameClient::State::Loading);
+    EXPECT_EQ(clientWire_->sent.size(), 1u);
+
+    const std::vector<NetChunkUpsert> remaining{{hello.coreChunks.back(), Chunk(hello.coreChunks.back()).getEncodedSnapshot()}};
+    clientWire_->receive(serializeChunkUpsertBatch(remaining, builder_));
+    client_->update(0.0f);
+    ASSERT_TRUE(client_->isSessionReady());
+    EXPECT_EQ(getPacketType(clientWire_->sent.back()), Payload::ClientReady);
+
+    client_->update(0.01f);
+    NetClientInput input;
+    ASSERT_TRUE(deserializeClientInput(clientWire_->sent.back(), input));
+    EXPECT_EQ(input.position, hello.position);
+    EXPECT_EQ(input.sequence, 1u);
+    ASSERT_NE(clientProbe_->terrain, nullptr);
+    EXPECT_EQ(clientProbe_->terrain->getBlock({0, 0, 0}).type, BlockType::Stone);
+
+    client_->disconnect();
+    EXPECT_EQ(client_->state(), GameClient::State::Disconnecting);
+    EXPECT_EQ(getPacketType(clientWire_->sent.back()), Payload::ClientDisconnect);
+}
+
+TEST_F(GameClientNetworkTest, HeadlessConnectionTimeoutClosesTransport) {
+    client_->update(0.0f);
+    ASSERT_EQ(client_->state(), GameClient::State::Awaiting);
+    client_->update(10.0f);
+    EXPECT_TRUE(client_->hasFailed());
+    EXPECT_FALSE(clientWire_->isConnected());
+    EXPECT_EQ(client_->statusText(), "Connection timed out");
+}
+
+TEST(ClientChunkManagerTest, HeadlessKeepsTerrainRevisionsWithoutMeshes) {
+    VoxelWorld world;
+    ClientChunkManager manager(world, false);
+    manager.setCoreChunks({{0, 0, 0}, {1, 0, 0}});
+    EXPECT_FALSE(manager.areCoreChunksReady());
+    EXPECT_TRUE(manager.upsert({0, 0, 0}, 2, ChunkData{BlockType::Stone}));
+    EXPECT_FALSE(manager.areCoreChunksReady());
+    EXPECT_TRUE(manager.upsert({1, 0, 0}, 1, ChunkData{}));
+    EXPECT_TRUE(manager.areCoreChunksReady());
+    EXPECT_FALSE(manager.upsert({0, 0, 0}, 1, ChunkData{}));
+    EXPECT_EQ(world.getBlock({0, 0, 0}).type, BlockType::Stone);
+    EXPECT_FALSE(manager.unload({0, 0, 0}, 1));
+    EXPECT_NE(world.findChunk({0, 0, 0}), nullptr);
+    EXPECT_TRUE(manager.unload({0, 0, 0}, 2));
+    EXPECT_EQ(world.findChunk({0, 0, 0}), nullptr);
+    EXPECT_TRUE(manager.upsert({0, 0, 0}, 3, ChunkData{BlockType::Sand}));
+    EXPECT_EQ(world.getBlock({0, 0, 0}).type, BlockType::Sand);
+    EXPECT_FALSE(manager.takeNextMeshTask());
+    EXPECT_EQ(manager.dirtyMeshCount(), 0u);
+    EXPECT_EQ(manager.meshCount(), 0u);
+    EXPECT_EQ(manager.meshBytesReserved(), 0u);
+    EXPECT_TRUE(manager.renderData().chunks.empty());
+    EXPECT_EQ(manager.quadIndexBuffer(), UINT16_MAX);
+}
+
+TEST(ClientChunkManagerTest, RenderedCoreChunksStillWaitForMeshes) {
+    ensureLogger();
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    init.resolution.width = 1;
+    init.resolution.height = 1;
+    ASSERT_TRUE(bgfx::init(init));
+    struct ShutdownRenderer {
+        ~ShutdownRenderer() { bgfx::shutdown(); }
+    } shutdownRenderer;
+    VoxelWorld world;
+    ClientChunkManager manager(world);
+    manager.setCoreChunks({{0, 0, 0}});
+    ASSERT_TRUE(manager.upsert({0, 0, 0}, 1, ChunkData{BlockType::Stone}));
+    EXPECT_FALSE(manager.areCoreChunksReady());
+    std::optional<ClientChunkManager::MeshTask> task;
+    pumpUntil([&] { task = manager.takeNextMeshTask(); }, [&] { return task.has_value(); });
+    ChunkMesh mesh;
+    buildChunkMesh(world, task->chunkPos, mesh);
+    ASSERT_FALSE(mesh.vertices.empty());
+    EXPECT_EQ(manager.completeMeshTask(*task, mesh), ClientChunkManager::MeshTaskResult::Accepted);
+    EXPECT_TRUE(manager.areCoreChunksReady());
+}
 
 NetEntitySnapshot latestActorSnapshot(const FakeServer& wire, uint32_t sessionId) {
     for (auto it = wire.sent.rbegin(); it != wire.sent.rend(); ++it) {

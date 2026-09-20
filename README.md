@@ -4,7 +4,7 @@ Mineworld 是一个使用 C++20 开发的多人在线体素游戏实验项目
 
 ## 已实现功能
 
-- 支持本地游戏、远程客户端和专用服务器
+- 支持本地游戏、远程游戏、无窗口客户端和专用服务器
 - 基于 16×16×16 区块的体素世界、基础地形生成和多人同步
 - 基于 EnTT 的玩家、机器人和物理实体
 - 基于 bgfx、GLFW 和 ImGui 的渲染及界面
@@ -46,6 +46,16 @@ bin/mineworld.exe [client]
 
 ```console
 bin/mineworld.exe server
+bin/mineworld.exe server --port 40001
+```
+
+启动无窗口客户端，默认直接连接服务器，也可以使用内置服务器：
+
+```console
+bin/mineworld.exe headless-client
+bin/mineworld.exe headless-client --address 127.0.0.1 --port 40000
+bin/mineworld.exe headless-client --integrated-server
+bin/mineworld.exe headless-client --integrated-server --port 40001
 ```
 
 ## 开发环境
@@ -61,8 +71,6 @@ bin/mineworld.exe server
 
 - 整理profiler，平均改成每秒
 - 整理日志
-- headless client
-- 时间同步，昼夜系统
 
 ### 架构
 
@@ -114,6 +122,7 @@ bin/mineworld.exe server
   - 客户端视野，避免cull grid过大
   - lastChunkPos写成哨兵
 - 多世界
+- 昼夜系统
 
 ### 网络
 

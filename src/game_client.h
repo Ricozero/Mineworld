@@ -59,7 +59,7 @@ private:
 
     VoxelWorld voxelWorld_;
     ActorWorld actorWorld_;
-    ClientChunkManager chunkManager_{voxelWorld_};
+    ClientChunkManager chunkManager_;
     ChunkCuller chunkCuller_;
     ChunkMesh meshScratch_;
     std::vector<std::unique_ptr<System>> systems_;

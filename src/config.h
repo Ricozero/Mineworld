@@ -114,6 +114,7 @@ struct AppConfig {
     bool vsync = true;
 
     // [server]
+    std::string serverAddress = "127.0.0.1";
     uint16_t port = 40000;
     int ticksPerSecond = 20;
     int chunkViewRadiusHorizontal = 2;
@@ -145,6 +146,7 @@ struct AppConfig {
         windowHeight = cfg.getInt("window.height", windowHeight);
         graphicsApi = cfg.get("render.graphics_api", graphicsApi);
         vsync = cfg.getBool("render.vsync", vsync);
+        serverAddress = cfg.get("server.address", serverAddress);
         port = static_cast<uint16_t>(cfg.getInt("server.port", port));
         ticksPerSecond = cfg.getInt("server.ticks_per_second", ticksPerSecond);
         chunkViewRadiusHorizontal = cfg.getInt("server.chunk_view_radius_horizontal", chunkViewRadiusHorizontal);

@@ -34,7 +34,7 @@ GameClient::GameClient(RenderContext* renderContext, std::string address, uint16
 }
 
 GameClient::GameClient(RenderContext* renderContext, std::unique_ptr<INetClient> netClient)
-    : netClient_(std::move(netClient)), renderContext_(renderContext) {
+    : chunkManager_(voxelWorld_, renderContext != nullptr), netClient_(std::move(netClient)), renderContext_(renderContext) {
 }
 
 GameClient::~GameClient() = default;
@@ -255,8 +255,10 @@ void GameClient::tryEnterRunning() {
     }
     netClient_->flush();
 
-    registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
-    registerSystem(std::make_unique<RenderSystem>(renderContext_, chunkManager_, chunkCuller_, localSessionId_));
+    if (renderContext_) {
+        registerSystem(std::make_unique<InputSystem>(renderContext_, localSessionId_));
+        registerSystem(std::make_unique<RenderSystem>(renderContext_, chunkManager_, chunkCuller_, localSessionId_));
+    }
 
     chunkManager_.clearCoreChunks();
     state_ = State::Running;
@@ -384,6 +386,9 @@ void GameClient::replayEntitySnapshots() {
 }
 
 void GameClient::rebuildChunkMeshes() {
+    if (!renderContext_) {
+        return;
+    }
     MW_PROFILE_SCOPE("Client.RebuildChunkMeshes");
 
     const auto start = std::chrono::steady_clock::now();

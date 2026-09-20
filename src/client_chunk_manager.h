@@ -31,7 +31,7 @@ public:
         Exhausted,
     };
 
-    explicit ClientChunkManager(VoxelWorld& world);
+    explicit ClientChunkManager(VoxelWorld& world, bool meshingEnabled = true);
 
     void setCoreChunks(std::vector<glm::ivec3> coreChunks);
     void clearCoreChunks();
@@ -81,6 +81,7 @@ private:
     void removeFromMeshQueue(Entry& entry);
 
     VoxelWorld& world_;
+    bool meshingEnabled_ = true;
     std::unordered_set<glm::ivec3> coreChunks_;
     std::unordered_map<glm::ivec3, Entry> entries_;
     std::vector<DrawableChunk> renderChunks_;
