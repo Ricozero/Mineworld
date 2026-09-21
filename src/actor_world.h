@@ -11,9 +11,6 @@
 
 class ActorWorld {
 public:
-    ActorWorld();
-    ~ActorWorld();
-
     entt::registry& registry() { return registry_; }
     const entt::registry& registry() const { return registry_; }
 
@@ -30,7 +27,6 @@ public:
 
 private:
     entt::entity createPlayerEntity(ActorId id, std::string_view name, std::optional<uint32_t> sessionId, glm::vec3 position, PlayerMode mode);
-    void onActorDestroyed(entt::registry& registry, entt::entity entity);
 
     entt::registry registry_;
     std::unordered_map<ActorId, entt::entity> idToEntity_;

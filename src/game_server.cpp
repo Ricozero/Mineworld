@@ -582,12 +582,14 @@ bool GameServer::onClientHello(uint32_t sessionId) {
 
     auto& registry = actorWorld_.registry();
     if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
-        logging::error("Failed to create player for session {}", sessionId);
+        logging::error("Failed to create player {} '{}' for session {}", actorId, actorName, sessionId);
         return false;
     }
     auto& transform = registry.get<TransformComponent>(entity);
     transform.rotation.y = spawnYaw;
     transform.rotation.x = spawnPitch;
+
+    logging::info("Created player {} '{}' for session {}", actorId, actorName, sessionId);
 
     NetServerHello hello;
     hello.sessionId = sessionId;
@@ -610,7 +612,6 @@ bool GameServer::onClientHello(uint32_t sessionId) {
         chunkManager_.addRequester(chunkPos, ServerChunkManager::PriorityClass::LoadingCore);
     });
     assert(std::is_sorted(session.coreChunks.begin(), session.coreChunks.end(), chunkLess));
-    logging::info("Client hello from session {}, assigned actor '{}'", sessionId, actorName);
     return sendControlPacket(sessionId, serializeServerHello(hello));
 }
 
@@ -715,6 +716,7 @@ CommandStatus GameServer::executeCommand(entt::entity playerEntity, const Comman
                 return CommandStatus::InvalidArguments;
             }
 
+            entt::entity entity = entt::null;
             if (!command.arguments.empty()) {
                 ActorId id = 0;
                 if (const auto* value = std::get_if<int64_t>(&command.arguments[0])) {
@@ -728,21 +730,27 @@ CommandStatus GameServer::executeCommand(entt::entity playerEntity, const Comman
                 } else {
                     return CommandStatus::InvalidArguments;
                 }
-                const auto entity = actorWorld_.getEntity(id);
+                entity = actorWorld_.getEntity(id);
                 if (!registry.valid(entity)) {
                     return CommandStatus::ObjectNotFound;
                 } else if (!registry.all_of<RobotComponent>(entity)) {
                     return CommandStatus::InvalidOperation;
                 }
-                actorWorld_.destroyActor(id);
-                return CommandStatus::Success;
+            } else {
+                auto robotView = registry.view<RobotComponent>();
+                if (robotView.begin() == robotView.end()) {
+                    return CommandStatus::ObjectNotFound;
+                }
+                entity = *robotView.begin();
             }
 
-            auto robotView = registry.view<RobotComponent>();
-            if (robotView.begin() == robotView.end()) {
-                return CommandStatus::ObjectNotFound;
+            const ActorId id = registry.get<ActorComponent>(entity).id;
+            const auto* name = registry.try_get<NameComponent>(entity);
+            const std::string actorName = name ? name->name : std::string{};
+            if (!actorWorld_.destroyActor(id)) {
+                return CommandStatus::Failed;
             }
-            actorWorld_.destroyActor(registry.get<ActorComponent>(*robotView.begin()).id);
+            logging::info("Destroyed robot {} '{}'", id, actorName);
             return CommandStatus::Success;
         }
         default:

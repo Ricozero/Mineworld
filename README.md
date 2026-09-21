@@ -70,7 +70,7 @@ bin/mineworld.exe headless-client --integrated-server --port 40001
 ### 当前
 
 - 整理profiler，平均改成每秒
-- 整理日志
+- 加入游戏内和命令行调试命令
 
 ### 架构
 
@@ -144,6 +144,5 @@ bin/mineworld.exe headless-client --integrated-server --port 40001
 
 ### 工具
 
-- 加入调试命令行和界面
 - 多机器人压力测试
 - 游戏内更改设置，客户端设置/世界设置

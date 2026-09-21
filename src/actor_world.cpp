@@ -11,14 +11,6 @@ BoxColliderComponent createPlayerCollider() {
 
 }  // namespace
 
-ActorWorld::ActorWorld() {
-    registry_.on_destroy<ActorComponent>().connect<&ActorWorld::onActorDestroyed>(*this);
-}
-
-ActorWorld::~ActorWorld() {
-    registry_.on_destroy<ActorComponent>().disconnect<&ActorWorld::onActorDestroyed>(*this);
-}
-
 entt::entity ActorWorld::createActor(ActorId id, glm::vec3 position) {
     if (id == 0 || idToEntity_.contains(id)) {
         return entt::null;
@@ -85,12 +77,11 @@ bool ActorWorld::destroyActor(ActorId id) {
 
 void ActorWorld::destroyEntity(entt::entity entity) {
     if (registry_.valid(entity)) {
+        if (const auto* actor = registry_.try_get<ActorComponent>(entity)) {
+            idToEntity_.erase(actor->id);
+        }
         registry_.destroy(entity);
     }
-}
-
-void ActorWorld::onActorDestroyed(entt::registry& registry, entt::entity entity) {
-    idToEntity_.erase(registry.get<ActorComponent>(entity).id);
 }
 
 entt::entity ActorWorld::getEntity(ActorId id) const {

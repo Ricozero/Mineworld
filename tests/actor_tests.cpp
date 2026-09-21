@@ -10,7 +10,7 @@ namespace {
 
 constexpr entt::entity nullEntity = entt::null;
 
-TEST(ActorWorldTest, IdentityOptionalNamesAndRegistryDestruction) {
+TEST(ActorWorldTest, IdentityOptionalNamesAndDestruction) {
     ActorWorld world;
     ServerActorManager manager(world);
     EXPECT_EQ(world.createActor(0, {}), nullEntity);
@@ -27,7 +27,8 @@ TEST(ActorWorldTest, IdentityOptionalNamesAndRegistryDestruction) {
     EXPECT_EQ(world.findActorsByName("same").size(), 3u);
     world.setName(first, "");
     EXPECT_FALSE(world.registry().all_of<NameComponent>(first));
-    world.registry().destroy(first);
+    world.destroyEntity(first);
+    EXPECT_FALSE(world.registry().valid(first));
     EXPECT_EQ(world.getEntity(firstId), nullEntity);
     EXPECT_FALSE(world.destroyActor(firstId));
     const auto secondId = world.registry().get<ActorComponent>(second).id;

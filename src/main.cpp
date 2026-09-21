@@ -124,8 +124,13 @@ void initializeSignalHandlers() {
 }
 
 bool initializeServer(std::unique_ptr<GameServer>& server) {
-    server = std::make_unique<GameServer>();
-    return true;
+    try {
+        server = std::make_unique<GameServer>();
+        return true;
+    } catch (const std::exception& error) {
+        logging::error("Failed to start server on port {}: {}", AppConfig::instance().port, error.what());
+        return false;
+    }
 }
 
 bool initializeRenderContext(std::unique_ptr<RenderContext>& renderContext, const std::string& dir) {
@@ -212,7 +217,7 @@ int runClient(const std::string& dir) {
                         connectingAddress = "127.0.0.1";
                         connectingPort = AppConfig::instance().port;
                         if (!initializeServer(localServer)) {
-                            return 1;
+                            break;
                         }
                         serverThread = std::thread(runLocalServer, localServer.get(), std::ref(stopServer));
                     } else {
@@ -288,7 +293,9 @@ int runHeadlessClient(const std::string& dir, int argc, char* argv[]) {
     try {
         if (options->integratedServer) {
             cfg.port = options->port;
-            initializeServer(localServer);
+            if (!initializeServer(localServer)) {
+                return 1;
+            }
         }
         client = std::make_unique<GameClient>(nullptr, options->address, options->port);
         if (localServer) {

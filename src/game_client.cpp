@@ -213,7 +213,7 @@ void GameClient::disconnect() {
         netClient_->close();
     } else if (!disconnectSent_ && netClient_->send(serializeClientDisconnect())) {
         disconnectSent_ = true;
-        logging::info("Requested disconnect from server");
+        logging::info("Requested disconnect from server (session {})", localSessionId_);
     }
     netClient_->flush();
 }
@@ -230,11 +230,11 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
 
     localSessionId_ = hello.sessionId;
     chunkManager_.setCoreChunks(hello.coreChunks);
-    logging::info("Server assigned session {} with actor '{}'", hello.sessionId, hello.actorName);
 
     entt::entity entity = actorWorld_.createLocalPlayer(hello.actorId, hello.actorName, hello.sessionId, hello.position, hello.playerMode);
     auto& registry = actorWorld_.registry();
     if (!registry.valid(entity) || !registry.all_of<TransformComponent>(entity)) {
+        logging::error("Failed to create player {} '{}' for session {}", hello.actorId, hello.actorName, hello.sessionId);
         fail("Failed to create local player");
         return;
     }
@@ -242,6 +242,7 @@ void GameClient::handleServerHello(const NetServerHello& hello) {
     transform.rotation.y = hello.yaw;
     transform.rotation.x = hello.pitch;
 
+    logging::info("Created player {} '{}' for session {}", hello.actorId, hello.actorName, hello.sessionId);
     state_ = State::Loading;
 }
 
@@ -276,9 +277,9 @@ void GameClient::fail(std::string reason) {
         netClient_->close();
     }
     if (localSessionId_ != 0) {
-        logging::warn("Client disconnected from server (session {}): {}", localSessionId_, failureReason_);
+        logging::warn("Disconnected from server (session {}): {}", localSessionId_, failureReason_);
     } else {
-        logging::warn("Client connection failed: {}", failureReason_);
+        logging::warn("Connection failed: {}", failureReason_);
     }
 }
 
