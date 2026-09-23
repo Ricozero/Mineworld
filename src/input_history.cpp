@@ -23,7 +23,7 @@ void InputHistory::edit(std::string text) {
 void InputHistory::submit() {
     std::string text = current();
     if (!trimText(text).empty()) {
-        if (entries_.size() == MAX_ENTRIES) entries_.erase(entries_.begin());
+        if (entries_.size() == kMaxEntries) entries_.erase(entries_.begin());
         entries_.push_back(std::move(text));
     }
     draft_.clear();

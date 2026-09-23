@@ -167,7 +167,7 @@ TEST(StdinTerminalTest, LongInputViewportFollowsCursor) {
     CONSOLE_SCREEN_BUFFER_INFO info{};
     ASSERT_TRUE(GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &info));
     const size_t width = static_cast<size_t>(info.srWindow.Right - info.srWindow.Left + 1);
-    ASSERT_LT(width * 3, MAX_INPUT_TEXT_BYTES - 16);
+    ASSERT_LT(width * 3, kMaxInputTextBytes - 16);
     const std::wstring text = L"START" + std::wstring(width * 3, L'x') + L"END";
     ASSERT_NO_FATAL_FAILURE(sendConsoleText(console, text));
     EXPECT_TRUE(currentConsoleRow().ends_with(L"END"));

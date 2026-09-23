@@ -76,8 +76,8 @@ TEST(NameTest, CountsCodepointsAndRejectsInvalidText) {
     EXPECT_TRUE(isValidName(""));
     EXPECT_EQ(utf8CodepointCount(""), 0u);
     for (std::string_view character : {"a", "\xe4\xb8\xad", "\xf0\x9f\x98\x80"}) {
-        const auto name = repeated(character, MAX_NAME_CHARACTERS);
-        EXPECT_EQ(utf8CodepointCount(name), MAX_NAME_CHARACTERS);
+        const auto name = repeated(character, kMaxNameCharacters);
+        EXPECT_EQ(utf8CodepointCount(name), kMaxNameCharacters);
         EXPECT_TRUE(isValidName(name));
         EXPECT_FALSE(isValidName(name + std::string(character)));
     }

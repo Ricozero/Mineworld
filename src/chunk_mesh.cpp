@@ -53,17 +53,17 @@ constexpr bool facesMatchChunkFaceOrder() {
 }
 static_assert(facesMatchChunkFaceOrder(), "buildFaceMasks hard-codes the axis per face index");
 
-constexpr size_t kRowCount = ChunkLayout::BLOCK_COUNT / ChunkLayout::SIZE;
+constexpr size_t kRowCount = ChunkLayout::kBlockCount / ChunkLayout::kSize;
 using RowMasks = std::array<uint16_t, kRowCount>;
-static_assert(ChunkLayout::SIZE == 16, "Rows are held in a uint16_t bitmask");
+static_assert(ChunkLayout::kSize == 16, "Rows are held in a uint16_t bitmask");
 
 constexpr size_t rowIndex(int y, int z) {
-    return (static_cast<size_t>(y) << ChunkLayout::SIZE_BITS) | static_cast<size_t>(z);
+    return (static_cast<size_t>(y) << ChunkLayout::kSizeBits) | static_cast<size_t>(z);
 }
-static_assert(rowIndex(1, 2) * ChunkLayout::SIZE == ChunkLayout::blockIndex({0, 1, 2}),
-              "A (y, z) row must be ChunkLayout::SIZE consecutive block indices starting at rowIndex * SIZE");
+static_assert(rowIndex(1, 2) * ChunkLayout::kSize == ChunkLayout::blockIndex({0, 1, 2}),
+              "A (y, z) row must be ChunkLayout::kSize consecutive block indices starting at rowIndex * kSize");
 
-constexpr size_t kRowStrideY = ChunkLayout::SIZE;
+constexpr size_t kRowStrideY = ChunkLayout::kSize;
 static_assert(rowIndex(2, 3) - rowIndex(1, 3) == kRowStrideY);
 static_assert(rowIndex(1, 4) - rowIndex(1, 3) == 1);
 
@@ -72,9 +72,9 @@ uint16_t uniformAirRow(BlockData block) {
 }
 
 uint16_t airRowOf(const Chunk& chunk, int y, int z) {
-    const size_t base = rowIndex(y, z) * ChunkLayout::SIZE;
+    const size_t base = rowIndex(y, z) * ChunkLayout::kSize;
     uint16_t mask = 0;
-    for (int x = 0; x < ChunkLayout::SIZE; ++x) {
+    for (int x = 0; x < ChunkLayout::kSize; ++x) {
         if (chunk.getBlock(base + static_cast<size_t>(x)).type == BlockType::Air) {
             mask = static_cast<uint16_t>(mask | (1u << x));
         }
@@ -88,8 +88,8 @@ RowMasks buildAirRows(const Chunk& chunk) {
         air.fill(uniformAirRow(chunk.uniformBlock()));
         return air;
     }
-    for (int y = 0; y < ChunkLayout::SIZE; ++y) {
-        for (int z = 0; z < ChunkLayout::SIZE; ++z) {
+    for (int y = 0; y < ChunkLayout::kSize; ++y) {
+        for (int z = 0; z < ChunkLayout::kSize; ++z) {
             air[rowIndex(y, z)] = airRowOf(chunk, y, z);
         }
     }
@@ -119,11 +119,11 @@ bool neighborAirAt(const Chunk* neighbor, glm::ivec3 localPos) {
 using FaceMasks = std::array<RowMasks, 6>;
 
 FaceMasks buildFaceMasks(const RowMasks& air, const std::array<const Chunk*, 6>& neighbors) {
-    constexpr int last = ChunkLayout::SIZE - 1;
+    constexpr int kLast = ChunkLayout::kSize - 1;
     FaceMasks masks{};
 
-    for (int y = 0; y < ChunkLayout::SIZE; ++y) {
-        for (int z = 0; z < ChunkLayout::SIZE; ++z) {
+    for (int y = 0; y < ChunkLayout::kSize; ++y) {
+        for (int z = 0; z < ChunkLayout::kSize; ++z) {
             const size_t row = rowIndex(y, z);
             const auto solid = static_cast<uint16_t>(~air[row]);
             if (solid == 0) {
@@ -136,13 +136,13 @@ FaceMasks buildFaceMasks(const RowMasks& air, const std::array<const Chunk*, 6>&
                 across[0] = static_cast<uint16_t>(across[0] | 0x8000u);
             }
             across[1] = static_cast<uint16_t>(air[row] << 1);
-            if ((solid & 0x0001u) != 0 && neighborAirAt(neighbors[1], {last, y, z})) {
+            if ((solid & 0x0001u) != 0 && neighborAirAt(neighbors[1], {kLast, y, z})) {
                 across[1] = static_cast<uint16_t>(across[1] | 0x0001u);
             }
-            across[2] = y < last ? air[row + kRowStrideY] : neighborAirRow(neighbors[2], 0, z);
-            across[3] = y > 0 ? air[row - kRowStrideY] : neighborAirRow(neighbors[3], last, z);
-            across[4] = z < last ? air[row + 1] : neighborAirRow(neighbors[4], y, 0);
-            across[5] = z > 0 ? air[row - 1] : neighborAirRow(neighbors[5], y, last);
+            across[2] = y < kLast ? air[row + kRowStrideY] : neighborAirRow(neighbors[2], 0, z);
+            across[3] = y > 0 ? air[row - kRowStrideY] : neighborAirRow(neighbors[3], kLast, z);
+            across[4] = z < kLast ? air[row + 1] : neighborAirRow(neighbors[4], y, 0);
+            across[5] = z > 0 ? air[row - 1] : neighborAirRow(neighbors[5], y, kLast);
 
             for (size_t face = 0; face < kFaces.size(); ++face) {
                 masks[face][row] = static_cast<uint16_t>(solid & across[face]);
@@ -163,14 +163,14 @@ uint16_t spreadAlongX(uint16_t reached, uint16_t air) {
 }
 
 uint8_t touchedFaces(size_t row, uint16_t bits) {
-    const int y = static_cast<int>(row >> ChunkLayout::SIZE_BITS);
-    const int z = static_cast<int>(row & (ChunkLayout::SIZE - 1));
+    const int y = static_cast<int>(row >> ChunkLayout::kSizeBits);
+    const int z = static_cast<int>(row & (ChunkLayout::kSize - 1));
     unsigned touched = 0;
     if (bits & 0x8000u) touched |= 1u << 0;
     if (bits & 0x0001u) touched |= 1u << 1;
-    if (y == ChunkLayout::SIZE - 1) touched |= 1u << 2;
+    if (y == ChunkLayout::kSize - 1) touched |= 1u << 2;
     if (y == 0) touched |= 1u << 3;
-    if (z == ChunkLayout::SIZE - 1) touched |= 1u << 4;
+    if (z == ChunkLayout::kSize - 1) touched |= 1u << 4;
     if (z == 0) touched |= 1u << 5;
     return static_cast<uint8_t>(touched);
 }
@@ -215,12 +215,12 @@ ChunkFaceConnectivity computeFaceConnectivity(const RowMasks& air) {
                     touched |= touchedFaces(row, static_cast<uint16_t>(reached & ~before));
                 }
 
-                const int y = static_cast<int>(row >> ChunkLayout::SIZE_BITS);
-                const int z = static_cast<int>(row & (ChunkLayout::SIZE - 1));
+                const int y = static_cast<int>(row >> ChunkLayout::kSizeBits);
+                const int z = static_cast<int>(row & (ChunkLayout::kSize - 1));
                 if (y > 0) offer(row - kRowStrideY, reached);
-                if (y < ChunkLayout::SIZE - 1) offer(row + kRowStrideY, reached);
+                if (y < ChunkLayout::kSize - 1) offer(row + kRowStrideY, reached);
                 if (z > 0) offer(row - 1, reached);
-                if (z < ChunkLayout::SIZE - 1) offer(row + 1, reached);
+                if (z < ChunkLayout::kSize - 1) offer(row + 1, reached);
             }
 
             for (int from = 0; from < 6; ++from) {
@@ -237,7 +237,7 @@ ChunkFaceConnectivity computeFaceConnectivity(const RowMasks& air) {
 using ShadedColorTable = std::array<std::array<uint32_t, 6>, static_cast<size_t>(BlockType::Count)>;
 
 const ShadedColorTable& shadedColorTable() {
-    static const ShadedColorTable table = [] {
+    static const ShadedColorTable kTable = [] {
         ShadedColorTable built{};
         for (size_t type = 0; type < built.size(); ++type) {
             for (size_t face = 0; face < kFaces.size(); ++face) {
@@ -248,7 +248,7 @@ const ShadedColorTable& shadedColorTable() {
         }
         return built;
     }();
-    return table;
+    return kTable;
 }
 
 void appendFace(std::vector<ChunkVertex>& vertices, glm::ivec3 localPos, size_t faceIndex, uint32_t color) {
@@ -297,8 +297,8 @@ void buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos, ChunkMesh
     assert(faceCount * 4 <= kMaxChunkMeshVertices);
 
     const ShadedColorTable& colorTable = shadedColorTable();
-    for (int y = 0; y < ChunkLayout::SIZE; ++y) {
-        for (int z = 0; z < ChunkLayout::SIZE; ++z) {
+    for (int y = 0; y < ChunkLayout::kSize; ++y) {
+        for (int z = 0; z < ChunkLayout::kSize; ++z) {
             const size_t row = rowIndex(y, z);
             uint16_t pending = 0;
             for (const RowMasks& rows : faceMasks) {
@@ -310,7 +310,7 @@ void buildChunkMesh(const VoxelWorld& voxelWorld, glm::ivec3 chunkPos, ChunkMesh
                 pending = static_cast<uint16_t>(pending & (pending - 1));
 
                 const auto bit = static_cast<uint16_t>(1u << x);
-                const BlockData block = chunk.getBlock(row * ChunkLayout::SIZE + static_cast<size_t>(x));
+                const BlockData block = chunk.getBlock(row * ChunkLayout::kSize + static_cast<size_t>(x));
                 assert(block.type < BlockType::Count);
                 const std::array<uint32_t, 6>& faceColors = colorTable[static_cast<size_t>(block.type)];
                 for (size_t face = 0; face < faceMasks.size(); ++face) {

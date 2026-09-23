@@ -7,7 +7,7 @@
 
 class ChunkGenerator {
 public:
-    static constexpr uint32_t INITIAL_REVISION = 1;
+    static constexpr uint32_t kInitialRevision = 1;
 
     static ChunkData generate(glm::ivec3 chunkPos);
 };

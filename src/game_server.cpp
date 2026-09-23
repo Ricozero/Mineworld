@@ -28,6 +28,7 @@ constexpr size_t kMaxChunkGenerationsPerTick = 1024;
 constexpr double kMaxChunkGenerationTimePerTick = 25.0;
 constexpr int kRobotChunkViewRadius = 1;
 constexpr int kCoreChunkRadius = 1;
+constexpr auto kChunkUnloadDelay = std::chrono::seconds(3);
 
 bool chunkLess(glm::ivec3 a, glm::ivec3 b) {
     return std::tie(a.x, a.z, a.y) < std::tie(b.x, b.z, b.y);
@@ -90,7 +91,7 @@ void forEachChunkInRing(glm::ivec3 center, int horizontalRadius, int verticalRad
 
 GameServer::GameServer() : GameServer(nullptr) {}
 
-GameServer::GameServer(std::unique_ptr<INetServer> netServer) : netServer_(std::move(netServer)) {
+GameServer::GameServer(std::unique_ptr<INetServer> netServer) : chunkManager_(kChunkUnloadDelay), netServer_(std::move(netServer)) {
     if (!netServer_) {
         netServer_ = std::make_unique<KcpServer>(ioContext_, AppConfig::instance().port);
     }
@@ -221,7 +222,7 @@ void GameServer::releaseSessionCoreChunkDemand(Session& session, ServerChunkMana
         chunkManager_.removeRequester(chunkPos, ServerChunkManager::PriorityClass::LoadingCore, now);
     }
     session.coreChunks.clear();
-    session.lastChunkPos = Session::INVALID_CHUNK_POS;
+    session.lastChunkPos = Session::kInvalidChunkPos;
 }
 
 void GameServer::updateRobotChunkDemand(entt::entity entity, glm::ivec3 currentChunkPos, ServerChunkManager::TimePoint now) {
@@ -301,18 +302,20 @@ void GameServer::sendChunkUpdates(Session& session) {
         MW_PROFILE_COUNTER("Server.ChunkUpdateBytesOut", static_cast<int64_t>(payload.size()));
     };
     const auto sendUpserts = [&](const std::vector<glm::ivec3>& positions) {
+        constexpr size_t kEstimatedBatchOverheadBytes = 128;
+        constexpr size_t kEstimatedEntryOverheadBytes = 64;
         size_t cursor = 0;
         while (cursor < positions.size() && upsertCount < kMaxChunkUpsertsPerTick && upsertBytes < kMaxChunkUpsertBytesPerTick) {
-            const size_t byteLimit = std::min(MAX_CHUNK_BATCH_BYTES, kMaxChunkUpsertBytesPerTick - upsertBytes);
-            const size_t countLimit = std::min(MAX_CHUNK_UPSERTS_PER_BATCH, kMaxChunkUpsertsPerTick - upsertCount);
+            const size_t byteLimit = std::min(kMaxChunkBatchBytes, kMaxChunkUpsertBytesPerTick - upsertBytes);
+            const size_t countLimit = std::min(kMaxChunkUpsertsPerBatch, kMaxChunkUpsertsPerTick - upsertCount);
             std::vector<NetChunkUpsert> batch;
             batch.reserve(countLimit);
-            size_t estimatedBytes = 128;
+            size_t estimatedBytes = kEstimatedBatchOverheadBytes;
             for (size_t i = cursor; i < positions.size() && batch.size() < countLimit; ++i) {
                 const Chunk* chunk = voxelWorld_.findChunk(positions[i]);
                 assert(chunk != nullptr);
                 auto snapshot = chunk->getEncodedSnapshot();
-                const size_t entryBytes = snapshot->data.bytes.size() + 64;
+                const size_t entryBytes = snapshot->data.bytes.size() + kEstimatedEntryOverheadBytes;
                 if (!batch.empty() && estimatedBytes + entryBytes > byteLimit) {
                     break;
                 }
@@ -340,7 +343,7 @@ void GameServer::sendChunkUpdates(Session& session) {
 
     const bool coreSent = sendUpserts(coreUpserts);
     for (size_t cursor = 0; cursor < unloads.size();) {
-        const size_t count = std::min(MAX_CHUNK_UNLOADS_PER_BATCH, unloads.size() - cursor);
+        const size_t count = std::min(kMaxChunkUnloadsPerBatch, unloads.size() - cursor);
         const auto batch = std::span(unloads).subspan(cursor, count);
         const auto payload = serializeChunkUnloadBatch(batch, session.chunkUpdateBuilder);
         if (!sendPacket(session.sessionId, payload)) {
@@ -446,7 +449,7 @@ void GameServer::processPendingUnloads(ServerChunkManager::TimePoint now) {
 
 bool GameServer::commitChunkLoad(glm::ivec3 chunkPos, ChunkData&& data, uint64_t generationId) {
     if (!ChunkLayout::isChunkInWorld(chunkPos) || voxelWorld_.findChunk(chunkPos) != nullptr ||
-        !voxelWorld_.loadChunk(chunkPos, ChunkGenerator::INITIAL_REVISION, std::move(data))) {
+        !voxelWorld_.loadChunk(chunkPos, ChunkGenerator::kInitialRevision, std::move(data))) {
         return false;
     }
     if (!chunkManager_.commitLoaded(chunkPos, generationId)) {
@@ -710,7 +713,7 @@ CommandResponse GameServer::onCommandRequest(std::optional<uint32_t> sessionId, 
         }
         case CommandOperation::CreateRobot: {
             const std::string robotName = command.arguments.empty() ? "" : std::get<std::string>(command.arguments[0]);
-            if (!isValidName(robotName)) return result(false, "Name must be single-line UTF-8, at most " + std::to_string(MAX_NAME_CHARACTERS) + " characters.");
+            if (!isValidName(robotName)) return result(false, "Name must be single-line UTF-8, at most " + std::to_string(kMaxNameCharacters) + " characters.");
             glm::vec3 position{0};
             if (command.arguments.size() == 2) {
                 position = std::get<glm::vec3>(command.arguments[1]);
@@ -719,8 +722,8 @@ CommandResponse GameServer::onCommandRequest(std::optional<uint32_t> sessionId, 
                 if (!transform) return result(false, "Console commands require an explicit position. Use /help create_robot.");
                 position = transform->position;
             }
-            if (!glm::all(glm::greaterThanEqual(position, glm::vec3(ChunkLayout::WORLD_MIN))) ||
-                !glm::all(glm::lessThan(position, glm::vec3(ChunkLayout::WORLD_MAX)))) {
+            if (!glm::all(glm::greaterThanEqual(position, glm::vec3(ChunkLayout::kWorldMin))) ||
+                !glm::all(glm::lessThan(position, glm::vec3(ChunkLayout::kWorldMax)))) {
                 return result(false, "Position is outside the world.");
             }
             const auto id = actorManager_.allocateId();
@@ -736,7 +739,7 @@ CommandResponse GameServer::onCommandRequest(std::optional<uint32_t> sessionId, 
                     entity = actorWorld_.getEntity(static_cast<ActorId>(*id));
                 } else {
                     const auto& name = std::get<std::string>(command.arguments[0]);
-                    if (!isValidName(name)) return result(false, "Name must be single-line UTF-8, at most " + std::to_string(MAX_NAME_CHARACTERS) + " characters.");
+                    if (!isValidName(name)) return result(false, "Name must be single-line UTF-8, at most " + std::to_string(kMaxNameCharacters) + " characters.");
                     for (const auto id : actorWorld_.findActorsByName(name)) {
                         const auto candidate = actorWorld_.getEntity(id);
                         if (registry.all_of<RobotComponent>(candidate)) {

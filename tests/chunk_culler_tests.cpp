@@ -63,12 +63,12 @@ Frustum uniformFrustum(float w) {
 }
 
 glm::vec3 cameraInChunk(glm::ivec3 chunkPos) {
-    return glm::vec3(chunkPos) * static_cast<float>(ChunkLayout::SIZE) + static_cast<float>(ChunkLayout::SIZE) * 0.5f;
+    return glm::vec3(chunkPos) * static_cast<float>(ChunkLayout::kSize) + static_cast<float>(ChunkLayout::kSize) * 0.5f;
 }
 
 bool chunkInFrustum(const Frustum& frustum, glm::ivec3 chunkPos) {
-    const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkLayout::SIZE);
-    return frustum.testAABB(min, min + static_cast<float>(ChunkLayout::SIZE));
+    const glm::vec3 min = glm::vec3(chunkPos) * static_cast<float>(ChunkLayout::kSize);
+    return frustum.testAABB(min, min + static_cast<float>(ChunkLayout::kSize));
 }
 
 std::vector<ChunkKey> referenceVisible(const ChunkList& source, const Frustum& frustum, glm::vec3 cameraPosition) {
@@ -90,7 +90,7 @@ std::vector<ChunkKey> referenceVisible(const ChunkList& source, const Frustum& f
     std::vector<ChunkKey> visible;
     const glm::ivec3 cameraChunk = ChunkLayout::worldToChunk(glm::ivec3(glm::floor(cameraPosition)));
     const auto seed = byPosition.find(keyOf(cameraChunk));
-    if (seed == byPosition.end() || cells > static_cast<int64_t>(ChunkCuller::MAX_GRID_CELLS)) {
+    if (seed == byPosition.end() || cells > static_cast<int64_t>(ChunkCuller::kMaxGridCells)) {
         for (const DrawableChunk& chunk : source.chunks) {
             if (chunkInFrustum(frustum, chunk.chunkPos)) {
                 visible.push_back(keyOf(chunk.chunkPos));

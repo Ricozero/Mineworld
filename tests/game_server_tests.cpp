@@ -230,8 +230,8 @@ TEST_F(GameServerNetworkTest, RobotChunkDemandAndTerrainUnloadPreserveActors) {
     wire->connect(1);
     for (int i = 0; i < 10; ++i) server.update(0.0f);
     ASSERT_NE(probe->world, nullptr);
-    constexpr ActorId actorId = 10000;
-    const auto entity = probe->world->createRobot(actorId, "retained", {0.0f, 128.0f, 0.0f});
+    constexpr ActorId kActorId = 10000;
+    const auto entity = probe->world->createRobot(kActorId, "retained", {0.0f, 128.0f, 0.0f});
     probe->world->registry().get<TransformComponent>(entity).scale = glm::vec3(2.0f);
     wire->receive(1, serializeClientReady());
     NetClientInput input;
@@ -240,7 +240,7 @@ TEST_F(GameServerNetworkTest, RobotChunkDemandAndTerrainUnloadPreserveActors) {
     input.playerMode = PlayerMode::Spectator;
     wire->receive(1, serializeClientInput(input));
     server.update(0.0f);
-    ASSERT_NE(probe->world->getEntity(actorId), entt::entity(entt::null));
+    ASSERT_NE(probe->world->getEntity(kActorId), entt::entity(entt::null));
     probe->world->registry().remove<RobotComponent>(entity);
     server.update(0.0f);
     probe->world->registry().emplace<RobotComponent>(entity);
@@ -248,18 +248,18 @@ TEST_F(GameServerNetworkTest, RobotChunkDemandAndTerrainUnloadPreserveActors) {
     std::this_thread::sleep_for(std::chrono::milliseconds(3100));
     server.update(0.0f);
     ASSERT_NE(probe->terrain->findChunk({0, 8, 0}), nullptr);
-    ASSERT_NE(probe->world->getEntity(actorId), entt::entity(entt::null));
+    ASSERT_NE(probe->world->getEntity(kActorId), entt::entity(entt::null));
     probe->world->registry().remove<RobotComponent>(entity);
     server.update(0.0f);
     std::this_thread::sleep_for(std::chrono::milliseconds(3100));
     server.update(0.0f);
     EXPECT_EQ(probe->terrain->findChunk({0, 8, 0}), nullptr);
-    EXPECT_EQ(probe->world->getEntity(actorId), entity);
+    EXPECT_EQ(probe->world->getEntity(kActorId), entity);
     input.sequence = 2;
     input.position = {0.0f, 128.0f, 0.0f};
     wire->receive(1, serializeClientInput(input));
     for (int i = 0; i < 10; ++i) server.update(0.0f);
-    const auto retained = probe->world->getEntity(actorId);
+    const auto retained = probe->world->getEntity(kActorId);
     ASSERT_EQ(retained, entity);
     EXPECT_NE(probe->terrain->findChunk({0, 8, 0}), nullptr);
     EXPECT_FALSE(probe->world->registry().all_of<RobotComponent>(retained));
@@ -288,11 +288,11 @@ TEST_F(GameServerNetworkTest, ConsoleCommandsWorkWithoutAPlayer) {
     EXPECT_TRUE(server.executeConsoleCommand("destroy_robot").success);
     for (const std::string_view character : {std::string_view("a"), std::string_view("\xe4\xb8\xad"), std::string_view("\xf0\x9f\x98\x80")}) {
         std::string name;
-        for (size_t i = 0; i < MAX_NAME_CHARACTERS; ++i) name += character;
+        for (size_t i = 0; i < kMaxNameCharacters; ++i) name += character;
         EXPECT_TRUE(server.executeConsoleCommand("create_robot " + name + " 0 128 0").success);
         EXPECT_TRUE(server.executeConsoleCommand("destroy_robot_named " + name).success);
     }
-    const std::string longName(MAX_NAME_CHARACTERS + 1, 'a');
+    const std::string longName(kMaxNameCharacters + 1, 'a');
     const auto invalidName = server.executeConsoleCommand("create_robot " + longName + " 0 128 0");
     EXPECT_FALSE(invalidName.success);
     EXPECT_NE(invalidName.message.find("characters"), std::string::npos);

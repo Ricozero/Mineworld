@@ -14,9 +14,9 @@ constexpr size_t kMaxActors = 2048;
 
 template <typename Payload>
 std::vector<uint8_t> finishMessage(flatbuffers::FlatBufferBuilder& builder, flatbuffers::Offset<Payload> payload) {
-    constexpr auto payloadType = mineworld::net::NetMessagePayloadTraits<Payload>::enum_value;
-    static_assert(payloadType != mineworld::net::NetMessagePayload::NONE);
-    const auto message = mineworld::net::CreateNetMessage(builder, payloadType, payload.Union());
+    constexpr auto kPayloadType = mineworld::net::NetMessagePayloadTraits<Payload>::enum_value;
+    static_assert(kPayloadType != mineworld::net::NetMessagePayload::NONE);
+    const auto message = mineworld::net::CreateNetMessage(builder, kPayloadType, payload.Union());
     mineworld::net::FinishNetMessageBuffer(builder, message);
     const uint8_t* data = builder.GetBufferPointer();
     return std::vector<uint8_t>(data, data + builder.GetSize());
@@ -240,7 +240,7 @@ bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot
 
 std::vector<uint8_t> serializeChunkUpsertBatch(std::span<const NetChunkUpsert> chunks, flatbuffers::FlatBufferBuilder& builder) {
     builder.Clear();
-    if (chunks.empty() || chunks.size() > MAX_CHUNK_UPSERTS_PER_BATCH) {
+    if (chunks.empty() || chunks.size() > kMaxChunkUpsertsPerBatch) {
         return {};
     }
     std::vector<flatbuffers::Offset<mineworld::net::ChunkUpsert>> entries;
@@ -250,8 +250,8 @@ std::vector<uint8_t> serializeChunkUpsertBatch(std::span<const NetChunkUpsert> c
             return {};
         }
         const auto& data = chunk.snapshot->data;
-        if (data.compression >= ChunkCompression::Count || data.bytes.empty() || data.bytes.size() > ChunkData::MAX_SERIALIZED_SIZE ||
-            data.uncompressedSize < ChunkData::SERIALIZED_HEADER_SIZE || data.uncompressedSize > ChunkData::MAX_SERIALIZED_SIZE ||
+        if (data.compression >= ChunkCompression::Count || data.bytes.empty() || data.bytes.size() > ChunkData::kMaxSerializedSize ||
+            data.uncompressedSize < ChunkData::kSerializedHeaderSize || data.uncompressedSize > ChunkData::kMaxSerializedSize ||
             (data.compression == ChunkCompression::None && data.bytes.size() != data.uncompressedSize)) {
             return {};
         }
@@ -260,11 +260,11 @@ std::vector<uint8_t> serializeChunkUpsertBatch(std::span<const NetChunkUpsert> c
         entries.push_back(mineworld::net::CreateChunkUpsert(builder, &pos, chunk.snapshot->revision, toWireEnum(data.compression), data.uncompressedSize, blocks));
     }
     auto bytes = finishMessage(builder, mineworld::net::CreateChunkUpsertBatch(builder, builder.CreateVector(entries)));
-    return bytes.size() <= MAX_CHUNK_BATCH_BYTES ? std::move(bytes) : std::vector<uint8_t>{};
+    return bytes.size() <= kMaxChunkBatchBytes ? std::move(bytes) : std::vector<uint8_t>{};
 }
 
 bool deserializeChunkUpsertBatch(std::span<const uint8_t> bytes, std::vector<NetDecodedChunkUpsert>& outChunks) {
-    if (bytes.size() > MAX_CHUNK_BATCH_BYTES) {
+    if (bytes.size() > kMaxChunkBatchBytes) {
         return false;
     }
     const mineworld::net::NetMessage* message = tryGetMessage(bytes);
@@ -273,7 +273,7 @@ bool deserializeChunkUpsertBatch(std::span<const uint8_t> bytes, std::vector<Net
     }
     const auto* batch = message->payload_as_ChunkUpsertBatch();
     const auto* chunks = batch ? batch->chunks() : nullptr;
-    if (!chunks || chunks->empty() || chunks->size() > MAX_CHUNK_UPSERTS_PER_BATCH) {
+    if (!chunks || chunks->empty() || chunks->size() > kMaxChunkUpsertsPerBatch) {
         return false;
     }
     std::vector<NetDecodedChunkUpsert> result;
@@ -298,7 +298,7 @@ bool deserializeChunkUpsertBatch(std::span<const uint8_t> bytes, std::vector<Net
 
 std::vector<uint8_t> serializeChunkUnloadBatch(std::span<const NetChunkUnload> chunks, flatbuffers::FlatBufferBuilder& builder) {
     builder.Clear();
-    if (chunks.empty() || chunks.size() > MAX_CHUNK_UNLOADS_PER_BATCH) {
+    if (chunks.empty() || chunks.size() > kMaxChunkUnloadsPerBatch) {
         return {};
     }
     std::vector<mineworld::net::ChunkUnload> entries;
@@ -310,11 +310,11 @@ std::vector<uint8_t> serializeChunkUnloadBatch(std::span<const NetChunkUnload> c
         entries.emplace_back(toFbIVec3(chunk.chunkPos), chunk.revision);
     }
     auto bytes = finishMessage(builder, mineworld::net::CreateChunkUnloadBatch(builder, builder.CreateVectorOfStructs(entries)));
-    return bytes.size() <= MAX_CHUNK_BATCH_BYTES ? std::move(bytes) : std::vector<uint8_t>{};
+    return bytes.size() <= kMaxChunkBatchBytes ? std::move(bytes) : std::vector<uint8_t>{};
 }
 
 bool deserializeChunkUnloadBatch(std::span<const uint8_t> bytes, std::vector<NetChunkUnload>& outChunks) {
-    if (bytes.size() > MAX_CHUNK_BATCH_BYTES) {
+    if (bytes.size() > kMaxChunkBatchBytes) {
         return false;
     }
     const auto* message = tryGetMessage(bytes);
@@ -323,7 +323,7 @@ bool deserializeChunkUnloadBatch(std::span<const uint8_t> bytes, std::vector<Net
     }
     const auto* batch = message->payload_as_ChunkUnloadBatch();
     const auto* chunks = batch ? batch->chunks() : nullptr;
-    if (!chunks || chunks->empty() || chunks->size() > MAX_CHUNK_UNLOADS_PER_BATCH) {
+    if (!chunks || chunks->empty() || chunks->size() > kMaxChunkUnloadsPerBatch) {
         return false;
     }
     std::vector<NetChunkUnload> result;
@@ -379,7 +379,7 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
         return false;
     }
     const mineworld::net::CommandRequest* command = message->payload_as_CommandRequest();
-    if (!command || (command->arguments() && command->arguments()->size() > MAX_COMMAND_ARGUMENTS)) {
+    if (!command || (command->arguments() && command->arguments()->size() > kMaxCommandArguments)) {
         return false;
     }
 
@@ -395,7 +395,7 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
             switch (argument->value_type()) {
                 case mineworld::net::CommandArgumentValue::StringArgument: {
                     const auto* value = argument->value_as_StringArgument();
-                    if (!value || !value->value() || value->value()->size() > MAX_COMMAND_STRING_BYTES) {
+                    if (!value || !value->value() || value->value()->size() > kMaxCommandStringBytes) {
                         return false;
                     }
                     result.arguments.emplace_back(value->value()->str());
@@ -443,7 +443,7 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
 }
 
 std::vector<uint8_t> serializeCommandResponse(const CommandResponse& response) {
-    if (response.message.size() > MAX_INPUT_TEXT_BYTES || !isValidUtf8(response.message)) return {};
+    if (response.message.size() > kMaxInputTextBytes || !isValidUtf8(response.message)) return {};
     return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
         return mineworld::net::CreateCommandResponse(
             builder,
@@ -459,7 +459,7 @@ bool deserializeCommandResponse(std::span<const uint8_t> bytes, CommandResponse&
         return false;
     }
     const mineworld::net::CommandResponse* response = message->payload_as_CommandResponse();
-    if (!response || !response->message() || response->message()->size() > MAX_INPUT_TEXT_BYTES || !isValidUtf8(response->message()->string_view())) {
+    if (!response || !response->message() || response->message()->size() > kMaxInputTextBytes || !isValidUtf8(response->message()->string_view())) {
         return false;
     }
     outResponse.requestId = response->request_id();
@@ -469,7 +469,7 @@ bool deserializeCommandResponse(std::span<const uint8_t> bytes, CommandResponse&
 }
 
 std::vector<uint8_t> serializeChatRequest(std::string_view text) {
-    if (trimText(text).empty() || !isSingleLineText(text, MAX_CHAT_TEXT_BYTES)) return {};
+    if (trimText(text).empty() || !isSingleLineText(text, kMaxChatTextBytes)) return {};
     return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
         return mineworld::net::CreateChatRequest(builder, builder.CreateString(text));
     });
@@ -480,13 +480,13 @@ bool deserializeChatRequest(std::span<const uint8_t> bytes, std::string& outText
     const auto* request = message ? message->payload_as_ChatRequest() : nullptr;
     if (!request || !request->text()) return false;
     const auto text = request->text()->string_view();
-    if (trimText(text).empty() || !isSingleLineText(text, MAX_CHAT_TEXT_BYTES)) return false;
+    if (trimText(text).empty() || !isSingleLineText(text, kMaxChatTextBytes)) return false;
     outText = text;
     return true;
 }
 
 std::vector<uint8_t> serializeChatMessage(const ChatMessage& message) {
-    if (message.name.empty() || !isValidName(message.name) || trimText(message.text).empty() || !isSingleLineText(message.text, MAX_CHAT_TEXT_BYTES)) return {};
+    if (message.name.empty() || !isValidName(message.name) || trimText(message.text).empty() || !isSingleLineText(message.text, kMaxChatTextBytes)) return {};
     return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
         return mineworld::net::CreateChatMessage(builder, builder.CreateString(message.name), builder.CreateString(message.text));
     });
@@ -498,7 +498,7 @@ bool deserializeChatMessage(std::span<const uint8_t> bytes, ChatMessage& outMess
     if (!chat || !chat->name() || !chat->text()) return false;
     const auto name = chat->name()->string_view();
     const auto text = chat->text()->string_view();
-    if (name.empty() || !isValidName(name) || trimText(text).empty() || !isSingleLineText(text, MAX_CHAT_TEXT_BYTES)) return false;
+    if (name.empty() || !isValidName(name) || trimText(text).empty() || !isSingleLineText(text, kMaxChatTextBytes)) return false;
     outMessage = {std::string(name), std::string(text)};
     return true;
 }

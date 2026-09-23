@@ -13,8 +13,11 @@ constexpr int kRecvMtu = 1400;
 constexpr size_t kMaxMessageFragments = 127;  // IKCP_WND_RCV - 1
 constexpr uint32_t kMagic = 0x4B435048;
 constexpr uint32_t kProtocolVersion = 1;
-constexpr size_t kRequestSize = 16;
-constexpr size_t kResponseSize = 20;
+constexpr size_t kHandshakeVersionOffset = sizeof(uint32_t);
+constexpr size_t kHandshakeNonceOffset = kHandshakeVersionOffset + sizeof(uint32_t);
+constexpr size_t kHandshakeSessionIdOffset = kHandshakeNonceOffset + sizeof(uint64_t);
+constexpr size_t kRequestSize = kHandshakeSessionIdOffset;
+constexpr size_t kResponseSize = kHandshakeSessionIdOffset + sizeof(uint32_t);
 constexpr uint32_t kHandshakeRetryMs = 500;
 constexpr uint32_t kSessionTimeoutMs = 10'000;
 constexpr uint32_t kSessionReplaceGraceMs = 3'000;
@@ -24,6 +27,22 @@ constexpr uint32_t kMaxHandshakesPerWindow = 20;
 constexpr uint32_t kHandshakeRateRetentionMs = 10'000;
 constexpr size_t kMaxHandshakeRateStates = 4096;
 constexpr uint32_t kRateLimitCleanupIntervalMs = 1000;
+
+void configureKcp(ikcpcb* kcp) {
+    constexpr int kNoDelay = 1;
+    constexpr int kUpdateIntervalMs = 10;
+    constexpr int kFastResend = 2;
+    constexpr int kDisableCongestionControl = 1;
+    constexpr int kSendWindowSize = 256;
+    constexpr int kReceiveWindowSize = 256;
+    constexpr int kMtuBytes = 1200;
+    constexpr int kMinRetransmissionTimeoutMs = 10;
+
+    ikcp_nodelay(kcp, kNoDelay, kUpdateIntervalMs, kFastResend, kDisableCongestionControl);
+    ikcp_wndsize(kcp, kSendWindowSize, kReceiveWindowSize);
+    ikcp_setmtu(kcp, kMtuBytes);
+    kcp->rx_minrto = kMinRetransmissionTimeoutMs;
+}
 
 bool isUdpPeerReset(asio::error_code ec) {
     return ec == asio::error::connection_reset;
@@ -114,8 +133,8 @@ void KcpClient::sendHandshakeRequest(uint32_t now) {
 
     std::array<uint8_t, kRequestSize> buffer{};
     encodeUint32Be(buffer.data(), kMagic);
-    encodeUint32Be(buffer.data() + 4, kProtocolVersion);
-    encodeUint64Be(buffer.data() + 8, handshakeNonce_);
+    encodeUint32Be(buffer.data() + kHandshakeVersionOffset, kProtocolVersion);
+    encodeUint64Be(buffer.data() + kHandshakeNonceOffset, handshakeNonce_);
     lastHandshakeSendMs_ = now;
 
     asio::error_code error;
@@ -137,10 +156,7 @@ void KcpClient::initKcp(uint32_t conv) {
     }
 
     ikcp_setoutput(kcp_, &KcpClient::kcpOutput);
-    ikcp_nodelay(kcp_, 1, 10, 2, 1);
-    ikcp_wndsize(kcp_, 256, 256);
-    ikcp_setmtu(kcp_, 1200);
-    kcp_->rx_minrto = 10;
+    configureKcp(kcp_);
 
     handshakeStarted_ = false;
     lastReceiveMs_ = nowMs();
@@ -203,9 +219,9 @@ void KcpClient::pump() {
         }
 
         if (received == kResponseSize && decodeUint32Be(recvBuffer_.data()) == kMagic) {
-            const uint32_t version = decodeUint32Be(recvBuffer_.data() + 4);
-            const uint64_t nonce = decodeUint64Be(recvBuffer_.data() + 8);
-            const uint32_t conv = decodeUint32Be(recvBuffer_.data() + 16);
+            const uint32_t version = decodeUint32Be(recvBuffer_.data() + kHandshakeVersionOffset);
+            const uint64_t nonce = decodeUint64Be(recvBuffer_.data() + kHandshakeNonceOffset);
+            const uint32_t conv = decodeUint32Be(recvBuffer_.data() + kHandshakeSessionIdOffset);
             if (version != kProtocolVersion) {
                 if (!versionMismatchLogged_) {
                     versionMismatchLogged_ = true;
@@ -368,15 +384,15 @@ void KcpServer::pump() {
 
         const uint32_t receiveTime = nowMs();
         if (received == kRequestSize && decodeUint32Be(recvBuffer_.data()) == kMagic) {
-            const uint32_t version = decodeUint32Be(recvBuffer_.data() + 4);
-            const uint64_t nonce = decodeUint64Be(recvBuffer_.data() + 8);
+            const uint32_t version = decodeUint32Be(recvBuffer_.data() + kHandshakeVersionOffset);
+            const uint64_t nonce = decodeUint64Be(recvBuffer_.data() + kHandshakeNonceOffset);
             if (version == kProtocolVersion && nonce != 0 && allowHandshake(sender, receiveTime)) {
                 handleHandshake(sender, nonce, receiveTime);
             }
             continue;
         }
 
-        if (received < 4) {
+        if (received < sizeof(uint32_t)) {
             continue;
         }
         const uint32_t conv = decodeUint32Le(recvBuffer_.data());
@@ -475,10 +491,7 @@ KcpServer::SessionState* KcpServer::createSession(const Endpoint& endpoint, uint
     }
 
     ikcp_setoutput(session.kcp, &KcpServer::kcpOutput);
-    ikcp_nodelay(session.kcp, 1, 10, 2, 1);
-    ikcp_wndsize(session.kcp, 256, 256);
-    ikcp_setmtu(session.kcp, 1200);
-    session.kcp->rx_minrto = 10;
+    configureKcp(session.kcp);
 
     endpointSessions_[endpoint] = *sessionId;
     logging::info("New session {} from {}:{}", *sessionId, endpoint.address().to_string(), endpoint.port());
@@ -511,9 +524,9 @@ void KcpServer::handleHandshake(const Endpoint& sender, uint64_t handshakeNonce,
 void KcpServer::sendHandshakeResponse(const SessionState& session) {
     std::array<uint8_t, kResponseSize> buffer{};
     encodeUint32Be(buffer.data(), kMagic);
-    encodeUint32Be(buffer.data() + 4, kProtocolVersion);
-    encodeUint64Be(buffer.data() + 8, session.handshakeNonce);
-    encodeUint32Be(buffer.data() + 16, session.sessionId);
+    encodeUint32Be(buffer.data() + kHandshakeVersionOffset, kProtocolVersion);
+    encodeUint64Be(buffer.data() + kHandshakeNonceOffset, session.handshakeNonce);
+    encodeUint32Be(buffer.data() + kHandshakeSessionIdOffset, session.sessionId);
     sendRawTo(reinterpret_cast<const char*>(buffer.data()), buffer.size(), session.remote);
 }
 

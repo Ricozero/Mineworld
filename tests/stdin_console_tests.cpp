@@ -116,7 +116,7 @@ TEST_F(StdinConsoleTest, PollsEmptyPipeAndPreservesPartialUtf8Lines) {
 }
 
 TEST_F(StdinConsoleTest, AcceptsLimitAndRecoversAfterOversizedLine) {
-    const std::string maximum(MAX_INPUT_TEXT_BYTES, 'a');
+    const std::string maximum(kMaxInputTextBytes, 'a');
     ASSERT_NO_FATAL_FAILURE(writeInput(maximum));
     EXPECT_TRUE(drain().empty());
     ASSERT_NO_FATAL_FAILURE(writeInput("\r\n"));

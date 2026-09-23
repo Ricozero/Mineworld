@@ -73,8 +73,8 @@ bool ChunkCuller::Grid::rebase(glm::ivec3 newMin, glm::ivec3 newMax) {
     for (int axis = 0; axis < 3; ++axis) {
         const int64_t length = static_cast<int64_t>(newMax[axis]) - newMin[axis] + 1;
         if (newMin[axis] == std::numeric_limits<int>::min() || newMax[axis] == std::numeric_limits<int>::max() ||
-            length <= 0 || length > static_cast<int64_t>(MAX_GRID_CELLS) ||
-            cellCount > MAX_GRID_CELLS / static_cast<size_t>(length)) {
+            length <= 0 || length > static_cast<int64_t>(kMaxGridCells) ||
+            cellCount > kMaxGridCells / static_cast<size_t>(length)) {
             return false;
         }
         extent[axis] = static_cast<int>(length);
@@ -234,7 +234,7 @@ void ChunkCuller::filterFrustum(std::span<const DrawableChunk> chunks, const Fru
     MW_PROFILE_SCOPE("ChunkCulling.Frustum");
 
     visible_.clear();
-    const float chunkSize = static_cast<float>(ChunkLayout::SIZE);
+    const float chunkSize = static_cast<float>(ChunkLayout::kSize);
     for (uint32_t index : candidates_) {
         const glm::vec3 chunkMin = glm::vec3(chunks[index].chunkPos) * chunkSize;
         if (frustum.testAABB(chunkMin, chunkMin + chunkSize)) {

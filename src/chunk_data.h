@@ -12,7 +12,7 @@
 
 class ChunkData {
 public:
-    static constexpr uint8_t MAX_INDEX_BITS = 8;
+    static constexpr uint8_t kMaxIndexBits = 8;
 
     enum class Format : uint8_t {
         Uniform = 0,
@@ -28,7 +28,7 @@ public:
     ~ChunkData() = default;
 
     BlockData get(size_t index) const {
-        assert(index < ChunkLayout::BLOCK_COUNT);
+        assert(index < ChunkLayout::kBlockCount);
         return indexBits_ == 0 ? uniformBlock_ : palette_[rawIndex(index)].block;
     }
     bool set(size_t index, BlockData block);
@@ -39,8 +39,8 @@ public:
     BlockData uniformBlock() const { return uniformBlock_; }
     size_t blockCount() const { return blockCount_; }
 
-    static constexpr size_t SERIALIZED_HEADER_SIZE = 3;
-    static constexpr size_t MAX_SERIALIZED_SIZE = SERIALIZED_HEADER_SIZE + (size_t{1} << MAX_INDEX_BITS) * sizeof(uint16_t) + ChunkLayout::BLOCK_COUNT;
+    static constexpr size_t kSerializedHeaderSize = 3;
+    static constexpr size_t kMaxSerializedSize = kSerializedHeaderSize + (size_t{1} << kMaxIndexBits) * sizeof(uint16_t) + ChunkLayout::kBlockCount;
 
     void serialize(std::vector<uint8_t>& out) const;
     static bool deserialize(std::span<const uint8_t> bytes, ChunkData& out);

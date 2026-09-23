@@ -23,7 +23,7 @@ struct Rng {
 inline ChunkData patternedData(bool noise) {
     ChunkData data;
     std::mt19937 random(42);
-    for (size_t i = 0; i < ChunkLayout::BLOCK_COUNT; ++i) {
+    for (size_t i = 0; i < ChunkLayout::kBlockCount; ++i) {
         const auto type = noise ? random() % 8 : (i / 256) % 3;
         const auto orientation = noise ? random() % 6 : 0;
         data.set(i, BlockData{static_cast<BlockType>(type), static_cast<BlockOrientation>(orientation)});
@@ -32,7 +32,7 @@ inline ChunkData patternedData(bool noise) {
 }
 
 inline void sameBlocks(const ChunkData& a, const ChunkData& b) {
-    for (size_t i = 0; i < ChunkLayout::BLOCK_COUNT; ++i) {
+    for (size_t i = 0; i < ChunkLayout::kBlockCount; ++i) {
         ASSERT_EQ(a.get(i), b.get(i)) << "Block index: " << i;
     }
 }

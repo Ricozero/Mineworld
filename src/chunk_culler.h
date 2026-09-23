@@ -17,7 +17,7 @@ struct Frustum {
 
 class ChunkCuller {
 public:
-    static constexpr size_t MAX_GRID_CELLS = size_t{1} << 21;
+    static constexpr size_t kMaxGridCells = size_t{1} << 21;
 
     void cull(const ChunkRenderView& data, const Frustum& frustum, glm::vec3 cameraPosition);
     std::span<const uint32_t> visibleChunkIndices() const { return visible_; }

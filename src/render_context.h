@@ -142,7 +142,7 @@ private:
         bool positionCursor = false;
         unsigned int openingCharacter = 0;
         InputHistory history;
-        std::array<char, MAX_INPUT_TEXT_BYTES + 1> input{};
+        std::array<char, kMaxInputTextBytes + 1> input{};
         std::deque<std::string> pendingInputs;
         std::deque<Line> lines;
         std::chrono::steady_clock::time_point lastActivityTime{};

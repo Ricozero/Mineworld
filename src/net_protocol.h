@@ -15,7 +15,7 @@
 #include "entity.h"
 #include "net_protocol_generated.h"
 
-inline constexpr size_t MAX_CHAT_TEXT_BYTES = 1024;
+inline constexpr size_t kMaxChatTextBytes = 1024;
 
 struct ChatMessage {
     std::string name;
@@ -38,9 +38,9 @@ struct NetEntitySnapshot {
     std::vector<NetActorState> actors;
 };
 
-inline constexpr size_t MAX_CHUNK_BATCH_BYTES = 32 * 1024;
-inline constexpr size_t MAX_CHUNK_UPSERTS_PER_BATCH = 64;
-inline constexpr size_t MAX_CHUNK_UNLOADS_PER_BATCH = 256;
+inline constexpr size_t kMaxChunkBatchBytes = 32 * 1024;
+inline constexpr size_t kMaxChunkUpsertsPerBatch = 64;
+inline constexpr size_t kMaxChunkUnloadsPerBatch = 256;
 
 struct NetChunkUpsert {
     glm::ivec3 chunkPos{0};

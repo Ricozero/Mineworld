@@ -39,7 +39,7 @@ TEST(ChunkProtocolTest, BatchRoundTripAndLimits) {
     entries.front().snapshot = Chunk({0, 0, 0}).getEncodedSnapshot();
     auto bytes = serializeChunkUpsertBatch(entries, builder);
     ASSERT_FALSE(bytes.empty()) << "64-entry batch failed";
-    ASSERT_LE(bytes.size(), MAX_CHUNK_BATCH_BYTES) << "64-entry batch failed";
+    ASSERT_LE(bytes.size(), kMaxChunkBatchBytes) << "64-entry batch failed";
     std::vector<NetDecodedChunkUpsert> decoded;
     ASSERT_TRUE(deserializeChunkUpsertBatch(bytes, decoded)) << "batch round trip failed";
     ASSERT_EQ(decoded.size(), 64) << "batch round trip failed";
@@ -66,7 +66,7 @@ TEST(ChunkProtocolTest, BatchRoundTripAndLimits) {
         ASSERT_FALSE(entries.empty()) << "No batch fits within the byte limit";
         entries.pop_back();
     }
-    ASSERT_LE(bytes.size(), MAX_CHUNK_BATCH_BYTES) << "byte-boundary batch failed";
+    ASSERT_LE(bytes.size(), kMaxChunkBatchBytes) << "byte-boundary batch failed";
     ASSERT_TRUE(deserializeChunkUpsertBatch(bytes, decoded)) << "byte-boundary batch failed";
     entries.push_back(entries.back());
     ASSERT_TRUE(serializeChunkUpsertBatch(entries, builder).empty()) << "boundary plus one was accepted";
@@ -125,7 +125,7 @@ TEST(ActorProtocolTest, IdNamesAndHelloRoundTrip) {
 
 TEST(NameProtocolTest, RoundTripsMaximumUnicodeNames) {
     for (std::string_view character : {"a", "\xe4\xb8\xad", "\xf0\x9f\x98\x80"}) {
-        const auto name = repeated(character, MAX_NAME_CHARACTERS);
+        const auto name = repeated(character, kMaxNameCharacters);
         NetServerHello hello;
         hello.actorId = 1;
         hello.actorName = name;
@@ -149,7 +149,7 @@ TEST(NameProtocolTest, RoundTripsMaximumUnicodeNames) {
 
 TEST(NameProtocolTest, RejectsInvalidNamesOnBothSides) {
     using Payload = mineworld::net::NetMessagePayload;
-    const std::string invalidNames[] = {std::string(MAX_NAME_CHARACTERS + 1, 'a'), repeated("\xe4\xb8\xad", MAX_NAME_CHARACTERS + 1), "bad\nname", "\xc0\xaf"};
+    const std::string invalidNames[] = {std::string(kMaxNameCharacters + 1, 'a'), repeated("\xe4\xb8\xad", kMaxNameCharacters + 1), "bad\nname", "\xc0\xaf"};
     for (const auto& name : invalidNames) {
         NetServerHello hello;
         hello.actorId = 1;

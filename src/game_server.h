@@ -43,7 +43,8 @@ private:
     };
 
     struct Session {
-        static constexpr glm::ivec3 INVALID_CHUNK_POS{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
+        static constexpr size_t kInitialEntitySnapshotBufferBytes = 8192;
+        static constexpr glm::ivec3 kInvalidChunkPos{std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), std::numeric_limits<int>::max()};
 
         uint32_t sessionId = 0;
         bool helloReceived = false;
@@ -54,14 +55,14 @@ private:
         entt::entity actor = entt::null;
         uint32_t entitySnapshotSequence = 0;
         float entitySnapshotTimer = 0.0f;
-        flatbuffers::FlatBufferBuilder entitySnapshotBuilder{8192};
+        flatbuffers::FlatBufferBuilder entitySnapshotBuilder{kInitialEntitySnapshotBufferBytes};
 
-        glm::ivec3 lastChunkPos = INVALID_CHUNK_POS;
+        glm::ivec3 lastChunkPos = kInvalidChunkPos;
         std::vector<glm::ivec3> cachedVisibleChunks;
         std::vector<glm::ivec3> cachedRetentionChunks;
         std::vector<glm::ivec3> coreChunks;
         std::unordered_map<glm::ivec3, PendingChunkUpdate> pendingChunkUpdates;
-        flatbuffers::FlatBufferBuilder chunkUpdateBuilder{MAX_CHUNK_BATCH_BYTES};
+        flatbuffers::FlatBufferBuilder chunkUpdateBuilder{kMaxChunkBatchBytes};
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
@@ -92,7 +93,7 @@ private:
     CommandResponse onCommandRequest(std::optional<uint32_t> sessionId, const CommandRequest& command);
     bool onChatRequest(uint32_t sessionId, const std::string& text);
 
-    ServerChunkManager chunkManager_{std::chrono::seconds(3)};
+    ServerChunkManager chunkManager_;
     VoxelWorld voxelWorld_;
     ActorWorld actorWorld_;
     ServerActorManager actorManager_{actorWorld_};

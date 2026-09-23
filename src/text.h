@@ -6,8 +6,8 @@
 #include <string>
 #include <string_view>
 
-inline constexpr size_t MAX_INPUT_TEXT_BYTES = 4096;
-inline constexpr size_t MAX_NAME_CHARACTERS = 16;
+inline constexpr size_t kMaxInputTextBytes = 4096;
+inline constexpr size_t kMaxNameCharacters = 16;
 
 std::string_view trimText(std::string_view text);
 std::optional<size_t> utf8CodepointCount(std::string_view text);

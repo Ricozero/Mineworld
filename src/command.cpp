@@ -9,24 +9,24 @@
 
 namespace {
 
-constexpr CommandParameter helpParameters[] = {
+constexpr CommandParameter kHelpParameters[] = {
     {"command", CommandArgumentType::String, true},
 };
-constexpr CommandParameter createRobotParameters[] = {
+constexpr CommandParameter kCreateRobotParameters[] = {
     {"name", CommandArgumentType::String, true},
     {"position", CommandArgumentType::Vec3, true},
 };
-constexpr CommandParameter destroyRobotParameters[] = {
+constexpr CommandParameter kDestroyRobotParameters[] = {
     {"id", CommandArgumentType::Integer, true},
 };
-constexpr CommandParameter destroyRobotNamedParameters[] = {
+constexpr CommandParameter kDestroyRobotNamedParameters[] = {
     {"name", CommandArgumentType::String, false},
 };
-constexpr CommandDefinition definitions[] = {
-    {"help", CommandOperation::Help, helpParameters, "Show available commands or help for one command."},
-    {"create_robot", CommandOperation::CreateRobot, createRobotParameters, "Create a robot; omitted position uses the player position."},
-    {"destroy_robot", CommandOperation::DestroyRobot, destroyRobotParameters, "Destroy a robot by ID, or one robot if omitted."},
-    {"destroy_robot_named", CommandOperation::DestroyRobot, destroyRobotNamedParameters, "Destroy a robot with the given name."},
+constexpr CommandDefinition kDefinitions[] = {
+    {"help", CommandOperation::Help, kHelpParameters, "Show available commands or help for one command."},
+    {"create_robot", CommandOperation::CreateRobot, kCreateRobotParameters, "Create a robot; omitted position uses the player position."},
+    {"destroy_robot", CommandOperation::DestroyRobot, kDestroyRobotParameters, "Destroy a robot by ID, or one robot if omitted."},
+    {"destroy_robot_named", CommandOperation::DestroyRobot, kDestroyRobotNamedParameters, "Destroy a robot with the given name."},
 };
 
 const char* typeName(CommandArgumentType type) {
@@ -41,7 +41,7 @@ const char* typeName(CommandArgumentType type) {
 }
 
 const CommandDefinition* findDefinition(std::string_view name) {
-    for (const auto& definition : definitions) {
+    for (const auto& definition : kDefinitions) {
         if (definition.name == name) return &definition;
     }
     return nullptr;
@@ -150,7 +150,7 @@ bool parseNumber(std::string_view text, Number& out) {
 
 }  // namespace
 
-std::span<const CommandDefinition> commandDefinitions() { return definitions; }
+std::span<const CommandDefinition> commandDefinitions() { return kDefinitions; }
 
 std::string commandUsage(const CommandDefinition& definition) {
     std::string result = "/" + std::string(definition.name);
@@ -165,7 +165,7 @@ std::string commandUsage(const CommandDefinition& definition) {
 }
 
 CommandParseResult parseCommandLine(std::string_view text) {
-    if (text.size() > MAX_INPUT_TEXT_BYTES || !isValidUtf8(text)) return {{}, "Command is too long or is not valid UTF-8."};
+    if (text.size() > kMaxInputTextBytes || !isValidUtf8(text)) return {{}, "Command is too long or is not valid UTF-8."};
     text = trimText(text);
     if (text.starts_with('/')) text.remove_prefix(1);
     std::vector<Token> tokens;
@@ -224,9 +224,9 @@ CommandParseResult parseCommandLine(std::string_view text) {
 }
 
 std::string validateCommand(const CommandRequest& command) {
-    if (command.arguments.size() > MAX_COMMAND_ARGUMENTS) return "Too many command arguments.";
+    if (command.arguments.size() > kMaxCommandArguments) return "Too many command arguments.";
     std::string error;
-    for (const auto& definition : definitions) {
+    for (const auto& definition : kDefinitions) {
         if (definition.operation != command.operation) continue;
         std::string candidate = validateSignature(definition, command);
         if (candidate.empty()) return {};
@@ -245,7 +245,7 @@ CommandResponse commandHelp(std::string_view name) {
         return {0, true, commandUsage(*definition) + "\n" + std::string(definition->description)};
     }
     std::string message;
-    for (const auto& definition : definitions) {
+    for (const auto& definition : kDefinitions) {
         if (!message.empty()) message += '\n';
         message += commandUsage(definition);
     }

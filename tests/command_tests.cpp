@@ -37,7 +37,7 @@ TEST(CommandTest, RejectsMalformedTextAndTypedRequests) {
                              "destroy_robot 9223372036854775808", "destroy_robot_named"}) {
         EXPECT_FALSE(parseCommandLine(text).command) << text;
     }
-    EXPECT_FALSE(parseCommandLine("create_robot " + std::string(MAX_COMMAND_STRING_BYTES + 1, 'a')).command);
+    EXPECT_FALSE(parseCommandLine("create_robot " + std::string(kMaxCommandStringBytes + 1, 'a')).command);
     EXPECT_FALSE(validateCommand({0, CommandOperation::CreateRobot, {int64_t(1)}}).empty());
     EXPECT_FALSE(validateCommand({0, CommandOperation::CreateRobot, {std::string("x"), glm::vec3(std::numeric_limits<float>::infinity())}}).empty());
     EXPECT_FALSE(validateCommand({0, CommandOperation::DestroyRobot, {false}}).empty());

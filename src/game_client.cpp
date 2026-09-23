@@ -17,6 +17,7 @@ namespace {
 constexpr float kConnectionTimeoutSeconds = 10.0f;
 constexpr size_t kMaxChunkMeshRebuildsPerFrame = 1024;
 constexpr double kMaxChunkMeshRebuildTimePerFrame = 8.0;
+constexpr size_t kMaxPendingMessagePackets = 64;
 
 }  // namespace
 
@@ -350,8 +351,8 @@ void GameClient::submitChat(std::string_view text) {
     }
     auto packet = serializeChatRequest(text);
     if (packet.empty()) {
-        pushMessage(CommandResponse{0, false, "Chat must be single-line UTF-8, at most 1024 bytes."});
-    } else if (pendingMessagePackets_.size() >= 64) {
+        pushMessage(CommandResponse{0, false, "Chat must be single-line UTF-8, at most " + std::to_string(kMaxChatTextBytes) + " bytes."});
+    } else if (pendingMessagePackets_.size() >= kMaxPendingMessagePackets) {
         pushMessage(CommandResponse{0, false, "Too many queued messages. Try again later."});
     } else {
         pendingMessagePackets_.push_back(std::move(packet));
@@ -359,6 +360,7 @@ void GameClient::submitChat(std::string_view text) {
 }
 
 void GameClient::submitCommand(std::string_view text) {
+    constexpr size_t kMaxOutstandingCommands = 64;
     text = trimText(text);
     if (text.empty()) return;
     auto parsed = parseCommandLine(text);
@@ -368,7 +370,7 @@ void GameClient::submitCommand(std::string_view text) {
     }
     std::string error;
     if (state_ != State::Running) error = "Session is not ready.";
-    if (error.empty() && (pendingMessagePackets_.size() >= 64 || outstandingCommands_.size() >= 64)) error = "Too many pending commands. Try again later.";
+    if (error.empty() && (pendingMessagePackets_.size() >= kMaxPendingMessagePackets || outstandingCommands_.size() >= kMaxOutstandingCommands)) error = "Too many pending commands. Try again later.";
     if (!error.empty()) {
         pushMessage(CommandResponse{0, false, std::move(error)});
         return;
@@ -380,8 +382,9 @@ void GameClient::submitCommand(std::string_view text) {
 }
 
 void GameClient::sendPendingMessages() {
+    constexpr size_t kMaxMessagesPerPump = 16;
     if (!netClient_ || state_ != State::Running) return;
-    size_t remaining = 16;
+    size_t remaining = kMaxMessagesPerPump;
     while (!pendingMessagePackets_.empty() && remaining-- > 0) {
         if (!netClient_->send(pendingMessagePackets_.front())) break;
         pendingMessagePackets_.pop_front();
@@ -432,8 +435,8 @@ void GameClient::replayEntitySnapshots() {
         }
         auto& interpolation = registry.get_or_emplace<InterpolationComponent>(entity);
         interpolation.samples.push_back(InterpolationSample{actor.position, glm::vec3(actor.pitch, actor.yaw, 0.0f), actor.velocity, actor.playerMode, snapshotClock_});
-        constexpr size_t maxSamples = 8;
-        while (interpolation.samples.size() > maxSamples) {
+        constexpr size_t kMaxSamples = 8;
+        while (interpolation.samples.size() > kMaxSamples) {
             interpolation.samples.pop_front();
         }
     }
@@ -497,8 +500,8 @@ void GameClient::updateRemoteInterpolation(float deltaTime) {
     MW_PROFILE_SCOPE("Client.RemoteInterpolation");
     snapshotClock_ += deltaTime;
 
-    constexpr double interpolationDelay = 0.10;
-    const double renderTime = snapshotClock_ - interpolationDelay;
+    constexpr double kInterpolationDelay = 0.10;
+    const double renderTime = snapshotClock_ - kInterpolationDelay;
     auto& registry = actorWorld_.registry();
     auto view = registry.view<TransformComponent, InterpolationComponent>(entt::exclude<SessionComponent>);
     for (auto entity : view) {

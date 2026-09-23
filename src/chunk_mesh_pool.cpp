@@ -21,7 +21,7 @@ constexpr uint32_t kReleaseFrameLatency = 3;
 constexpr uint32_t kIdleBufferFrames = 600;
 
 const bgfx::VertexLayout& chunkVertexLayout() {
-    static const bgfx::VertexLayout layout = [] {
+    static const bgfx::VertexLayout kLayout = [] {
         bgfx::VertexLayout built;
         built.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Uint8, true)
@@ -29,7 +29,7 @@ const bgfx::VertexLayout& chunkVertexLayout() {
             .end();
         return built;
     }();
-    return layout;
+    return kLayout;
 }
 
 }  // namespace

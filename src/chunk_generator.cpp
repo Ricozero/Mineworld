@@ -21,7 +21,7 @@ constexpr int kTreeHeightVariation = 3;
 constexpr int kTreeLeafRadius = 3;
 constexpr int kTreeColumnRadius = 2;
 constexpr int kMaxTreeTop = kTreeMinHeight + kTreeHeightVariation - 1 + kTreeLeafRadius;
-constexpr int kHeightFieldSize = ChunkLayout::SIZE + 2 * kTreeColumnRadius;
+constexpr int kHeightFieldSize = ChunkLayout::kSize + 2 * kTreeColumnRadius;
 
 uint32_t hash2D(int x, int z) {
     uint32_t value = static_cast<uint32_t>(x) * 0x8da6b343u;
@@ -63,8 +63,8 @@ HeightField buildHeightField(glm::ivec3 chunkMin) {
             const int height = terrainHeight(field.origin.x + x, field.origin.y + z);
             field.heights[static_cast<size_t>(z) * kHeightFieldSize + x] = height;
             field.maxHeight = std::max(field.maxHeight, height);
-            if (x >= kTreeColumnRadius && x < kTreeColumnRadius + ChunkLayout::SIZE &&
-                z >= kTreeColumnRadius && z < kTreeColumnRadius + ChunkLayout::SIZE) {
+            if (x >= kTreeColumnRadius && x < kTreeColumnRadius + ChunkLayout::kSize &&
+                z >= kTreeColumnRadius && z < kTreeColumnRadius + ChunkLayout::kSize) {
                 field.minHeight = std::min(field.minHeight, height);
             }
         }
@@ -142,8 +142,8 @@ ChunkData ChunkGenerator::generate(glm::ivec3 chunkPos) {
         return data;
     }
 
-    const glm::ivec3 chunkMin = chunkPos * ChunkLayout::SIZE;
-    const int chunkMaxY = chunkMin.y + ChunkLayout::SIZE - 1;
+    const glm::ivec3 chunkMin = chunkPos * ChunkLayout::kSize;
+    const int chunkMaxY = chunkMin.y + ChunkLayout::kSize - 1;
     const HeightField field = buildHeightField(chunkMin);
 
     if (chunkMin.y > field.maxHeight + kMaxTreeTop) {
@@ -155,7 +155,7 @@ ChunkData ChunkGenerator::generate(glm::ivec3 chunkPos) {
         return data;
     }
 
-    for (size_t index = 0; index < ChunkLayout::BLOCK_COUNT; ++index) {
+    for (size_t index = 0; index < ChunkLayout::kBlockCount; ++index) {
         const glm::ivec3 worldPos = chunkMin + ChunkLayout::blockPosition(index);
         data.set(index, generateBlock(worldPos, field));
     }

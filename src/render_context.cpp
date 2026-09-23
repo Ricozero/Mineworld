@@ -490,8 +490,8 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
 
         ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
-        constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::Begin("Mineworld", nullptr, flags)) {
+        constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::Begin("Mineworld", nullptr, kWindowFlags)) {
             ImGui::TextUnformatted("Local");
             if (ImGui::Button("Start", ImVec2(-1.0f, 36.0f))) {
                 action = StartMenuAction::Local;
@@ -629,13 +629,13 @@ void RenderContext::processInput(glm::vec3& rotation, PlayerComponent& player, C
         lastMouseY_ = mouseY;
         hasMousePosition_ = true;
     }
-    constexpr float mouseSensitivity = 0.12f;
+    constexpr float kMouseSensitivity = 0.12f;
     const float mouseDeltaX = static_cast<float>(mouseX - lastMouseX_);
     const float mouseDeltaY = static_cast<float>(mouseY - lastMouseY_);
     lastMouseX_ = mouseX;
     lastMouseY_ = mouseY;
-    rotation.y += mouseDeltaX * mouseSensitivity;
-    rotation.x = std::clamp(rotation.x - mouseDeltaY * mouseSensitivity, -88.0f, 88.0f);
+    rotation.y += mouseDeltaX * kMouseSensitivity;
+    rotation.x = std::clamp(rotation.x - mouseDeltaY * kMouseSensitivity, -88.0f, 88.0f);
     cameraYaw_ = rotation.y;
     cameraPitch_ = rotation.x;
 
@@ -654,7 +654,8 @@ void RenderContext::processInput(glm::vec3& rotation, PlayerComponent& player, C
 }
 
 void RenderContext::appendConsoleLine(std::string text, bool success) {
-    if (console_.lines.size() == 200) console_.lines.pop_front();
+    constexpr size_t kMaxConsoleLines = 200;
+    if (console_.lines.size() >= kMaxConsoleLines) console_.lines.pop_front();
     console_.lines.push_back({std::move(text), success});
     console_.lastActivityTime = std::chrono::steady_clock::now();
     console_.scrollToBottom = true;
@@ -680,11 +681,11 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
         return;
     }
 
-    constexpr float eyeHeight = 1.62f;
-    constexpr float cameraDistance = 4.0f;
-    constexpr float thirdPersonTargetHeight = 0.85f;
-    const glm::vec3 eyePosition = position + glm::vec3(0.0f, eyeHeight, 0.0f);
-    const glm::vec3 thirdPersonTarget = position + glm::vec3(0.0f, thirdPersonTargetHeight, 0.0f);
+    constexpr float kEyeHeight = 1.62f;
+    constexpr float kCameraDistance = 4.0f;
+    constexpr float kThirdPersonTargetHeight = 0.85f;
+    const glm::vec3 eyePosition = position + glm::vec3(0.0f, kEyeHeight, 0.0f);
+    const glm::vec3 thirdPersonTarget = position + glm::vec3(0.0f, kThirdPersonTargetHeight, 0.0f);
 
     switch (cameraViewMode_) {
         case CameraViewMode::FirstPerson:
@@ -693,12 +694,12 @@ void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch,
         case CameraViewMode::ThirdPersonFront: {
             cameraYaw_ = yaw + 180.0f;
             cameraPitch_ = -pitch;
-            cameraPosition_ = thirdPersonTarget - cameraBasis().forward * cameraDistance;
+            cameraPosition_ = thirdPersonTarget - cameraBasis().forward * kCameraDistance;
             break;
         }
         case CameraViewMode::ThirdPersonBack:
             cameraPitch_ = pitch;
-            cameraPosition_ = thirdPersonTarget - cameraBasis().forward * cameraDistance;
+            cameraPosition_ = thirdPersonTarget - cameraBasis().forward * kCameraDistance;
             break;
         default:
             break;
@@ -1003,11 +1004,11 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
                     continue;
                 }
                 const glm::ivec3 chunkPos = visible.chunkPos;
-                const glm::vec3 center = (glm::vec3(chunkPos) + glm::vec3(0.5f)) * static_cast<float>(ChunkLayout::SIZE);
+                const glm::vec3 center = (glm::vec3(chunkPos) + glm::vec3(0.5f)) * static_cast<float>(ChunkLayout::kSize);
                 const glm::vec3 offset = center - cameraPosition_;
 
                 float model[16];
-                bx::mtxTranslate(model, static_cast<float>(chunkPos.x * ChunkLayout::SIZE), static_cast<float>(chunkPos.y * ChunkLayout::SIZE), static_cast<float>(chunkPos.z * ChunkLayout::SIZE));
+                bx::mtxTranslate(model, static_cast<float>(chunkPos.x * ChunkLayout::kSize), static_cast<float>(chunkPos.y * ChunkLayout::kSize), static_cast<float>(chunkPos.z * ChunkLayout::kSize));
                 bgfx::setTransform(model);
                 bgfx::setVertexBuffer(0, bgfx::DynamicVertexBufferHandle{binding.vertexBuffer}, binding.vertexOffset, binding.vertexCount);
                 bgfx::setIndexBuffer(quadIndexBuffer, 0, ChunkMeshPool::indexCountForVertices(binding.vertexCount));
@@ -1074,8 +1075,8 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
                     lineBatch.indices.clear();
                 }
 
-                const glm::vec3 min = glm::vec3(chunk.chunkPos) * static_cast<float>(ChunkLayout::SIZE);
-                const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkLayout::SIZE));
+                const glm::vec3 min = glm::vec3(chunk.chunkPos) * static_cast<float>(ChunkLayout::kSize);
+                const glm::vec3 max = min + glm::vec3(static_cast<float>(ChunkLayout::kSize));
                 addLineBox(lineBatch, min, max, boundColor);
             }
             submitLineBatch(lineBatch, unlitShader_.program, kDepthLast);
@@ -1085,7 +1086,7 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
 
 void RenderContext::renderEntityNames(const ActorWorld& actorWorld, const float* viewProjection) {
     MW_PROFILE_SCOPE("Render.EntityNames");
-    constexpr float maxDistance = 64.0f;
+    constexpr float kMaxDistance = 64.0f;
     const auto& registry = actorWorld.registry();
     const auto view = registry.view<NameComponent, TransformComponent, MeshComponent>();
     auto* drawList = ImGui::GetBackgroundDrawList();
@@ -1101,7 +1102,7 @@ void RenderContext::renderEntityNames(const ActorWorld& actorWorld, const float*
         }
         const glm::vec3 anchor = transform.position + glm::vec3(0.0f, height + 0.25f, 0.0f);
         const glm::vec3 offset = anchor - cameraPosition_;
-        if (glm::dot(offset, offset) > maxDistance * maxDistance) {
+        if (glm::dot(offset, offset) > kMaxDistance * kMaxDistance) {
             continue;
         }
         float clip[4];
@@ -1129,7 +1130,7 @@ void RenderContext::renderProfilerOverlay() {
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.82f);
-    constexpr ImGuiWindowFlags flags =
+    constexpr ImGuiWindowFlags kWindowFlags =
         ImGuiWindowFlags_NoDecoration |
         ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoFocusOnAppearing |
@@ -1153,7 +1154,7 @@ void RenderContext::renderProfilerOverlay() {
         ImGui::TextUnformatted(text);
     };
 
-    if (ImGui::Begin("ProfilerOverlay", nullptr, flags)) {
+    if (ImGui::Begin("ProfilerOverlay", nullptr, kWindowFlags)) {
         char buffer[128];
         const glm::ivec3 chunkCoord = ChunkLayout::worldToChunk(cameraPosition_);
         if (ImGui::BeginTable("ProfilerSummaryTop", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
@@ -1265,8 +1266,8 @@ void RenderContext::renderInGameMenu() {
 
     ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(260.0f, 0.0f), ImGuiCond_Always);
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-    if (ImGui::Begin("Game Menu", nullptr, flags)) {
+    constexpr ImGuiWindowFlags kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("Game Menu", nullptr, kWindowFlags)) {
         if (ImGui::Button("Resume", ImVec2(-1.0f, 36.0f))) {
             inGameMenuOpen_ = false;
             pendingInGameMenuAction_ = InGameMenuAction::None;
@@ -1464,7 +1465,7 @@ void RenderContext::renderConsole() {
                 if (!characters.empty()) {
                     std::string text = console_.input.data();
                     for (const auto character : characters) {
-                        if (character >= 0x20 && character != 0x7f) appendUtf8Codepoint(text, character, MAX_INPUT_TEXT_BYTES);
+                        if (character >= 0x20 && character != 0x7f) appendUtf8Codepoint(text, character, kMaxInputTextBytes);
                     }
                     console_.history.edit(text);
                     std::memcpy(console_.input.data(), text.c_str(), text.size() + 1);
@@ -1491,8 +1492,8 @@ void RenderContext::renderConsole() {
                 }
                 return 0;
             };
-            constexpr auto inputFlags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackAlways;
-            if (ImGui::InputText("##ConsoleInput", console_.input.data(), console_.input.size(), inputFlags, callback, &console_)) {
+            constexpr auto kInputFlags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackAlways;
+            if (ImGui::InputText("##ConsoleInput", console_.input.data(), console_.input.size(), kInputFlags, callback, &console_)) {
                 if (!trimText(console_.input.data()).empty()) console_.pendingInputs.emplace_back(console_.input.data());
                 console_.history.submit();
                 console_.input[0] = '\0';

@@ -31,7 +31,7 @@ BlobInfo inspect(const ChunkData& storage) {
     return info;
 }
 
-constexpr size_t N = ChunkLayout::BLOCK_COUNT;
+constexpr size_t kBlockCount = ChunkLayout::kBlockCount;
 
 BlockData randomBlock(Rng& rng, uint32_t typeCount, uint32_t orientationCount) {
     return BlockData{static_cast<BlockType>(rng.below(typeCount)), static_cast<BlockOrientation>(rng.below(orientationCount))};
@@ -48,7 +48,7 @@ size_t countNonAir(const std::vector<uint16_t>& ref) {
 }
 
 testing::AssertionResult sameContents(const ChunkData& storage, const std::vector<uint16_t>& ref) {
-    for (size_t i = 0; i < N; ++i) {
+    for (size_t i = 0; i < kBlockCount; ++i) {
         const auto actual = packBlock(storage.get(i));
         if (actual != ref[i]) {
             return testing::AssertionFailure() << "Block index: " << i << ", actual: " << actual << ", expected: " << ref[i];
@@ -61,14 +61,14 @@ void testStorage(uint32_t typeCount, uint32_t orientationCount, uint64_t seed, c
     SCOPED_TRACE(testing::Message() << label << ", seed: " << seed);
     Rng rng{seed};
     ChunkData storage;
-    std::vector<uint16_t> ref(N, packBlock(BlockData{}));
+    std::vector<uint16_t> ref(kBlockCount, packBlock(BlockData{}));
 
     ASSERT_TRUE(storage.isUniform()) << "fresh storage is uniform";
     ASSERT_EQ(storage.blockCount(), 0) << "fresh storage has no solid blocks";
     ASSERT_TRUE(sameContents(storage, ref)) << "fresh storage reads as air";
 
     for (int iteration = 0; iteration < 400000; ++iteration) {
-        const size_t index = rng.below(static_cast<uint32_t>(N));
+        const size_t index = rng.below(static_cast<uint32_t>(kBlockCount));
         const BlockData block = randomBlock(rng, typeCount, orientationCount);
         const uint16_t packed = packBlock(block);
         const bool changed = storage.set(index, block);
@@ -126,7 +126,7 @@ TEST(ChunkDataTest, UniformAndMalformedBlobs) {
     ChunkData storage;
     storage.fill(BlockData{BlockType::Stone, BlockOrientation::North});
     EXPECT_TRUE(storage.isUniform()) << "fill() produces a uniform chunk";
-    EXPECT_EQ(storage.blockCount(), N) << "a uniform solid chunk counts every block";
+    EXPECT_EQ(storage.blockCount(), kBlockCount) << "a uniform solid chunk counts every block";
     EXPECT_EQ(inspect(storage).bits, 0) << "a uniform chunk keeps the uniform form";
 
     std::vector<uint8_t> blob;
@@ -150,23 +150,23 @@ TEST(ChunkDataTest, UniformAndMalformedBlobs) {
     EXPECT_FALSE((ChunkData::deserialize(std::vector<uint8_t>{0, 0, static_cast<uint8_t>(BlockType::Count)}, sink))) << "a uniform blob with an invalid block is rejected";
 
     std::vector<uint8_t> badBits{1, 3, 0, 0, 0};
-    badBits.resize(3 + 2 + N * 3 / 8, 0);
+    badBits.resize(3 + 2 + kBlockCount * 3 / 8, 0);
     EXPECT_FALSE(ChunkData::deserialize(badBits, sink)) << "an unsupported index width is rejected";
 
     std::vector<uint8_t> tooBig{1, 1, 2};
-    tooBig.resize(3 + 3 * 2 + N / 8, 0);
+    tooBig.resize(3 + 3 * 2 + kBlockCount / 8, 0);
     EXPECT_FALSE(ChunkData::deserialize(tooBig, sink)) << "a palette larger than the index width allows is rejected";
 
     std::vector<uint8_t> shortBlob{1, 1, 1, 0, 0, 0, 0};
     EXPECT_FALSE(ChunkData::deserialize(shortBlob, sink)) << "a truncated palette blob is rejected";
 
     std::vector<uint8_t> outOfRange{1, 1, 0, 0, 0};
-    outOfRange.resize(3 + 2 + N / 8, 0);
+    outOfRange.resize(3 + 2 + kBlockCount / 8, 0);
     outOfRange.back() = 0x80;
     EXPECT_FALSE(ChunkData::deserialize(outOfRange, sink)) << "an out-of-range index is rejected";
 
     std::vector<uint8_t> badEntry{1, 1, 1, 0, 0, static_cast<uint8_t>(BlockType::Count), 0};
-    badEntry.resize(3 + 4 + N / 8, 0);
+    badEntry.resize(3 + 4 + kBlockCount / 8, 0);
     EXPECT_FALSE(ChunkData::deserialize(badEntry, sink)) << "an invalid palette entry is rejected";
 }
 
@@ -182,7 +182,7 @@ TEST(ChunkCodecTest, RoundTripCorruptionAndCacheInvalidation) {
         }
         ASSERT_FALSE(ChunkCodec::decode(encoded.compression, encoded.uncompressedSize + 1, encoded.bytes, decoded)) << "accepted wrong decoded length";
         ASSERT_FALSE(ChunkCodec::decode(static_cast<ChunkCompression>(255), encoded.uncompressedSize, encoded.bytes, decoded)) << "accepted unknown compression";
-        ASSERT_FALSE(ChunkCodec::decode(encoded.compression, ChunkData::MAX_SERIALIZED_SIZE + 1, encoded.bytes, decoded)) << "accepted oversized decoded length";
+        ASSERT_FALSE(ChunkCodec::decode(encoded.compression, ChunkData::kMaxSerializedSize + 1, encoded.bytes, decoded)) << "accepted oversized decoded length";
         ASSERT_NO_FATAL_FAILURE(sameBlocks(data, decoded));
     }
     ASSERT_EQ(ChunkCodec::encode(patternedData(false)).compression, ChunkCompression::Lz4) << "pattern did not compress";
@@ -226,8 +226,8 @@ TEST(ChunkCodecBenchmark, ConcentratedEncodeDecodeBurst) {
     const auto data = patternedData(false);
     double encodeTotal = 0.0, encodePeak = 0.0, decodeTotal = 0.0, decodePeak = 0.0;
     size_t rawBytes = 0, encodedBytes = 0;
-    constexpr int count = 2048;
-    for (int i = 0; i < count; ++i) {
+    constexpr int kChunkCount = 2048;
+    for (int i = 0; i < kChunkCount; ++i) {
         const auto start = Clock::now();
         const auto encoded = ChunkCodec::encode(data);
         const auto encodedAt = Clock::now();
@@ -243,7 +243,7 @@ TEST(ChunkCodecBenchmark, ConcentratedEncodeDecodeBurst) {
         rawBytes += encoded.uncompressedSize;
         encodedBytes += encoded.bytes.size();
     }
-    std::cout << "Codec burst (" << count << " patterned chunks): raw=" << rawBytes << " encoded=" << encodedBytes << " encode total/peak ms=" << encodeTotal << '/' << encodePeak << " decode total/peak ms=" << decodeTotal << '/' << decodePeak << '\n';
+    std::cout << "Codec burst (" << kChunkCount << " patterned chunks): raw=" << rawBytes << " encoded=" << encodedBytes << " encode total/peak ms=" << encodeTotal << '/' << encodePeak << " decode total/peak ms=" << decodeTotal << '/' << decodePeak << '\n';
 }
 
 }  // namespace

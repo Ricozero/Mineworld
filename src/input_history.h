@@ -14,7 +14,7 @@ public:
     void submit();
 
 private:
-    static constexpr size_t MAX_ENTRIES = 100;
+    static constexpr size_t kMaxEntries = 100;
     std::vector<std::string> entries_;
     std::string draft_;
     size_t position_ = 0;

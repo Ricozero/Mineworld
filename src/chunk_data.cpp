@@ -8,7 +8,7 @@
 namespace {
 
 static_assert(std::endian::native == std::endian::little, "The index array is serialized as a raw little-endian uint32 blob");
-static_assert(ChunkLayout::BLOCK_COUNT % 32 == 0, "Every supported index width must tile the index array into whole 32-bit words");
+static_assert(ChunkLayout::kBlockCount % 32 == 0, "Every supported index width must tile the index array into whole 32-bit words");
 
 constexpr bool isValidIndexBits(uint8_t bits) {
     return bits == 1 || bits == 2 || bits == 4 || bits == 8;
@@ -21,14 +21,14 @@ constexpr uint8_t indexShiftFor(uint8_t bits) {
 // clang-format on
 
 constexpr size_t wordCount(uint8_t bits) {
-    return bits == 0 ? 0 : ChunkLayout::BLOCK_COUNT * bits / 32;
+    return bits == 0 ? 0 : ChunkLayout::kBlockCount * bits / 32;
 }
 
 constexpr size_t paletteCapacity(uint8_t bits) {
     return size_t{1} << bits;
 }
 
-static_assert(static_cast<size_t>(BlockType::Count) * static_cast<size_t>(BlockOrientation::Count) <= paletteCapacity(ChunkData::MAX_INDEX_BITS));
+static_assert(static_cast<size_t>(BlockType::Count) * static_cast<size_t>(BlockOrientation::Count) <= paletteCapacity(ChunkData::kMaxIndexBits));
 
 constexpr uint8_t minIndexBits(size_t paletteSize) {
     if (paletteSize <= 2) return 1;
@@ -36,8 +36,6 @@ constexpr uint8_t minIndexBits(size_t paletteSize) {
     if (paletteSize <= 16) return 4;
     return 8;
 }
-
-constexpr size_t kNoSlot = ~size_t{0};
 
 void appendU16(std::vector<uint8_t>& out, uint16_t value) {
     out.push_back(static_cast<uint8_t>(value & 0xFF));
@@ -75,15 +73,15 @@ void ChunkData::fill(BlockData block) {
     uniformBlock_ = block;
     indexBits_ = 0;
     indexShift_ = 0;
-    blockCount_ = block.type == BlockType::Air ? 0 : static_cast<uint16_t>(ChunkLayout::BLOCK_COUNT);
+    blockCount_ = block.type == BlockType::Air ? 0 : static_cast<uint16_t>(ChunkLayout::kBlockCount);
     palette_.clear();
     palette_.shrink_to_fit();
     data_.reset();
 }
 
 bool ChunkData::set(size_t index, BlockData block) {
-    assert(index < ChunkLayout::BLOCK_COUNT);
-    if (index >= ChunkLayout::BLOCK_COUNT || !isValidBlock(block)) {
+    assert(index < ChunkLayout::kBlockCount);
+    if (index >= ChunkLayout::kBlockCount || !isValidBlock(block)) {
         return false;
     }
 
@@ -91,7 +89,7 @@ bool ChunkData::set(size_t index, BlockData block) {
         if (block == uniformBlock_) {
             return false;
         }
-        palette_.assign(1, PaletteEntry{uniformBlock_, static_cast<uint16_t>(ChunkLayout::BLOCK_COUNT)});
+        palette_.assign(1, PaletteEntry{uniformBlock_, static_cast<uint16_t>(ChunkLayout::kBlockCount)});
         rebuild(1, nullptr);
     }
 
@@ -121,7 +119,7 @@ void ChunkData::optimize() {
     }
 
     std::vector<uint16_t> counts(palette_.size(), 0);
-    for (size_t index = 0; index < ChunkLayout::BLOCK_COUNT; ++index) {
+    for (size_t index = 0; index < ChunkLayout::kBlockCount; ++index) {
         ++counts[rawIndex(index)];
     }
 
@@ -169,7 +167,7 @@ void ChunkData::rebuild(uint8_t bits, const uint16_t* remap) {
     auto newData = std::make_unique<uint32_t[]>(wordCount(bits));
 
     if (indexBits_ != 0) {
-        for (size_t index = 0; index < ChunkLayout::BLOCK_COUNT; ++index) {
+        for (size_t index = 0; index < ChunkLayout::kBlockCount; ++index) {
             const uint16_t slot = rawIndex(index);
             const uint32_t value = remap != nullptr ? remap[slot] : slot;
             const uint32_t offset = (static_cast<uint32_t>(index) & ((32u >> newShift) - 1u)) << newShift;
@@ -183,6 +181,7 @@ void ChunkData::rebuild(uint8_t bits, const uint16_t* remap) {
 }
 
 uint16_t ChunkData::findOrAddPaletteEntry(BlockData block) {
+    constexpr size_t kNoSlot = ~size_t{0};
     size_t freeSlot = kNoSlot;
     for (size_t slot = 0; slot < palette_.size(); ++slot) {
         if (palette_[slot].block == block) {
@@ -199,7 +198,7 @@ uint16_t ChunkData::findOrAddPaletteEntry(BlockData block) {
     }
 
     if (palette_.size() == paletteCapacity(indexBits_)) {
-        if (indexBits_ >= MAX_INDEX_BITS) {
+        if (indexBits_ >= kMaxIndexBits) {
             assert(false && "palette overflow");
             return 0;
         }
@@ -214,14 +213,14 @@ void ChunkData::serialize(std::vector<uint8_t>& out) const {
     out.clear();
 
     if (indexBits_ == 0) {
-        out.reserve(SERIALIZED_HEADER_SIZE);
+        out.reserve(kSerializedHeaderSize);
         out.push_back(static_cast<uint8_t>(Format::Uniform));
         appendU16(out, packBlock(uniformBlock_));
         return;
     }
 
     const size_t dataBytes = wordCount(indexBits_) * sizeof(uint32_t);
-    out.reserve(SERIALIZED_HEADER_SIZE + palette_.size() * sizeof(uint16_t) + dataBytes);
+    out.reserve(kSerializedHeaderSize + palette_.size() * sizeof(uint16_t) + dataBytes);
     out.push_back(static_cast<uint8_t>(Format::Palette));
     out.push_back(indexBits_);
     out.push_back(static_cast<uint8_t>(palette_.size() - 1));
@@ -238,7 +237,7 @@ bool ChunkData::deserialize(std::span<const uint8_t> bytes, ChunkData& out) {
     }
 
     if (bytes[0] == static_cast<uint8_t>(Format::Uniform)) {
-        if (bytes.size() != SERIALIZED_HEADER_SIZE) {
+        if (bytes.size() != kSerializedHeaderSize) {
             return false;
         }
         const BlockData block = unpackBlock(readU16(bytes, 1));
@@ -249,7 +248,7 @@ bool ChunkData::deserialize(std::span<const uint8_t> bytes, ChunkData& out) {
         return true;
     }
 
-    if (bytes[0] != static_cast<uint8_t>(Format::Palette) || bytes.size() < SERIALIZED_HEADER_SIZE) {
+    if (bytes[0] != static_cast<uint8_t>(Format::Palette) || bytes.size() < kSerializedHeaderSize) {
         return false;
     }
 
@@ -264,13 +263,13 @@ bool ChunkData::deserialize(std::span<const uint8_t> bytes, ChunkData& out) {
 
     const size_t paletteBytes = paletteSize * sizeof(uint16_t);
     const size_t dataBytes = wordCount(bits) * sizeof(uint32_t);
-    if (bytes.size() != SERIALIZED_HEADER_SIZE + paletteBytes + dataBytes) {
+    if (bytes.size() != kSerializedHeaderSize + paletteBytes + dataBytes) {
         return false;
     }
 
     std::vector<PaletteEntry> palette(paletteSize);
     for (size_t slot = 0; slot < paletteSize; ++slot) {
-        palette[slot].block = unpackBlock(readU16(bytes, SERIALIZED_HEADER_SIZE + slot * sizeof(uint16_t)));
+        palette[slot].block = unpackBlock(readU16(bytes, kSerializedHeaderSize + slot * sizeof(uint16_t)));
         if (!isValidBlock(palette[slot].block)) {
             return false;
         }
@@ -281,9 +280,9 @@ bool ChunkData::deserialize(std::span<const uint8_t> bytes, ChunkData& out) {
     result.indexShift_ = indexShiftFor(bits);
     result.palette_ = std::move(palette);
     result.data_ = std::make_unique<uint32_t[]>(wordCount(bits));
-    std::copy_n(bytes.data() + SERIALIZED_HEADER_SIZE + paletteBytes, dataBytes, reinterpret_cast<uint8_t*>(result.data_.get()));
+    std::copy_n(bytes.data() + kSerializedHeaderSize + paletteBytes, dataBytes, reinterpret_cast<uint8_t*>(result.data_.get()));
 
-    for (size_t index = 0; index < ChunkLayout::BLOCK_COUNT; ++index) {
+    for (size_t index = 0; index < ChunkLayout::kBlockCount; ++index) {
         const uint16_t slot = result.rawIndex(index);
         if (slot >= paletteSize) {
             return false;

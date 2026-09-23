@@ -136,7 +136,7 @@ TEST_F(GameClientNetworkTest, HeadlessConnectionTimeoutClosesTransport) {
 }
 
 TEST_F(GameClientNetworkTest, RenameUnnamedActorsRemovalAndReentry) {
-    constexpr entt::entity nullEntity = entt::null;
+    constexpr entt::entity kNullEntity = entt::null;
     NetServerHello hello;
     hello.sessionId = 7;
     hello.actorId = 1;
@@ -154,7 +154,7 @@ TEST_F(GameClientNetworkTest, RenameUnnamedActorsRemovalAndReentry) {
     const auto local = world.getEntity(1);
     const auto localEffect = world.createActor(99, {});
     const auto remote = world.getEntity(2);
-    ASSERT_NE(remote, nullEntity);
+    ASSERT_NE(remote, kNullEntity);
     EXPECT_EQ(world.registry().get<TransformComponent>(local).position, glm::vec3(1.0f, 2.0f, 3.0f));
     EXPECT_EQ(world.registry().get<NameComponent>(local).name, "renamed local");
     EXPECT_TRUE(world.registry().all_of<RandomMovementComponent>(remote));
@@ -167,7 +167,7 @@ TEST_F(GameClientNetworkTest, RenameUnnamedActorsRemovalAndReentry) {
     EXPECT_EQ(world.getEntity(2), remote);
     EXPECT_EQ(world.registry().get<NameComponent>(remote).name, "new name");
     EXPECT_EQ(world.registry().get<InterpolationComponent>(remote).samples.size(), 2u);
-    EXPECT_EQ(world.getEntity(3), nullEntity);
+    EXPECT_EQ(world.getEntity(3), kNullEntity);
     EXPECT_TRUE(world.registry().valid(local));
     EXPECT_TRUE(world.registry().valid(localEffect));
     receiveSnapshot(NetEntitySnapshot{1, {}});
@@ -175,14 +175,14 @@ TEST_F(GameClientNetworkTest, RenameUnnamedActorsRemovalAndReentry) {
     receiveSnapshot(NetEntitySnapshot{3, {{2, ""}}});
     EXPECT_FALSE(world.registry().all_of<NameComponent>(remote));
     receiveSnapshot(NetEntitySnapshot{4, {}});
-    EXPECT_EQ(world.getEntity(2), nullEntity);
+    EXPECT_EQ(world.getEntity(2), kNullEntity);
     receiveSnapshot(NetEntitySnapshot{5, {{2, "back"}}});
-    EXPECT_NE(world.getEntity(2), nullEntity);
+    EXPECT_NE(world.getEntity(2), kNullEntity);
     EXPECT_EQ(world.registry().get<InterpolationComponent>(world.getEntity(2)).samples.size(), 1u);
     client_->disconnect();
     receiveSnapshot(NetEntitySnapshot{6, {}});
     EXPECT_EQ(client_->state(), GameClient::State::Disconnecting);
-    EXPECT_NE(world.getEntity(2), nullEntity);
+    EXPECT_NE(world.getEntity(2), kNullEntity);
 }
 
 TEST_F(GameClientNetworkTest, EntityInterestIndependentOfTerrainAndCoreChunks) {

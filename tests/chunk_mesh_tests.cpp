@@ -14,15 +14,15 @@ namespace {
 
 using namespace test_support;
 
-constexpr size_t N = ChunkLayout::BLOCK_COUNT;
-constexpr int SIZE = 16;
-constexpr int SIZE_BITS = 4;
-constexpr int X_STRIDE = 1;
-constexpr int Z_STRIDE = SIZE;
-constexpr int Y_STRIDE = SIZE * SIZE;
+constexpr size_t kBlockCount = ChunkLayout::kBlockCount;
+constexpr int kSize = 16;
+constexpr int kSizeBits = 4;
+constexpr int kXStride = 1;
+constexpr int kZStride = kSize;
+constexpr int kYStride = kSize * kSize;
 
 constexpr size_t blockIndex(int x, int y, int z) {
-    return (static_cast<size_t>(y) << (SIZE_BITS * 2)) | (static_cast<size_t>(z) << SIZE_BITS) | static_cast<size_t>(x);
+    return (static_cast<size_t>(y) << (kSizeBits * 2)) | (static_cast<size_t>(z) << kSizeBits) | static_cast<size_t>(x);
 }
 
 constexpr int bitIndex(int faceA, int faceB) {
@@ -36,17 +36,17 @@ struct NeighborStep {
 };
 
 constexpr std::array<NeighborStep, 6> kNeighborSteps = {{
-    {X_STRIDE, 0, SIZE - 1},
-    {-X_STRIDE, 0, 0},
-    {Y_STRIDE, 1, SIZE - 1},
-    {-Y_STRIDE, 1, 0},
-    {Z_STRIDE, 2, SIZE - 1},
-    {-Z_STRIDE, 2, 0},
+    {kXStride, 0, kSize - 1},
+    {-kXStride, 0, 0},
+    {kYStride, 1, kSize - 1},
+    {-kYStride, 1, 0},
+    {kZStride, 2, kSize - 1},
+    {-kZStride, 2, 0},
 }};
 
-uint32_t referenceConnectivity(const std::array<uint8_t, N>& air) {
+uint32_t referenceConnectivity(const std::array<uint8_t, kBlockCount>& air) {
     uint8_t reachable[6] = {};
-    std::array<uint8_t, N> visited{};
+    std::array<uint8_t, kBlockCount> visited{};
     std::queue<size_t> q;
 
     for (int startFace = 0; startFace < 6; ++startFace) {
@@ -59,14 +59,14 @@ uint32_t referenceConnectivity(const std::array<uint8_t, N>& air) {
             }
         };
 
-        for (int a = 0; a < SIZE; ++a) {
-            for (int b = 0; b < SIZE; ++b) {
+        for (int a = 0; a < kSize; ++a) {
+            for (int b = 0; b < kSize; ++b) {
                 switch (startFace) {
-                    case 0: enqueue(blockIndex(SIZE - 1, a, b)); break;
+                    case 0: enqueue(blockIndex(kSize - 1, a, b)); break;
                     case 1: enqueue(blockIndex(0, a, b)); break;
-                    case 2: enqueue(blockIndex(a, SIZE - 1, b)); break;
+                    case 2: enqueue(blockIndex(a, kSize - 1, b)); break;
                     case 3: enqueue(blockIndex(a, 0, b)); break;
-                    case 4: enqueue(blockIndex(a, b, SIZE - 1)); break;
+                    case 4: enqueue(blockIndex(a, b, kSize - 1)); break;
                     case 5: enqueue(blockIndex(a, b, 0)); break;
                 }
             }
@@ -75,16 +75,16 @@ uint32_t referenceConnectivity(const std::array<uint8_t, N>& air) {
         while (!q.empty()) {
             const size_t index = q.front();
             q.pop();
-            const int x = static_cast<int>(index & (SIZE - 1));
-            const int y = static_cast<int>(index >> (SIZE_BITS * 2));
-            const int z = static_cast<int>((index >> SIZE_BITS) & (SIZE - 1));
+            const int x = static_cast<int>(index & (kSize - 1));
+            const int y = static_cast<int>(index >> (kSizeBits * 2));
+            const int z = static_cast<int>((index >> kSizeBits) & (kSize - 1));
             const int pos[3] = {x, y, z};
 
-            if (x == SIZE - 1) reachable[startFace] |= (1 << 0);
+            if (x == kSize - 1) reachable[startFace] |= (1 << 0);
             if (x == 0) reachable[startFace] |= (1 << 1);
-            if (y == SIZE - 1) reachable[startFace] |= (1 << 2);
+            if (y == kSize - 1) reachable[startFace] |= (1 << 2);
             if (y == 0) reachable[startFace] |= (1 << 3);
-            if (z == SIZE - 1) reachable[startFace] |= (1 << 4);
+            if (z == kSize - 1) reachable[startFace] |= (1 << 4);
             if (z == 0) reachable[startFace] |= (1 << 5);
 
             for (const NeighborStep& step : kNeighborSteps) {
@@ -124,19 +124,19 @@ constexpr std::array<std::array<glm::ivec3, 4>, 6> kFaceCorners = {{
 
 uint32_t referenceFaceColor(BlockType type, int face) {
     const glm::vec3 lightDirection = glm::normalize(glm::vec3(0.4f, 1.0f, 0.55f));
-    constexpr float ambient = 0.3f;
+    constexpr float kAmbient = 0.3f;
     const float wrapped = glm::dot(glm::vec3(kChunkFaceOffsets[face]), lightDirection) * 0.5f + 0.5f;
-    const float shade = ambient + (1.0f - ambient) * wrapped;
+    const float shade = kAmbient + (1.0f - kAmbient) * wrapped;
     return glm::packUnorm4x8(glm::vec4(kBlockAlbedo[static_cast<size_t>(type)] * shade, 1.0f));
 }
 
 BlockData blockAcross(const VoxelWorld& world, glm::ivec3 chunkPos, glm::ivec3 localPos) {
     for (int axis = 0; axis < 3; ++axis) {
         if (localPos[axis] < 0) {
-            localPos[axis] += SIZE;
+            localPos[axis] += kSize;
             chunkPos[axis] -= 1;
-        } else if (localPos[axis] >= SIZE) {
-            localPos[axis] -= SIZE;
+        } else if (localPos[axis] >= kSize) {
+            localPos[axis] -= kSize;
             chunkPos[axis] += 1;
         }
     }
@@ -151,9 +151,9 @@ std::vector<ChunkVertex> referenceMesh(const VoxelWorld& world, glm::ivec3 chunk
         return vertices;
     }
 
-    for (int y = 0; y < SIZE; ++y) {
-        for (int z = 0; z < SIZE; ++z) {
-            for (int x = 0; x < SIZE; ++x) {
+    for (int y = 0; y < kSize; ++y) {
+        for (int z = 0; z < kSize; ++z) {
+            for (int x = 0; x < kSize; ++x) {
                 const glm::ivec3 localPos(x, y, z);
                 const BlockData block = chunk->getBlock(blockIndex(x, y, z));
                 if (block.type == BlockType::Air) {
@@ -195,8 +195,8 @@ ChunkFaceConnectivity referenceMeshConnectivity(const VoxelWorld& world, glm::iv
     if (chunk == nullptr || chunk->isEmpty()) {
         return kOpenChunkFaceConnectivity;
     }
-    std::array<uint8_t, N> air{};
-    for (size_t index = 0; index < N; ++index) {
+    std::array<uint8_t, kBlockCount> air{};
+    for (size_t index = 0; index < kBlockCount; ++index) {
         air[index] = chunk->getBlock(index).type == BlockType::Air ? 1 : 0;
     }
     return connectivityFromMask(referenceConnectivity(air));
@@ -224,10 +224,10 @@ void loadUniform(VoxelWorld& world, glm::ivec3 chunkPos, BlockData block) {
     world.loadChunk(chunkPos, 1, ChunkData{block});
 }
 
-void loadPalette(VoxelWorld& world, glm::ivec3 chunkPos, const std::array<BlockData, N>& blocks) {
+void loadPalette(VoxelWorld& world, glm::ivec3 chunkPos, const std::array<BlockData, kBlockCount>& blocks) {
     ChunkData data;
     data.set(0, BlockData{BlockType::Stone});
-    for (size_t index = 0; index < N; ++index) {
+    for (size_t index = 0; index < kBlockCount; ++index) {
         data.set(index, blocks[index]);
     }
     world.loadChunk(chunkPos, 1, std::move(data));
@@ -282,18 +282,18 @@ TEST(ChunkMeshTest, MatchesReferenceMesher) {
         ASSERT_NO_FATAL_FAILURE(compareMesh(scratch, world, center, "uniform solid chunk with mixed neighbours"));
     }
     {
-        std::array<BlockData, N> blocks;
+        std::array<BlockData, kBlockCount> blocks;
         blocks.fill(BlockData{BlockType::Wood, BlockOrientation::Up});
         VoxelWorld world;
         loadPalette(world, center, blocks);
         ASSERT_NO_FATAL_FAILURE(compareMesh(scratch, world, center, "solid palette chunk"));
     }
     {
-        std::array<BlockData, N> blocks;
+        std::array<BlockData, kBlockCount> blocks;
         blocks.fill(BlockData{});
         for (int y = 0; y < 8; ++y) {
-            for (int z = 0; z < SIZE; ++z) {
-                for (int x = 0; x < SIZE; ++x) {
+            for (int z = 0; z < kSize; ++z) {
+                for (int x = 0; x < kSize; ++x) {
                     blocks[blockIndex(x, y, z)] = BlockData{BlockType::Grass};
                 }
             }
@@ -307,12 +307,12 @@ TEST(ChunkMeshTest, MatchesReferenceMesher) {
         ASSERT_NO_FATAL_FAILURE(compareMesh(scratch, world, center, "floor with a shaft"));
     }
 
-    std::array<BlockData, N> blocks;
+    std::array<BlockData, kBlockCount> blocks;
     for (int density = 5; density < 100; density += 17) {
         for (int trial = 0; trial < 12; ++trial) {
             SCOPED_TRACE(testing::Message() << "Density: " << density << ", trial: " << trial);
             VoxelWorld world;
-            for (size_t index = 0; index < N; ++index) {
+            for (size_t index = 0; index < kBlockCount; ++index) {
                 if (rng.below(100) >= static_cast<uint32_t>(density)) {
                     blocks[index] = BlockData{};
                     continue;
@@ -329,8 +329,8 @@ TEST(ChunkMeshTest, MatchesReferenceMesher) {
                     case 1: loadUniform(world, center + offset, BlockData{}); break;
                     case 2: loadUniform(world, center + offset, BlockData{BlockType::Stone}); break;
                     default: {
-                        std::array<BlockData, N> neighborBlocks;
-                        for (size_t index = 0; index < N; ++index) {
+                        std::array<BlockData, kBlockCount> neighborBlocks;
+                        for (size_t index = 0; index < kBlockCount; ++index) {
                             neighborBlocks[index] = rng.below(2) == 0 ? BlockData{} : BlockData{BlockType::Dirt};
                         }
                         loadPalette(world, center + offset, neighborBlocks);

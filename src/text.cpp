@@ -86,9 +86,9 @@ bool isSingleLineText(std::string_view text, size_t maxBytes) {
 }
 
 bool isValidName(std::string_view name) {
-    if (name.size() > MAX_NAME_CHARACTERS * 4) return false;
+    if (name.size() > kMaxNameCharacters * 4) return false;
     const auto length = utf8CodepointCount(name);
-    if (!length || *length > MAX_NAME_CHARACTERS) return false;
+    if (!length || *length > kMaxNameCharacters) return false;
     for (unsigned char c : name) {
         if (c < 0x20 || c == 0x7f) return false;
     }

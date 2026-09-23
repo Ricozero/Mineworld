@@ -10,8 +10,8 @@
 #include <variant>
 #include <vector>
 
-inline constexpr size_t MAX_COMMAND_ARGUMENTS = 16;
-inline constexpr size_t MAX_COMMAND_STRING_BYTES = 256;
+inline constexpr size_t kMaxCommandArguments = 16;
+inline constexpr size_t kMaxCommandStringBytes = 256;
 
 enum class CommandOperation : uint16_t {
     None,
@@ -47,7 +47,7 @@ struct CommandParameter {
     std::string_view name;
     CommandArgumentType type;
     bool optional = false;
-    size_t maxBytes = MAX_COMMAND_STRING_BYTES;
+    size_t maxBytes = kMaxCommandStringBytes;
 };
 
 struct CommandDefinition {

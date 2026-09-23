@@ -56,7 +56,7 @@ struct StdinConsole::Impl {
     std::string unread;
     size_t unreadOffset = 0;
     std::deque<StdinLine> lines;
-    static constexpr size_t MAX_LINES = 16;
+    static constexpr size_t kMaxLines = 16;
 
 #if defined(_WIN32)
     Impl() {
@@ -330,7 +330,7 @@ struct StdinConsole::Impl {
             line.clear();
             overflow = false;
         } else {
-            if (!overflow && text->size() <= MAX_INPUT_TEXT_BYTES) {
+            if (!overflow && text->size() <= kMaxInputTextBytes) {
                 history.edit(*text);
                 history.submit();
             }
@@ -344,8 +344,8 @@ struct StdinConsole::Impl {
     }
 
     void finishLine() {
-        overflow = overflow || line.size() > MAX_INPUT_TEXT_BYTES;
-        if (overflow) lines.push_back({{}, "Input exceeds 4096 bytes."});
+        overflow = overflow || line.size() > kMaxInputTextBytes;
+        if (overflow) lines.push_back({{}, "Input exceeds " + std::to_string(kMaxInputTextBytes) + " bytes."});
         else lines.push_back({std::move(line), {}});
         line.clear();
         overflow = false;
@@ -353,7 +353,9 @@ struct StdinConsole::Impl {
 
 #if defined(_WIN32)
     void pollConsole() {
-        for (unsigned budget = 0; budget < 128 && lines.size() < MAX_LINES && !ended; ++budget) {
+        constexpr unsigned kMaxEventsPerPoll = 128;
+        constexpr unsigned kMaxKeyRepeatsPerEvent = 128;
+        for (unsigned budget = 0; budget < kMaxEventsPerPoll && lines.size() < kMaxLines && !ended; ++budget) {
             DWORD available = 0;
             if (!GetNumberOfConsoleInputEvents(input, &available)) {
                 ended = true;
@@ -370,11 +372,11 @@ struct StdinConsole::Impl {
             const auto& key = record.Event.KeyEvent;
             const wchar_t c = key.uChar.UnicodeChar;
             if (key.wVirtualKeyCode == VK_UP || key.wVirtualKeyCode == VK_DOWN) {
-                for (unsigned i = 0; i < std::min<unsigned>(key.wRepeatCount, 128); ++i) browseHistory(key.wVirtualKeyCode == VK_UP);
+                for (unsigned i = 0; i < std::min<unsigned>(key.wRepeatCount, kMaxKeyRepeatsPerEvent); ++i) browseHistory(key.wVirtualKeyCode == VK_UP);
                 continue;
             }
             if (key.wVirtualKeyCode == VK_LEFT || key.wVirtualKeyCode == VK_RIGHT) {
-                for (unsigned i = 0; i < std::min<unsigned>(key.wRepeatCount, 128); ++i) moveCursor(key.wVirtualKeyCode == VK_RIGHT);
+                for (unsigned i = 0; i < std::min<unsigned>(key.wRepeatCount, kMaxKeyRepeatsPerEvent); ++i) moveCursor(key.wVirtualKeyCode == VK_RIGHT);
                 continue;
             }
             if (c == 26 && consoleLine.empty()) {
@@ -384,11 +386,11 @@ struct StdinConsole::Impl {
             if (c == L'\r') {
                 finishConsoleLine();
             } else if (c == L'\b') {
-                for (unsigned i = 0; i < std::min<unsigned>(key.wRepeatCount, 128); ++i) eraseBeforeCursor();
+                for (unsigned i = 0; i < std::min<unsigned>(key.wRepeatCount, kMaxKeyRepeatsPerEvent); ++i) eraseBeforeCursor();
             } else if (c >= L' ' || c == L'\t') {
-                const unsigned repeats = std::min<unsigned>(key.wRepeatCount, 128);
+                const unsigned repeats = std::min<unsigned>(key.wRepeatCount, kMaxKeyRepeatsPerEvent);
                 for (unsigned repeat = 0; repeat < repeats; ++repeat) {
-                    if (consoleLine.size() >= MAX_INPUT_TEXT_BYTES) {
+                    if (consoleLine.size() >= kMaxInputTextBytes) {
                         overflow = true;
                         editHistory();
                         break;
@@ -464,7 +466,7 @@ struct StdinConsole::Impl {
         } else if (c == '\b' || c == 0x7f || (c == originalMode.c_cc[VERASE] && c != _POSIX_VDISABLE)) {
             eraseBeforeCursor();
         } else if (c >= ' ' || c == '\t') {
-            if (line.size() >= MAX_INPUT_TEXT_BYTES) {
+            if (line.size() >= kMaxInputTextBytes) {
                 overflow = true;
                 editHistory();
             }
@@ -485,7 +487,7 @@ struct StdinConsole::Impl {
                 return;
             }
         }
-        while (unreadOffset < unread.size() && lines.size() < MAX_LINES && !ended) {
+        while (unreadOffset < unread.size() && lines.size() < kMaxLines && !ended) {
             const char c = unread[unreadOffset++];
 #if defined(__linux__)
             if (console) {
@@ -497,7 +499,7 @@ struct StdinConsole::Impl {
                 if (!line.empty() && line.back() == '\r') line.pop_back();
                 finishLine();
             } else if (!overflow) {
-                if (line.size() >= MAX_INPUT_TEXT_BYTES + 1) {
+                if (line.size() >= kMaxInputTextBytes + 1) {
                     overflow = true;
                     line.clear();
                 } else line += c;
@@ -508,7 +510,7 @@ struct StdinConsole::Impl {
     void poll() {
         std::unique_lock lock(logging::consoleOutputMutex(), std::defer_lock);
         if (console) lock.lock();
-        if (ended || lines.size() >= MAX_LINES) return;
+        if (ended || lines.size() >= kMaxLines) return;
 #if defined(_WIN32)
         if (console) {
             pollConsole();
