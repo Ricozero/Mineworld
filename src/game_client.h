@@ -5,7 +5,10 @@
 #include <deque>
 #include <entt/entt.hpp>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include "actor_world.h"
@@ -44,6 +47,12 @@ public:
     void update(float deltaTime);
     void disconnect();
 
+    void submitText(std::string_view text);
+    void submitChat(std::string_view text);
+    void submitCommand(std::string_view text);
+    using Message = std::variant<CommandResponse, ChatMessage>;
+    std::optional<Message> consumeMessage();
+
 private:
     void pumpNetwork();
     void processNetworkEvents();
@@ -52,7 +61,8 @@ private:
     void tryEnterRunning();
     void fail(std::string reason);
     void sendInputToServer();
-    void sendPendingCommands();
+    void sendPendingMessages();
+    void pushMessage(Message message);
     void replayEntitySnapshots();
     void rebuildChunkMeshes();
     void updateRemoteInterpolation(float deltaTime);
@@ -73,7 +83,9 @@ private:
     std::unique_ptr<INetClient> netClient_;
     std::deque<NetEntitySnapshot> entitySnapshotBuffer_;
     uint32_t lastEntitySnapshotSequence_ = 0;
-    std::deque<std::vector<uint8_t>> pendingCommandPackets_;
+    std::deque<std::vector<uint8_t>> pendingMessagePackets_;
+    std::deque<Message> messages_;
+    std::unordered_set<uint64_t> outstandingCommands_;
     RenderContext* renderContext_ = nullptr;
     bool helloPending_ = true;
     bool disconnectSent_ = false;

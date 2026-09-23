@@ -29,8 +29,7 @@ void InputSystem::update(VoxelWorld& voxelWorld, ActorWorld& actorWorld, float d
         auto& transform = view.get<TransformComponent>(entity);
         auto& player = view.get<PlayerComponent>(entity);
         auto& input = view.get<ControllerInputComponent>(entity);
-        input.deltaTime = deltaTime;
-        renderContext_->processInput(deltaTime, transform.rotation, player, input);
+        renderContext_->processInput(transform.rotation, player, input);
 
         if (input.jump) {
             actor_simulation::refreshGrounded(voxelWorld, registry, entity);

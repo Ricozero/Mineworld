@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -8,10 +9,12 @@
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
+#include <vector>
 
-#include "command.h"
 #include "entity.h"
+#include "input_history.h"
 #include "orientation.h"
+#include "text.h"
 
 class ClientChunkManager;
 class ChunkCuller;
@@ -46,9 +49,12 @@ public:
     // In-game loop
     bool shouldClose() const;
     void pollEvents();
-    void processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
-    void queueCommand(CommandRequest command);
-    std::optional<CommandRequest> consumeCommand();
+    void beginFrame();
+    void endFrame();
+    void processInput(glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input);
+    std::optional<std::string> consumeConsoleInput();
+    void appendConsoleLine(std::string text, bool success = true);
+    void setGameActive(bool active) { gameActive_ = active; }
     void setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId);
     void render(const ActorWorld& actorWorld, ClientChunkManager& chunkManager, ChunkCuller& chunkCuller);
 
@@ -89,23 +95,24 @@ private:
     void renderProfilerOverlay();
     void renderCursorOverlay();
     void renderInGameMenu();
+    void renderConsole();
     void renderImGuiDrawData(ImDrawData* drawData);
 
     // Input helpers
-    void updateImGuiInput();
+    void openConsole(bool command);
     orientation::Basis cameraBasis() const;
     bool shouldHideLocalPlayerModel(const ActorWorld& actorWorld, entt::entity entity) const;
 
     // Window & renderer
     std::string baseDir_;
+    std::vector<uint8_t> fontData_;
+    std::vector<uint8_t> fallbackFontData_;
     GLFWwindow* window_ = nullptr;
     bool bgfxInitialized_ = false;
     int framebufferWidth_ = 1280;
     int framebufferHeight_ = 720;
     int windowWidth_ = 1280;
     int windowHeight_ = 720;
-    float framebufferScaleX_ = 1.0f;
-    float framebufferScaleY_ = 1.0f;
     ShaderProgram unlitShader_;
     ShaderProgram chunkShader_;
 
@@ -115,24 +122,33 @@ private:
     float cameraPitch_ = -12.0f;
     CameraViewMode cameraViewMode_ = CameraViewMode::FirstPerson;
     uint32_t localSessionId_ = 0;
-    std::chrono::steady_clock::time_point lastRenderTime_{};
-    bool hasLastRenderTime_ = false;
 
     // Mouse & input state
     double lastMouseX_ = 0.0;
     double lastMouseY_ = 0.0;
     bool hasMousePosition_ = false;
     bool mouseCaptured_ = false;
-    bool prevEscapeDown_ = false;
-    bool prevSpaceDown_ = false;
-    bool prevF1Down_ = false;
-    bool prevF2Down_ = false;
-    bool prevF3Down_ = false;
-    bool prevF4Down_ = false;
-    bool prevF5Down_ = false;
-    bool prevF6Down_ = false;
-    bool prevF7Down_ = false;
-    std::deque<CommandRequest> pendingCommands_;
+    bool gameActive_ = false;
+
+    // In-game console
+    struct ConsoleState {
+        struct Line {
+            std::string text;
+            bool success;
+        };
+
+        bool open = false;
+        bool focusInput = false;
+        bool positionCursor = false;
+        unsigned int openingCharacter = 0;
+        InputHistory history;
+        std::array<char, MAX_INPUT_TEXT_BYTES + 1> input{};
+        std::deque<std::string> pendingInputs;
+        std::deque<Line> lines;
+        std::chrono::steady_clock::time_point lastActivityTime{};
+        bool scrollToBottom = false;
+    };
+    ConsoleState console_;
 
     // Overlay & in-game menu state
     ProfilerMode profilerMode_ = ProfilerMode::Hidden;
@@ -143,6 +159,6 @@ private:
 
     // ImGui
     ImGuiContext* imguiContext_ = nullptr;
-    double imguiScrollY_ = 0.0;
+    bool imguiFrameActive_ = false;
     ImGuiShader imguiShader_;
 };

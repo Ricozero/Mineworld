@@ -18,6 +18,7 @@
 #include "net_kcp.h"
 #include "profiler.h"
 #include "server_system.h"
+#include "text.h"
 
 namespace {
 
@@ -113,27 +114,12 @@ void GameServer::update(float deltaTime) {
     updateChunks();
 
     actorManager_.collectSnapshot();
-    const float entitySnapshotInterval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
     size_t pendingChunkUpdateCount = 0;
     for (auto& [sessionId, session] : sessions_) {
         if (!session.helloReceived) {
             continue;
         }
-        session.entitySnapshotTimer += deltaTime;
-        if (session.entitySnapshotTimer >= entitySnapshotInterval) {
-            session.entitySnapshotTimer -= entitySnapshotInterval;
-            ++session.entitySnapshotSequence;
-            std::vector<const NetActorState*> snapshotActors;
-            const auto* transform = actorWorld_.registry().try_get<TransformComponent>(session.actor);
-            if (transform) {
-                actorManager_.selectSnapshot(transform->position, AppConfig::instance().entityViewRadius, snapshotActors);
-            }
-            std::vector<uint8_t> payload = serializeEntitySnapshot(session.entitySnapshotSequence, snapshotActors, session.entitySnapshotBuilder);
-            if (!payload.empty() && netServer_->send(sessionId, payload)) {
-                MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
-                MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
-            }
-        }
+        sendEntitySnapshot(session, deltaTime);
         sendChunkUpdates(session);
         pendingChunkUpdateCount += session.pendingChunkUpdates.size();
     }
@@ -263,9 +249,25 @@ void GameServer::releaseRobotChunkDemand(glm::ivec3 lastChunkPos, ServerChunkMan
     });
 }
 
-void GameServer::sendChunkUpdates(Session& session) {
-    MW_PROFILE_SCOPE("Server.SendChunkUpdates");
+void GameServer::sendEntitySnapshot(Session& session, float deltaTime) {
+    const float interval = 1.0f / static_cast<float>(AppConfig::instance().ticksPerSecond);
+    session.entitySnapshotTimer += deltaTime;
+    if (session.entitySnapshotTimer < interval) return;
 
+    session.entitySnapshotTimer -= interval;
+    ++session.entitySnapshotSequence;
+    std::vector<const NetActorState*> snapshotActors;
+    const auto* transform = actorWorld_.registry().try_get<TransformComponent>(session.actor);
+    if (transform) {
+        actorManager_.selectSnapshot(transform->position, AppConfig::instance().entityViewRadius, snapshotActors);
+    }
+    const auto payload = serializeEntitySnapshot(session.entitySnapshotSequence, snapshotActors, session.entitySnapshotBuilder);
+    if (sendPacket(session.sessionId, payload)) {
+        MW_PROFILE_COUNTER("Server.EntitySnapshotsOut", 1);
+    }
+}
+
+void GameServer::sendChunkUpdates(Session& session) {
     std::vector<glm::ivec3> coreUpserts;
     std::vector<glm::ivec3> upserts;
     std::vector<NetChunkUnload> unloads;
@@ -297,7 +299,6 @@ void GameServer::sendChunkUpdates(Session& session) {
         MW_PROFILE_COUNTER(operation == ChunkOperation::Upsert ? "Server.ChunkUpsertBatchesOut" : "Server.ChunkUnloadBatchesOut", 1);
         MW_PROFILE_COUNTER("Server.ChunkUpdatesOut", static_cast<int64_t>(count));
         MW_PROFILE_COUNTER("Server.ChunkUpdateBytesOut", static_cast<int64_t>(payload.size()));
-        MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
     };
     const auto sendUpserts = [&](const std::vector<glm::ivec3>& positions) {
         size_t cursor = 0;
@@ -323,7 +324,7 @@ void GameServer::sendChunkUpdates(Session& session) {
                 batch.resize(batch.size() / 2);
                 payload = serializeChunkUpsertBatch(batch, session.chunkUpdateBuilder);
             }
-            if (payload.empty() || payload.size() > byteLimit || !netServer_->send(session.sessionId, payload)) {
+            if (payload.size() > byteLimit || !sendPacket(session.sessionId, payload)) {
                 return false;
             }
             recordBatch(ChunkOperation::Upsert, batch.size(), payload);
@@ -342,7 +343,7 @@ void GameServer::sendChunkUpdates(Session& session) {
         const size_t count = std::min(MAX_CHUNK_UNLOADS_PER_BATCH, unloads.size() - cursor);
         const auto batch = std::span(unloads).subspan(cursor, count);
         const auto payload = serializeChunkUnloadBatch(batch, session.chunkUpdateBuilder);
-        if (payload.empty() || !netServer_->send(session.sessionId, payload)) {
+        if (!sendPacket(session.sessionId, payload)) {
             return;
         }
         recordBatch(ChunkOperation::Unload, count, payload);
@@ -503,11 +504,11 @@ void GameServer::processNetworkEvents() {
     }
 }
 
-bool GameServer::sendControlPacket(uint32_t sessionId, std::vector<uint8_t> payload) {
-    if (!netServer_->send(sessionId, payload)) {
+bool GameServer::sendPacket(uint32_t sessionId, std::span<const uint8_t> payload) {
+    if (payload.empty() || !netServer_->send(sessionId, payload)) {
         return false;
     }
-    MW_PROFILE_COUNTER("Server.ControlPacketsOut", 1);
+    MW_PROFILE_COUNTER("Server.PacketsOut", 1);
     MW_PROFILE_COUNTER("Server.BytesOut", static_cast<int64_t>(payload.size()));
     return true;
 }
@@ -553,9 +554,16 @@ bool GameServer::onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>&
         case Payload::CommandRequest: {
             CommandRequest command;
             if (deserializeCommandRequest(packet, command)) {
-                return onCommandRequest(sessionId, command);
+                return sendPacket(sessionId, serializeCommandResponse(onCommandRequest(sessionId, command)));
             }
             return true;
+        }
+        case Payload::ChatRequest: {
+            std::string text;
+            if (!deserializeChatRequest(packet, text)) {
+                return sendPacket(sessionId, serializeCommandResponse({0, false, "Invalid chat message."}));
+            }
+            return onChatRequest(sessionId, text);
         }
         default:
             logging::warn("Ignored unknown client packet from session {}", sessionId);
@@ -612,7 +620,7 @@ bool GameServer::onClientHello(uint32_t sessionId) {
         chunkManager_.addRequester(chunkPos, ServerChunkManager::PriorityClass::LoadingCore);
     });
     assert(std::is_sorted(session.coreChunks.begin(), session.coreChunks.end(), chunkLess));
-    return sendControlPacket(sessionId, serializeServerHello(hello));
+    return sendPacket(sessionId, serializeServerHello(hello));
 }
 
 void GameServer::onClientReady(uint32_t sessionId) {
@@ -656,104 +664,99 @@ void GameServer::onClientInput(uint32_t sessionId, const NetClientInput& input) 
     sessionIt->second.lastProcessedInputSequence = input.sequence;
 }
 
-bool GameServer::onCommandRequest(uint32_t sessionId, const CommandRequest& command) {
-    logging::info("Command request {} received from session {}: operation={}, arguments={}",
-                  command.requestId, sessionId, static_cast<uint16_t>(command.operation), command.arguments.size());
-
-    auto sessionIt = sessions_.find(sessionId);
-    if (sessionIt == sessions_.end() || !sessionIt->second.ready) {
-        return true;
-    }
-    if (command.requestId == 0 || command.requestId <= sessionIt->second.lastCommandRequestId) {
-        return sendControlPacket(sessionId, serializeCommandResponse(CommandResponse{command.requestId, CommandStatus::InvalidRequestId}));
-    }
-    sessionIt->second.lastCommandRequestId = command.requestId;
-
-    entt::entity playerEntity = sessionIt->second.actor;
-    const CommandStatus status = executeCommand(playerEntity, command);
-    return sendControlPacket(sessionId, serializeCommandResponse(CommandResponse{command.requestId, status}));
+CommandResponse GameServer::executeConsoleCommand(std::string_view text) {
+    auto parsed = parseCommandLine(text);
+    if (!parsed.command) return {0, false, std::move(parsed.error)};
+    return onCommandRequest(std::nullopt, *parsed.command);
 }
 
-CommandStatus GameServer::executeCommand(entt::entity playerEntity, const CommandRequest& command) {
-    auto& registry = actorWorld_.registry();
-    if (!registry.valid(playerEntity) || !registry.all_of<TransformComponent>(playerEntity)) {
-        return CommandStatus::InvalidPlayer;
+bool GameServer::onChatRequest(uint32_t sessionId, const std::string& text) {
+    const auto source = sessions_.find(sessionId);
+    if (source == sessions_.end() || !source->second.ready) {
+        return sendPacket(sessionId, serializeCommandResponse({0, false, "Session is not ready."}));
     }
+    const auto& registry = actorWorld_.registry();
+    const auto* name = registry.try_get<NameComponent>(source->second.actor);
+    if (!name) return sendPacket(sessionId, serializeCommandResponse({0, false, "Player name is unavailable."}));
+    const ChatMessage message{name->name, text};
+    const auto packet = serializeChatMessage(message);
+    if (packet.empty()) return sendPacket(sessionId, serializeCommandResponse({0, false, "Invalid chat message."}));
+    for (const auto& [id, session] : sessions_) {
+        if (!sendPacket(id, packet)) netServer_->close(id);
+    }
+    logging::info("{}: {}", message.name, message.text);
+    return true;
+}
 
+CommandResponse GameServer::onCommandRequest(std::optional<uint32_t> sessionId, const CommandRequest& command) {
+    const auto result = [&](bool success, std::string message) {
+        return CommandResponse{command.requestId, success, std::move(message)};
+    };
+    entt::entity playerEntity = entt::null;
+    if (sessionId) {
+        auto sessionIt = sessions_.find(*sessionId);
+        if (sessionIt == sessions_.end() || !sessionIt->second.ready) return result(false, "Session is not ready.");
+        if (command.requestId == 0 || command.requestId <= sessionIt->second.lastCommandRequestId) return result(false, "Invalid command request ID.");
+        sessionIt->second.lastCommandRequestId = command.requestId;
+        playerEntity = sessionIt->second.actor;
+    }
+    if (std::string error = validateCommand(command); !error.empty()) return result(false, std::move(error));
+    auto& registry = actorWorld_.registry();
     switch (command.operation) {
-        case CommandOperation::None:
-            return CommandStatus::InvalidCommand;
+        case CommandOperation::Help: {
+            auto response = commandHelp(command.arguments.empty() ? std::string_view{} : std::get<std::string>(command.arguments[0]));
+            response.requestId = command.requestId;
+            return response;
+        }
         case CommandOperation::CreateRobot: {
-            if (command.arguments.size() > 2 ||
-                (!command.arguments.empty() && !std::holds_alternative<std::string>(command.arguments[0])) ||
-                (command.arguments.size() == 2 && !std::holds_alternative<glm::vec3>(command.arguments[1]))) {
-                return CommandStatus::InvalidArguments;
-            }
-
-            std::string robotName;
-            if (!command.arguments.empty()) {
-                robotName = std::get<std::string>(command.arguments[0]);
-                if (robotName.size() > 64) {
-                    return CommandStatus::InvalidArguments;
-                }
-            }
-
-            glm::vec3 position = registry.get<TransformComponent>(playerEntity).position;
+            const std::string robotName = command.arguments.empty() ? "" : std::get<std::string>(command.arguments[0]);
+            if (!isValidName(robotName)) return result(false, "Name must be single-line UTF-8, at most " + std::to_string(MAX_NAME_CHARACTERS) + " characters.");
+            glm::vec3 position{0};
             if (command.arguments.size() == 2) {
                 position = std::get<glm::vec3>(command.arguments[1]);
+            } else {
+                const auto* transform = registry.try_get<TransformComponent>(playerEntity);
+                if (!transform) return result(false, "Console commands require an explicit position. Use /help create_robot.");
+                position = transform->position;
+            }
+            if (!glm::all(glm::greaterThanEqual(position, glm::vec3(ChunkLayout::WORLD_MIN))) ||
+                !glm::all(glm::lessThan(position, glm::vec3(ChunkLayout::WORLD_MAX)))) {
+                return result(false, "Position is outside the world.");
             }
             const auto id = actorManager_.allocateId();
             const auto name = robotName.empty() ? "Robot" + std::to_string(id) : robotName;
-            const auto entity = actorWorld_.createRobot(id, name, position);
-            if (entity == entt::null) {
-                return CommandStatus::Failed;
-            }
-            logging::info("Created robot {} '{}'", id, name);
-            return CommandStatus::Success;
+            if (actorWorld_.createRobot(id, name, position) == entt::null) return result(false, "Failed to create robot.");
+            return result(true, "Created robot " + std::to_string(id) + " '" + name + "'.");
         }
         case CommandOperation::DestroyRobot: {
-            if (command.arguments.size() > 1) {
-                return CommandStatus::InvalidArguments;
-            }
-
             entt::entity entity = entt::null;
             if (!command.arguments.empty()) {
-                ActorId id = 0;
-                if (const auto* value = std::get_if<int64_t>(&command.arguments[0])) {
-                    if (*value <= 0) return CommandStatus::InvalidArguments;
-                    id = static_cast<ActorId>(*value);
-                } else if (const auto* name = std::get_if<std::string>(&command.arguments[0])) {
-                    const auto matches = actorWorld_.findActorsByName(*name);
-                    if (!matches.empty() && registry.all_of<RobotComponent>(actorWorld_.getEntity(matches.front()))) {
-                        id = matches.front();
-                    }
+                if (const auto* id = std::get_if<int64_t>(&command.arguments[0])) {
+                    if (*id <= 0) return result(false, "Parameter 'id' must be positive.");
+                    entity = actorWorld_.getEntity(static_cast<ActorId>(*id));
                 } else {
-                    return CommandStatus::InvalidArguments;
-                }
-                entity = actorWorld_.getEntity(id);
-                if (!registry.valid(entity)) {
-                    return CommandStatus::ObjectNotFound;
-                } else if (!registry.all_of<RobotComponent>(entity)) {
-                    return CommandStatus::InvalidOperation;
+                    const auto& name = std::get<std::string>(command.arguments[0]);
+                    if (!isValidName(name)) return result(false, "Name must be single-line UTF-8, at most " + std::to_string(MAX_NAME_CHARACTERS) + " characters.");
+                    for (const auto id : actorWorld_.findActorsByName(name)) {
+                        const auto candidate = actorWorld_.getEntity(id);
+                        if (registry.all_of<RobotComponent>(candidate)) {
+                            entity = candidate;
+                            break;
+                        }
+                    }
                 }
             } else {
-                auto robotView = registry.view<RobotComponent>();
-                if (robotView.begin() == robotView.end()) {
-                    return CommandStatus::ObjectNotFound;
-                }
-                entity = *robotView.begin();
+                auto robots = registry.view<RobotComponent>();
+                if (robots.begin() != robots.end()) entity = *robots.begin();
             }
-
+            if (!registry.valid(entity)) return result(false, "Robot not found.");
+            if (!registry.all_of<RobotComponent>(entity)) return result(false, "Target is not a robot.");
             const ActorId id = registry.get<ActorComponent>(entity).id;
             const auto* name = registry.try_get<NameComponent>(entity);
             const std::string actorName = name ? name->name : std::string{};
-            if (!actorWorld_.destroyActor(id)) {
-                return CommandStatus::Failed;
-            }
-            logging::info("Destroyed robot {} '{}'", id, actorName);
-            return CommandStatus::Success;
+            if (!actorWorld_.destroyActor(id)) return result(false, "Failed to destroy robot.");
+            return result(true, "Destroyed robot " + std::to_string(id) + " '" + actorName + "'.");
         }
-        default:
-            return CommandStatus::InvalidOperation;
+        default: return result(false, "Unknown command operation.");
     }
 }

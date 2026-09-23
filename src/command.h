@@ -1,31 +1,35 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
+inline constexpr size_t MAX_COMMAND_ARGUMENTS = 16;
+inline constexpr size_t MAX_COMMAND_STRING_BYTES = 256;
+
 enum class CommandOperation : uint16_t {
     None,
+    Help,
     CreateRobot,
     DestroyRobot,
     Count,
 };
 
-enum class CommandStatus : uint8_t {
-    Success,
-    Failed,
-    InvalidCommand,
-    InvalidRequestId,
-    InvalidPlayer,
-    InvalidOperation,
-    InvalidArguments,
-    ObjectNotFound,
-    Count,
-};
-
 using CommandArgument = std::variant<std::string, int64_t, double, bool, glm::vec3>;
+
+enum class CommandArgumentType {
+    String,
+    Integer,
+    Float,
+    Bool,
+    Vec3
+};
 
 struct CommandRequest {
     uint64_t requestId = 0;
@@ -35,5 +39,31 @@ struct CommandRequest {
 
 struct CommandResponse {
     uint64_t requestId = 0;
-    CommandStatus status = CommandStatus::Success;
+    bool success = false;
+    std::string message;
 };
+
+struct CommandParameter {
+    std::string_view name;
+    CommandArgumentType type;
+    bool optional = false;
+    size_t maxBytes = MAX_COMMAND_STRING_BYTES;
+};
+
+struct CommandDefinition {
+    std::string_view name;
+    CommandOperation operation;
+    std::span<const CommandParameter> parameters;
+    std::string_view description;
+};
+
+struct CommandParseResult {
+    std::optional<CommandRequest> command;
+    std::string error;
+};
+
+std::span<const CommandDefinition> commandDefinitions();
+std::string commandUsage(const CommandDefinition& definition);
+CommandParseResult parseCommandLine(std::string_view text);
+std::string validateCommand(const CommandRequest& command);
+CommandResponse commandHelp(std::string_view name = {});

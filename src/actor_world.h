@@ -22,7 +22,7 @@ public:
     void destroyEntity(entt::entity entity);
     entt::entity getEntity(ActorId id) const;
     std::vector<ActorId> findActorsByName(std::string_view name) const;
-    void setName(entt::entity entity, std::string_view name);
+    bool setName(entt::entity entity, std::string_view name);
     void setPlayerMode(entt::entity entity, PlayerMode mode);
 
 private:

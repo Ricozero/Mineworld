@@ -8,6 +8,8 @@
 #include <glm/gtx/hash.hpp>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -27,6 +29,7 @@ public:
 
     void registerSystem(std::unique_ptr<System> system);
     void update(float deltaTime);
+    CommandResponse executeConsoleCommand(std::string_view text);
 
 private:
     enum class ChunkOperation {
@@ -62,6 +65,7 @@ private:
     };
 
     Session& getOrCreateSession(uint32_t sessionId);
+    void sendEntitySnapshot(Session& session, float deltaTime);
     void sendChunkUpdates(Session& session);
     void updateChunks();
     void rebuildSessionChunkDemand(Session& session, glm::ivec3 currentChunkPos, ServerChunkManager::TimePoint now);
@@ -78,15 +82,15 @@ private:
     void pumpNetwork();
     void processNetworkEvents();
 
-    bool sendControlPacket(uint32_t sessionId, std::vector<uint8_t> payload);
+    bool sendPacket(uint32_t sessionId, std::span<const uint8_t> payload);
     void onSessionConnect(uint32_t sessionId);
     void onSessionDisconnect(uint32_t sessionId);
     bool onSessionPacket(uint32_t sessionId, const std::vector<uint8_t>& packet);
     bool onClientHello(uint32_t sessionId);
     void onClientReady(uint32_t sessionId);
     void onClientInput(uint32_t sessionId, const NetClientInput& input);
-    bool onCommandRequest(uint32_t sessionId, const CommandRequest& command);
-    CommandStatus executeCommand(entt::entity playerEntity, const CommandRequest& command);
+    CommandResponse onCommandRequest(std::optional<uint32_t> sessionId, const CommandRequest& command);
+    bool onChatRequest(uint32_t sessionId, const std::string& text);
 
     ServerChunkManager chunkManager_{std::chrono::seconds(3)};
     VoxelWorld voxelWorld_;

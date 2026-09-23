@@ -12,14 +12,46 @@
 #include <string_view>
 #include <thread>
 
+#if defined(_WIN32)
+#include <Windows.h>
+#elif defined(__linux__)
+#include <system_error>
+#endif
+
 #include "config.h"
 #include "game_client.h"
 #include "game_server.h"
 #include "log.h"
 #include "profiler.h"
 #include "render_context.h"
+#include "stdin_console.h"
+#include "text.h"
 
 namespace {
+
+std::filesystem::path executablePath(const char* argv0) {
+#if defined(_WIN32)
+    std::wstring buffer(256, L'\0');
+    for (;;) {
+        const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0) break;
+        if (length < buffer.size()) {
+            buffer.resize(length);
+            return std::filesystem::path(buffer);
+        }
+        buffer.resize(buffer.size() * 2);
+    }
+#elif defined(__linux__)
+    std::error_code error;
+    const std::filesystem::path path = std::filesystem::read_symlink("/proc/self/exe", error);
+    if (!error) return path;
+#endif
+
+    std::error_code error;
+    const std::filesystem::path path = argv0 ? argv0 : "";
+    const std::filesystem::path absolutePath = std::filesystem::absolute(path, error);
+    return error ? path : absolutePath;
+}
 
 enum class RunMode {
     Client,
@@ -174,6 +206,29 @@ void runLocalServer(GameServer* server, std::atomic<bool>& stopServer) {
     }
 }
 
+void displayCommandResponse(const CommandResponse& response, RenderContext* renderContext = nullptr) {
+    if (renderContext) renderContext->appendConsoleLine(response.message, response.success);
+    else if (response.success) logging::info("{}", response.message);
+    else logging::warn("{}", response.message);
+}
+
+void displayClientMessages(GameClient& client, RenderContext* renderContext = nullptr) {
+    while (auto message = client.consumeMessage()) {
+        if (const auto* response = std::get_if<CommandResponse>(&*message)) displayCommandResponse(*response, renderContext);
+        else {
+            const auto& chat = std::get<ChatMessage>(*message);
+            if (renderContext) renderContext->appendConsoleLine(chat.name + ": " + chat.text);
+            else logging::info("{}: {}", chat.name, chat.text);
+        }
+    }
+}
+
+bool isConsoleExit(std::string_view text) {
+    text = trimText(text);
+    if (text.starts_with('/')) text.remove_prefix(1);
+    return text == "quit" || text == "exit" || text == "stop";
+}
+
 int runClient(const std::string& dir) {
     profiling::Profiler::instance().setThreadName("ClientMain");
     logging::setThreadChannel(logging::Channel::Client);
@@ -202,6 +257,7 @@ int runClient(const std::string& dir) {
         previousTime = currentTime;
 
         renderContext->pollEvents();
+        renderContext->beginFrame();
 
         switch (state) {
             case ClientState::StartMenu: {
@@ -211,6 +267,7 @@ int runClient(const std::string& dir) {
                 }
                 if (action == RenderContext::StartMenuAction::Local || action == RenderContext::StartMenuAction::Remote) {
                     stopClientSession(client, localServer, serverThread, stopServer);
+                    renderContext->resetInGameMenu();
                     stopServer = false;
                     playMode = action == RenderContext::StartMenuAction::Local ? ClientPlayMode::Local : ClientPlayMode::Remote;
                     if (playMode == ClientPlayMode::Local) {
@@ -233,12 +290,14 @@ int runClient(const std::string& dir) {
                 if (client) {
                     client->update(elapsed.count());
                     if (client->isSessionReady()) {
+                        renderContext->setGameActive(true);
                         renderContext->captureMouse();
                         state = ClientState::InGame;
                     } else {
                         const RenderContext::ConnectingAction action = renderContext->renderConnecting(connectingAddress, connectingPort, client->statusText(), client->hasFailed());
                         if (action == RenderContext::ConnectingAction::Cancel) {
                             stopClientSession(client, localServer, serverThread, stopServer);
+                            renderContext->resetInGameMenu();
                             stopServer = false;
                             renderContext->releaseMouse();
                             state = ClientState::StartMenu;
@@ -258,12 +317,18 @@ int runClient(const std::string& dir) {
                 }
                 if (renderContext->consumeInGameMenuAction() == RenderContext::InGameMenuAction::ReturnToStart) {
                     stopClientSession(client, localServer, serverThread, stopServer);
+                    renderContext->resetInGameMenu();
                     stopServer = false;
                     renderContext->releaseMouse();
                     state = ClientState::StartMenu;
                 }
                 break;
         }
+        if (client) {
+            while (auto text = renderContext->consumeConsoleInput()) client->submitText(*text);
+            displayClientMessages(*client, renderContext.get());
+        }
+        renderContext->endFrame();
         const auto frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - currentTime).count();
         profiling::Profiler::instance().finishFrame(frameMs);
     }
@@ -283,6 +348,7 @@ int runHeadlessClient(const std::string& dir, int argc, char* argv[]) {
         return 1;
     }
     initializeSignalHandlers();
+    StdinConsole console;
 
     std::unique_ptr<GameClient> client;
     std::unique_ptr<GameServer> localServer;
@@ -318,6 +384,15 @@ int runHeadlessClient(const std::string& dir, int argc, char* argv[]) {
             const std::chrono::duration<float> elapsed = currentTime - previousTime;
             previousTime = currentTime;
             client->update(elapsed.count());
+            console.poll();
+            while (auto line = console.consumeLine()) {
+                if (!line->error.empty()) displayCommandResponse({0, false, std::move(line->error)});
+                else if (isConsoleExit(line->text)) {
+                    stopRequested = true;
+                    break;
+                } else client->submitCommand(line->text);
+            }
+            displayClientMessages(*client);
             const auto frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - currentTime).count();
             profiling::Profiler::instance().finishFrame(frameMs);
             if (client->hasFailed()) {
@@ -348,6 +423,7 @@ int runServer(const std::string& dir, int argc, char* argv[]) {
         return 1;
     }
     initializeSignalHandlers();
+    StdinConsole console;
     cfg.port = options->port;
     std::unique_ptr<GameServer> server;
     if (!initializeServer(server)) {
@@ -360,6 +436,14 @@ int runServer(const std::string& dir, int argc, char* argv[]) {
         const auto currentTime = std::chrono::steady_clock::now();
         const std::chrono::duration<float> elapsed = currentTime - previousTime;
         previousTime = currentTime;
+        console.poll();
+        while (auto line = console.consumeLine()) {
+            if (!line->error.empty()) displayCommandResponse({0, false, std::move(line->error)});
+            else if (isConsoleExit(line->text)) {
+                stopRequested = true;
+                break;
+            } else if (!trimText(line->text).empty()) displayCommandResponse(server->executeConsoleCommand(line->text));
+        }
         server->update(elapsed.count());
         const auto frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - currentTime).count();
         profiling::Profiler::instance().finishFrame(frameMs);
@@ -372,7 +456,7 @@ int runServer(const std::string& dir, int argc, char* argv[]) {
 }  // namespace
 
 int main(int argc, char* argv[]) {
-    std::filesystem::path path(argv[0]);
+    const std::filesystem::path path = executablePath(argc > 0 ? argv[0] : nullptr);
     const std::string dir = path.has_parent_path() ? path.parent_path().string() + "/" : "./";
     logging::init(dir);
 

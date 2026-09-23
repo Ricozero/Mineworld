@@ -10,6 +10,7 @@
 #include "net_kcp.h"
 #include "profiler.h"
 #include "render_context.h"
+#include "text.h"
 
 namespace {
 
@@ -83,7 +84,7 @@ void GameClient::update(float deltaTime) {
         system->update(voxelWorld_, actorWorld_, deltaTime);
     }
     sendInputToServer();
-    sendPendingCommands();
+    sendPendingMessages();
 }
 
 std::string GameClient::statusText() const {
@@ -192,9 +193,14 @@ void GameClient::onServerPacket(const std::vector<uint8_t>& packet) {
         }
         case Payload::CommandResponse: {
             CommandResponse response;
-            if (deserializeCommandResponse(packet, response) && response.status != CommandStatus::Success) {
-                logging::warn("Command request {} failed with status {}", response.requestId, static_cast<int>(response.status));
+            if (deserializeCommandResponse(packet, response)) {
+                if (response.requestId == 0 || outstandingCommands_.erase(response.requestId) != 0) pushMessage(std::move(response));
             }
+            break;
+        }
+        case Payload::ChatMessage: {
+            ChatMessage message;
+            if (deserializeChatMessage(packet, message)) pushMessage(std::move(message));
             break;
         }
         default:
@@ -208,7 +214,9 @@ void GameClient::disconnect() {
         return;
     }
     state_ = State::Disconnecting;
-    pendingCommandPackets_.clear();
+    pendingMessagePackets_.clear();
+    if (!outstandingCommands_.empty()) pushMessage(CommandResponse{0, false, "Disconnected before all command results arrived."});
+    outstandingCommands_.clear();
     if (helloPending_) {
         netClient_->close();
     } else if (!disconnectSent_ && netClient_->send(serializeClientDisconnect())) {
@@ -272,7 +280,9 @@ void GameClient::fail(std::string reason) {
     }
     failureReason_ = std::move(reason);
     state_ = State::Failed;
-    pendingCommandPackets_.clear();
+    pendingMessagePackets_.clear();
+    if (!outstandingCommands_.empty()) pushMessage(CommandResponse{0, false, "Disconnected before all command results arrived."});
+    outstandingCommands_.clear();
     if (netClient_) {
         netClient_->close();
     }
@@ -311,20 +321,70 @@ void GameClient::sendInputToServer() {
     }
 }
 
-void GameClient::sendPendingCommands() {
-    if (!netClient_ || !renderContext_ || state_ != State::Running) {
+void GameClient::pushMessage(Message message) {
+    constexpr size_t kMaxMessages = 256;
+    if (messages_.size() == kMaxMessages) messages_.pop_front();
+    messages_.push_back(std::move(message));
+}
+
+std::optional<GameClient::Message> GameClient::consumeMessage() {
+    if (messages_.empty()) return std::nullopt;
+    Message message = std::move(messages_.front());
+    messages_.pop_front();
+    return message;
+}
+
+void GameClient::submitText(std::string_view text) {
+    text = trimText(text);
+    if (text.empty()) return;
+    if (text.starts_with('/')) submitCommand(text);
+    else submitChat(text);
+}
+
+void GameClient::submitChat(std::string_view text) {
+    text = trimText(text);
+    if (text.empty()) return;
+    if (state_ != State::Running) {
+        pushMessage(CommandResponse{0, false, "Session is not ready."});
         return;
     }
-
-    while (std::optional<CommandRequest> command = renderContext_->consumeCommand()) {
-        command->requestId = nextCommandRequestId_++;
-        pendingCommandPackets_.push_back(serializeCommandRequest(*command));
+    auto packet = serializeChatRequest(text);
+    if (packet.empty()) {
+        pushMessage(CommandResponse{0, false, "Chat must be single-line UTF-8, at most 1024 bytes."});
+    } else if (pendingMessagePackets_.size() >= 64) {
+        pushMessage(CommandResponse{0, false, "Too many queued messages. Try again later."});
+    } else {
+        pendingMessagePackets_.push_back(std::move(packet));
     }
-    while (!pendingCommandPackets_.empty()) {
-        if (!netClient_->send(pendingCommandPackets_.front())) {
-            break;
-        }
-        pendingCommandPackets_.pop_front();
+}
+
+void GameClient::submitCommand(std::string_view text) {
+    text = trimText(text);
+    if (text.empty()) return;
+    auto parsed = parseCommandLine(text);
+    if (!parsed.command) {
+        pushMessage(CommandResponse{0, false, std::move(parsed.error)});
+        return;
+    }
+    std::string error;
+    if (state_ != State::Running) error = "Session is not ready.";
+    if (error.empty() && (pendingMessagePackets_.size() >= 64 || outstandingCommands_.size() >= 64)) error = "Too many pending commands. Try again later.";
+    if (!error.empty()) {
+        pushMessage(CommandResponse{0, false, std::move(error)});
+        return;
+    }
+    auto& command = *parsed.command;
+    command.requestId = nextCommandRequestId_++;
+    outstandingCommands_.insert(command.requestId);
+    pendingMessagePackets_.push_back(serializeCommandRequest(command));
+}
+
+void GameClient::sendPendingMessages() {
+    if (!netClient_ || state_ != State::Running) return;
+    size_t remaining = 16;
+    while (!pendingMessagePackets_.empty() && remaining-- > 0) {
+        if (!netClient_->send(pendingMessagePackets_.front())) break;
+        pendingMessagePackets_.pop_front();
     }
 }
 

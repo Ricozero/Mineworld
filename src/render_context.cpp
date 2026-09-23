@@ -2,15 +2,24 @@
 
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+
+#if defined(__linux__)
+#undef None
+#undef Bool
+#undef Status
+#undef Success
+#undef Always
+#endif
+
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
 #include <bx/math.h>
 #include <imgui.h>
+#include <imgui_impl_glfw.h>
 
 #include <algorithm>
 #include <array>
 #include <cassert>
-#include <cfloat>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -27,6 +36,7 @@
 #include "entity.h"
 #include "log.h"
 #include "profiler.h"
+#include "text.h"
 
 namespace {
 
@@ -45,6 +55,8 @@ constexpr size_t kMaxBatchVertices = UINT16_MAX;
 constexpr float kVerticalFieldOfView = 70.0f;
 constexpr float kNearPlane = 0.1f;
 constexpr float kFarPlane = 1000.0f;
+constexpr auto kConsoleMessageDisplayDuration = std::chrono::seconds(10);
+constexpr auto kConsoleMessageFadeDuration = std::chrono::seconds(2);
 
 uint32_t depthSortKey(float distanceSq) {
     return bx::floatToBits(distanceSq);
@@ -341,6 +353,9 @@ bool RenderContext::initialize(int width, int height, const char* title, const s
     windowWidth_ = width;
     windowHeight_ = height;
 
+#if defined(__linux__)
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
     if (!glfwInit()) {
         logging::error("Failed to initialize GLFW");
         return false;
@@ -356,12 +371,17 @@ bool RenderContext::initialize(int width, int height, const char* title, const s
 
     bgfx::Init init;
     const std::string& api = AppConfig::instance().graphicsApi;
-    if (api == "dx11") init.type = bgfx::RendererType::Direct3D11;
-    else if (api == "dx12") init.type = bgfx::RendererType::Direct3D12;
-    else if (api == "opengl") init.type = bgfx::RendererType::OpenGL;
+    if (api == "opengl") init.type = bgfx::RendererType::OpenGL;
     else if (api == "vulkan") init.type = bgfx::RendererType::Vulkan;
+#if defined(_WIN32)
+    else if (api == "dx12") init.type = bgfx::RendererType::Direct3D12;
     else init.type = bgfx::RendererType::Direct3D11;
     init.platformData.nwh = glfwGetWin32Window(window_);
+#elif defined(__linux__)
+    else init.type = bgfx::RendererType::OpenGL;
+    init.platformData.ndt = glfwGetX11Display();
+    init.platformData.nwh = reinterpret_cast<void*>(static_cast<uintptr_t>(glfwGetX11Window(window_)));
+#endif
     init.resolution.width = static_cast<uint32_t>(framebufferWidth_);
     init.resolution.height = static_cast<uint32_t>(framebufferHeight_);
     init.resolution.reset = bgfxResetFlags();
@@ -390,19 +410,19 @@ bool RenderContext::initialize(int width, int height, const char* title, const s
         return false;
     }
 
+    glfwSetWindowUserPointer(window_, this);
+    glfwSetWindowFocusCallback(window_, [](GLFWwindow* window, int focused) {
+        auto* context = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
+        if (!focused) {
+            context->releaseMouse();
+            context->console_.openingCharacter = 0;
+        }
+    });
     if (!initializeImGui()) {
         shutdown();
         return false;
     }
 
-    glfwSetWindowUserPointer(window_, this);
-    glfwSetScrollCallback(window_, [](GLFWwindow* window, double, double yOffset) {
-        auto* renderContext = static_cast<RenderContext*>(glfwGetWindowUserPointer(window));
-        if (!renderContext || renderContext->mouseCaptured_) {
-            return;
-        }
-        renderContext->imguiScrollY_ += yOffset;
-    });
     glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     logging::info("Renderer initialized with GLFW/bgfx ({})", bgfx::getRendererName(bgfx::getRendererType()));
@@ -410,6 +430,7 @@ bool RenderContext::initialize(int width, int height, const char* title, const s
 }
 
 void RenderContext::shutdown() {
+    releaseMouse();
     shutdownImGui();
     destroyShaders();
 
@@ -450,8 +471,6 @@ void RenderContext::updateDisplayMetrics() {
     windowHeight_ = windowHeight;
     framebufferWidth_ = framebufferWidth;
     framebufferHeight_ = framebufferHeight;
-    framebufferScaleX_ = static_cast<float>(framebufferWidth_) / static_cast<float>(windowWidth_);
-    framebufferScaleY_ = static_cast<float>(framebufferHeight_) / static_cast<float>(windowHeight_);
 }
 
 RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffer, size_t addressBufferSize, int& port) {
@@ -461,7 +480,6 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
 
     releaseMouse();
 
-    updateDisplayMetrics();
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1b2533ff, 1.0f, 0);
     bgfx::touch(kMainView);
@@ -469,12 +487,6 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
     StartMenuAction action = StartMenuAction::None;
     if (imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
-        ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
-        io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
-        io.DeltaTime = 1.0f / 60.0f;
-        updateImGuiInput();
-        ImGui::NewFrame();
 
         ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
@@ -499,6 +511,7 @@ RenderContext::StartMenuAction RenderContext::renderStartMenu(char* addressBuffe
         }
         ImGui::End();
         ImGui::Render();
+        imguiFrameActive_ = false;
         renderImGuiDrawData(ImGui::GetDrawData());
     }
 
@@ -513,7 +526,6 @@ RenderContext::ConnectingAction RenderContext::renderConnecting(const std::strin
 
     releaseMouse();
 
-    updateDisplayMetrics();
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x1b2533ff, 1.0f, 0);
     bgfx::touch(kMainView);
@@ -521,12 +533,6 @@ RenderContext::ConnectingAction RenderContext::renderConnecting(const std::strin
     ConnectingAction action = ConnectingAction::None;
     if (imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
-        ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
-        io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
-        io.DeltaTime = 1.0f / 60.0f;
-        updateImGuiInput();
-        ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(windowWidth_ * 0.5f, windowHeight_ * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_Always);
         if (ImGui::Begin("Connection", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
@@ -539,6 +545,7 @@ RenderContext::ConnectingAction RenderContext::renderConnecting(const std::strin
         }
         ImGui::End();
         ImGui::Render();
+        imguiFrameActive_ = false;
         renderImGuiDrawData(ImGui::GetDrawData());
     }
 
@@ -552,83 +559,67 @@ void RenderContext::pollEvents() {
     glfwPollEvents();
 }
 
-void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input) {
-    MW_PROFILE_SCOPE("Client.ProcessInput");
+void RenderContext::beginFrame() {
+    if (!window_ || !imguiContext_) return;
+    ImGui::SetCurrentContext(imguiContext_);
+    updateDisplayMetrics();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    imguiFrameActive_ = true;
+}
 
-    if (!window_) {
+void RenderContext::endFrame() {
+    if (!imguiFrameActive_) return;
+    ImGui::SetCurrentContext(imguiContext_);
+    ImGui::EndFrame();
+    imguiFrameActive_ = false;
+}
+
+void RenderContext::processInput(glm::vec3& rotation, PlayerComponent& player, ControllerInputComponent& input) {
+    input.move = glm::vec3(0.0f);
+    input.jump = false;
+    input.sprint = false;
+    if (!window_ || !imguiFrameActive_ || !gameActive_ || !glfwGetWindowAttrib(window_, GLFW_FOCUSED)) return;
+
+    ImGui::SetCurrentContext(imguiContext_);
+    const bool escapePressed = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (console_.open) {
+        if (escapePressed) {
+            console_.open = false;
+            console_.lastActivityTime = std::chrono::steady_clock::now();
+            console_.openingCharacter = 0;
+        }
         return;
     }
 
-    deltaTime = std::clamp(deltaTime, 0.0f, 0.05f);
-
-    const bool escapeDown = glfwGetKey(window_, GLFW_KEY_ESCAPE) == GLFW_PRESS;
-    if (escapeDown && !prevEscapeDown_) {
+    if (escapePressed) {
         inGameMenuOpen_ = !inGameMenuOpen_;
-        if (inGameMenuOpen_) {
-            releaseMouse();
-        } else {
-            captureMouse();
-        }
+        if (inGameMenuOpen_) releaseMouse();
+        else captureMouse();
+        return;
     }
-    prevEscapeDown_ = escapeDown;
+    if (inGameMenuOpen_) return;
 
-    if (inGameMenuOpen_) {
-        input.move = glm::vec3(0.0f);
-        input.jump = false;
-        input.sprint = false;
+    const auto& io = ImGui::GetIO();
+    if (io.WantCaptureKeyboard || io.WantTextInput) return;
+    const bool commandPressed = ImGui::IsKeyPressed(ImGuiKey_Slash, false) && !io.KeyShift;
+    if (!io.KeyCtrl && !io.KeyAlt && !io.KeySuper && (ImGui::IsKeyPressed(ImGuiKey_T, false) || commandPressed)) {
+        openConsole(commandPressed);
         return;
     }
 
-    // Hold Alt to release mouse, release Alt to recapture
-    const bool altHeld = glfwGetKey(window_, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
-                         glfwGetKey(window_, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
+    if (io.KeyAlt) releaseMouse();
+    else captureMouse();
 
-    if (altHeld && mouseCaptured_) {
-        releaseMouse();
-    } else if (!altHeld && !mouseCaptured_) {
-        captureMouse();
+    if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) profilerMode_ = cycleMode(profilerMode_);
+    if (ImGui::IsKeyPressed(ImGuiKey_F2, false)) cursorMode_ = cycleMode(cursorMode_);
+    if (ImGui::IsKeyPressed(ImGuiKey_F3, false)) showChunkBounds_ = !showChunkBounds_;
+    if (mouseCaptured_ && ImGui::IsKeyPressed(ImGuiKey_F4, false)) {
+        player.mode = player.mode == PlayerMode::Spectator ? PlayerMode::Survival : PlayerMode::Spectator;
+        logging::info("Switched player mode to {}", player.mode == PlayerMode::Spectator ? "spectator" : "survival");
     }
-
-    const bool f6Down = glfwGetKey(window_, GLFW_KEY_F6) == GLFW_PRESS;
-    if (f6Down && !prevF6Down_) {
-        queueCommand(CommandRequest{0, CommandOperation::CreateRobot, {}});
-    }
-    prevF6Down_ = f6Down;
-
-    const bool f7Down = glfwGetKey(window_, GLFW_KEY_F7) == GLFW_PRESS;
-    if (f7Down && !prevF7Down_) {
-        queueCommand(CommandRequest{0, CommandOperation::DestroyRobot, {}});
-    }
-    prevF7Down_ = f7Down;
-
-    // While mouse is released, only handle Escape and function keys
-    if (!mouseCaptured_) {
-        const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
-        if (f1Down && !prevF1Down_) {
-            profilerMode_ = cycleMode(profilerMode_);
-        }
-        prevF1Down_ = f1Down;
-
-        const bool f2Down = glfwGetKey(window_, GLFW_KEY_F2) == GLFW_PRESS;
-        if (f2Down && !prevF2Down_) {
-            cursorMode_ = cycleMode(cursorMode_);
-        }
-        prevF2Down_ = f2Down;
-
-        const bool f3Down = glfwGetKey(window_, GLFW_KEY_F3) == GLFW_PRESS;
-        if (f3Down && !prevF3Down_) {
-            showChunkBounds_ = !showChunkBounds_;
-        }
-        prevF3Down_ = f3Down;
-
-        const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
-        if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
-            cameraViewMode_ = cycleMode(cameraViewMode_);
-        }
-        prevF5Down_ = f5Down;
-
-        return;
-    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false) && player.mode == PlayerMode::Survival) cameraViewMode_ = cycleMode(cameraViewMode_);
+    if (!mouseCaptured_) return;
 
     double mouseX = 0.0;
     double mouseY = 0.0;
@@ -638,96 +629,44 @@ void RenderContext::processInput(float deltaTime, glm::vec3& rotation, PlayerCom
         lastMouseY_ = mouseY;
         hasMousePosition_ = true;
     }
-
     constexpr float mouseSensitivity = 0.12f;
     const float mouseDeltaX = static_cast<float>(mouseX - lastMouseX_);
     const float mouseDeltaY = static_cast<float>(mouseY - lastMouseY_);
     lastMouseX_ = mouseX;
     lastMouseY_ = mouseY;
-
-    // Update rotation: rotation.x = pitch, rotation.y = yaw
     rotation.y += mouseDeltaX * mouseSensitivity;
-    rotation.x -= mouseDeltaY * mouseSensitivity;
-    rotation.x = std::clamp(rotation.x, -88.0f, 88.0f);
-
-    // Also update internal camera state used for rendering.
+    rotation.x = std::clamp(rotation.x - mouseDeltaY * mouseSensitivity, -88.0f, 88.0f);
     cameraYaw_ = rotation.y;
     cameraPitch_ = rotation.x;
 
-    const bool f4Down = glfwGetKey(window_, GLFW_KEY_F4) == GLFW_PRESS;
-    if (f4Down && !prevF4Down_) {
-        player.mode = player.mode == PlayerMode::Spectator ? PlayerMode::Survival : PlayerMode::Spectator;
-        logging::info("Switched player mode to {}", player.mode == PlayerMode::Spectator ? "spectator" : "survival");
+    input.sprint = ImGui::IsKeyDown(ImGuiKey_LeftCtrl);
+    if (ImGui::IsKeyDown(ImGuiKey_W)) input.move.x += 1.0f;
+    if (ImGui::IsKeyDown(ImGuiKey_S)) input.move.x -= 1.0f;
+    if (ImGui::IsKeyDown(ImGuiKey_A)) input.move.z -= 1.0f;
+    if (ImGui::IsKeyDown(ImGuiKey_D)) input.move.z += 1.0f;
+    if (glm::dot(input.move, input.move) > 1.0f) input.move = glm::normalize(input.move);
+    if (player.mode == PlayerMode::Spectator) {
+        if (ImGui::IsKeyDown(ImGuiKey_Space)) input.move.y += 1.0f;
+        if (ImGui::IsKeyDown(ImGuiKey_LeftShift)) input.move.y -= 1.0f;
+    } else {
+        input.jump = ImGui::IsKeyPressed(ImGuiKey_Space, false);
     }
-    prevF4Down_ = f4Down;
-
-    const bool f5Down = glfwGetKey(window_, GLFW_KEY_F5) == GLFW_PRESS;
-    if (f5Down && !prevF5Down_ && player.mode == PlayerMode::Survival) {
-        cameraViewMode_ = cycleMode(cameraViewMode_);
-    }
-    prevF5Down_ = f5Down;
-
-    const bool spectatorMode = player.mode == PlayerMode::Spectator;
-    input.move = glm::vec3(0.0f);
-    input.jump = false;
-    input.sprint = glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS;
-
-    if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS) {
-        input.move.x += 1.0f;
-    }
-    if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS) {
-        input.move.x -= 1.0f;
-    }
-    if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) {
-        input.move.z -= 1.0f;
-    }
-    if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) {
-        input.move.z += 1.0f;
-    }
-    if (glm::dot(input.move, input.move) > 1.0f) {
-        input.move = glm::normalize(input.move);
-    }
-    const bool spaceDown = glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS;
-    if (!spectatorMode && spaceDown && !prevSpaceDown_) {
-        input.jump = true;
-    }
-    if (spectatorMode && glfwGetKey(window_, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        input.move.y += 1.0f;
-    }
-    prevSpaceDown_ = spaceDown;
-    if (spectatorMode && glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
-        input.move.y -= 1.0f;
-    }
-    const bool f1Down = glfwGetKey(window_, GLFW_KEY_F1) == GLFW_PRESS;
-    if (f1Down && !prevF1Down_) {
-        profilerMode_ = cycleMode(profilerMode_);
-    }
-    prevF1Down_ = f1Down;
-
-    const bool f2Down = glfwGetKey(window_, GLFW_KEY_F2) == GLFW_PRESS;
-    if (f2Down && !prevF2Down_) {
-        cursorMode_ = cycleMode(cursorMode_);
-    }
-    prevF2Down_ = f2Down;
-
-    const bool f3Down = glfwGetKey(window_, GLFW_KEY_F3) == GLFW_PRESS;
-    if (f3Down && !prevF3Down_) {
-        showChunkBounds_ = !showChunkBounds_;
-    }
-    prevF3Down_ = f3Down;
 }
 
-void RenderContext::queueCommand(CommandRequest command) {
-    pendingCommands_.push_back(std::move(command));
+void RenderContext::appendConsoleLine(std::string text, bool success) {
+    if (console_.lines.size() == 200) console_.lines.pop_front();
+    console_.lines.push_back({std::move(text), success});
+    console_.lastActivityTime = std::chrono::steady_clock::now();
+    console_.scrollToBottom = true;
 }
 
-std::optional<CommandRequest> RenderContext::consumeCommand() {
-    if (pendingCommands_.empty()) {
+std::optional<std::string> RenderContext::consumeConsoleInput() {
+    if (console_.pendingInputs.empty()) {
         return std::nullopt;
     }
-    CommandRequest command = std::move(pendingCommands_.front());
-    pendingCommands_.pop_front();
-    return command;
+    std::string text = std::move(console_.pendingInputs.front());
+    console_.pendingInputs.pop_front();
+    return text;
 }
 
 void RenderContext::setCamera(const glm::vec3& position, float yaw, float pitch, PlayerMode mode, uint32_t localSessionId) {
@@ -771,17 +710,6 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-    float deltaTime = 1.0f / 60.0f;
-    if (hasLastRenderTime_) {
-        const std::chrono::duration<float> elapsed = now - lastRenderTime_;
-        deltaTime = std::clamp(elapsed.count(), 1.0f / 1000.0f, 0.1f);
-    }
-    lastRenderTime_ = now;
-    hasLastRenderTime_ = true;
-
-    updateDisplayMetrics();
-
     bgfx::setViewMode(kMainView, bgfx::ViewMode::DepthAscending);
     bgfx::setViewRect(kMainView, 0, 0, static_cast<uint16_t>(framebufferWidth_), static_cast<uint16_t>(framebufferHeight_));
     bgfx::setViewClear(kMainView, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x87bdf2ff, 1.0f, 0);
@@ -821,12 +749,6 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
 
     if (imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
-        ImGuiIO& io = ImGui::GetIO();
-        io.DisplaySize = ImVec2(static_cast<float>(windowWidth_), static_cast<float>(windowHeight_));
-        io.DisplayFramebufferScale = ImVec2(framebufferScaleX_, framebufferScaleY_);
-        io.DeltaTime = deltaTime > 0.0f ? deltaTime : 1.0f / 60.0f;
-        updateImGuiInput();
-        ImGui::NewFrame();
 
         renderEntityNames(actorWorld, cullingViewProjection);
         if (profilerMode_ != ProfilerMode::Hidden) {
@@ -838,8 +760,10 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
         if (inGameMenuOpen_) {
             renderInGameMenu();
         }
+        renderConsole();
 
         ImGui::Render();
+        imguiFrameActive_ = false;
         renderImGuiDrawData(ImGui::GetDrawData());
     }
 
@@ -852,10 +776,12 @@ void RenderContext::render(const ActorWorld& actorWorld, ClientChunkManager& chu
 }
 
 void RenderContext::captureMouse() {
-    if (!window_ || mouseCaptured_) {
+    if (!window_ || mouseCaptured_ || console_.open || inGameMenuOpen_ || !glfwGetWindowAttrib(window_, GLFW_FOCUSED)) {
         return;
     }
     mouseCaptured_ = true;
+    ImGui::SetCurrentContext(imguiContext_);
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NoMouse;
     glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     hasMousePosition_ = false;
 }
@@ -865,6 +791,8 @@ void RenderContext::releaseMouse() {
         return;
     }
     mouseCaptured_ = false;
+    ImGui::SetCurrentContext(imguiContext_);
+    ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
     glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     hasMousePosition_ = false;
 }
@@ -872,7 +800,8 @@ void RenderContext::releaseMouse() {
 void RenderContext::resetInGameMenu() {
     inGameMenuOpen_ = false;
     pendingInGameMenuAction_ = InGameMenuAction::None;
-    pendingCommands_.clear();
+    gameActive_ = false;
+    console_ = {};
 }
 
 RenderContext::InGameMenuAction RenderContext::consumeInGameMenuAction() {
@@ -942,9 +871,57 @@ bool RenderContext::initializeImGui() {
     ImGui::SetCurrentContext(imguiContext_);
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;
-    io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
     io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset;
     ImGui::StyleColorsDark();
+    ImGui::GetStyle().Colors[ImGuiCol_Text] = ImVec4(1, 1, 1, 1);
+    if (!ImGui_ImplGlfw_InitForOther(window_, true)) {
+        logging::error("Failed to initialize ImGui GLFW backend");
+        shutdownImGui();
+        return false;
+    }
+    const AppConfig& config = AppConfig::instance();
+    std::filesystem::path fontPath = config.fontPath;
+    if (fontPath.is_relative()) fontPath = std::filesystem::path(baseDir_) / fontPath;
+    fontPath = fontPath.lexically_normal();
+
+    std::error_code fontPathError;
+    if (std::filesystem::is_regular_file(fontPath, fontPathError)) {
+        fontData_ = readBinaryFile(fontPath);
+        if (!fontData_.empty()) {
+            ImFontConfig fontConfig;
+            fontConfig.FontDataOwnedByAtlas = false;
+            if (!io.Fonts->AddFontFromMemoryTTF(fontData_.data(), static_cast<int>(fontData_.size()), config.fontSize, &fontConfig)) {
+                logging::warn("Failed to load font from {}, using the default font", fontPath.string());
+                fontData_.clear();
+            }
+        } else {
+            logging::warn("Failed to read font from {}, using the default font", fontPath.string());
+        }
+    } else {
+        logging::warn("Font not found at {}, using the default font", fontPath.string());
+    }
+    if (!io.Fonts->Fonts.empty()) {
+        const std::filesystem::path fallbackFontPath = (std::filesystem::path(baseDir_) / "../fonts/DroidSansFallbackFull.ttf").lexically_normal();
+        fallbackFontData_ = readBinaryFile(fallbackFontPath);
+        if (!fallbackFontData_.empty()) {
+            ImFontConfig fallbackFontConfig;
+            fallbackFontConfig.FontDataOwnedByAtlas = false;
+            fallbackFontConfig.MergeMode = true;
+            if (!io.Fonts->AddFontFromMemoryTTF(
+                    fallbackFontData_.data(),
+                    static_cast<int>(fallbackFontData_.size()),
+                    config.fontSize,
+                    &fallbackFontConfig,
+                    io.Fonts->GetGlyphRangesChineseFull())) {
+                logging::warn("Failed to load CJK fallback font from {}", fallbackFontPath.string());
+                fallbackFontData_.clear();
+            }
+        } else {
+            logging::warn("CJK fallback font not found at {}", fallbackFontPath.string());
+        }
+    } else {
+        io.Fonts->AddFontDefault();
+    }
 
     unsigned char* pixels = nullptr;
     int fontWidth = 0;
@@ -987,9 +964,13 @@ void RenderContext::shutdownImGui() {
 
     if (imguiContext_) {
         ImGui::SetCurrentContext(imguiContext_);
+        endFrame();
+        if (ImGui::GetIO().BackendPlatformUserData) ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext(imguiContext_);
         imguiContext_ = nullptr;
     }
+    fontData_.clear();
+    fallbackFontData_.clear();
 }
 
 void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkManager& chunkManager, ChunkCuller& chunkCuller, const Frustum& frustum) {
@@ -1425,31 +1406,104 @@ void RenderContext::renderImGuiDrawData(ImDrawData* drawData) {
     }
 }
 
-void RenderContext::updateImGuiInput() {
-    ImGuiIO& io = ImGui::GetIO();
-    io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX);
-    io.MouseWheel = 0.0f;
+void RenderContext::openConsole(bool command) {
+    console_.open = true;
+    console_.focusInput = true;
+    console_.positionCursor = true;
+    console_.openingCharacter = command ? '/' : 't';
+    if (command) console_.history.edit("/");
+    const auto& text = console_.history.current();
+    std::memcpy(console_.input.data(), text.c_str(), text.size() + 1);
+    console_.scrollToBottom = true;
+    releaseMouse();
+}
 
-    if (!window_ || mouseCaptured_) {
-        imguiScrollY_ = 0.0;
-        io.MouseDown[0] = false;
-        io.MouseDown[1] = false;
-        io.MouseDown[2] = false;
-        return;
+void RenderContext::renderConsole() {
+    MW_PROFILE_SCOPE("Render.Console");
+    float alpha = 1.0f;
+    if (!console_.open) {
+        if (console_.lines.empty()) return;
+        const auto age = std::chrono::steady_clock::now() - console_.lastActivityTime;
+        if (age >= kConsoleMessageDisplayDuration) return;
+        const float remaining = std::chrono::duration<float>(kConsoleMessageDisplayDuration - age).count();
+        alpha = std::clamp(remaining / std::chrono::duration<float>(kConsoleMessageFadeDuration).count(), 0.0f, 1.0f);
+        alpha *= alpha;
     }
-
-    double mouseX = 0.0;
-    double mouseY = 0.0;
-    glfwGetCursorPos(window_, &mouseX, &mouseY);
-    io.MousePos = ImVec2(static_cast<float>(mouseX), static_cast<float>(mouseY));
-    io.MouseDown[0] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-    io.MouseDown[1] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
-    io.MouseDown[2] = glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS;
-
-    if (imguiScrollY_ != 0.0) {
-        io.MouseWheel = static_cast<float>(imguiScrollY_);
-        imguiScrollY_ = 0.0;
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
+    ImGui::SetNextWindowPos(ImVec2(10.0f, windowHeight_ - 10.0f), ImGuiCond_Always, ImVec2(0, 1));
+    ImGui::SetNextWindowSize(ImVec2(std::max(100.0f, std::min(640.0f, windowWidth_ - 20.0f)), std::min(300.0f, windowHeight_ * 0.45f)), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha((console_.open ? 0.75f : 0.3f) * ImGui::GetStyle().Alpha);
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
+    if (!console_.open) flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing;
+    if (ImGui::Begin("GameConsole", nullptr, flags)) {
+        const float inputHeight = console_.open ? ImGui::GetFrameHeightWithSpacing() : 0.0f;
+        if (ImGui::BeginChild("Messages", ImVec2(0, -inputHeight), ImGuiChildFlags_None)) {
+            for (const auto& line : console_.lines) {
+                ImGui::PushStyleColor(ImGuiCol_Text, line.success ? ImVec4(1, 1, 1, 1) : ImVec4(1, 0.25f, 0.25f, 1));
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(line.text.c_str());
+                ImGui::PopTextWrapPos();
+                ImGui::PopStyleColor();
+            }
+            if (console_.scrollToBottom) {
+                ImGui::SetScrollHereY(1.0f);
+                console_.scrollToBottom = false;
+            }
+        }
+        ImGui::EndChild();
+        if (console_.open) {
+            auto& characters = ImGui::GetIO().InputQueueCharacters;
+            if (console_.openingCharacter != 0 && !characters.empty()) {
+                const auto opening = std::find_if(characters.begin(), characters.end(), [&](ImWchar character) {
+                    return character == console_.openingCharacter || (console_.openingCharacter == 't' && character == 'T');
+                });
+                if (opening != characters.end()) characters.erase(characters.begin(), opening + 1);
+                console_.openingCharacter = 0;
+            }
+            if (console_.focusInput) {
+                if (!characters.empty()) {
+                    std::string text = console_.input.data();
+                    for (const auto character : characters) {
+                        if (character >= 0x20 && character != 0x7f) appendUtf8Codepoint(text, character, MAX_INPUT_TEXT_BYTES);
+                    }
+                    console_.history.edit(text);
+                    std::memcpy(console_.input.data(), text.c_str(), text.size() + 1);
+                    characters.resize(0);
+                }
+                ImGui::SetKeyboardFocusHere();
+                console_.focusInput = false;
+            }
+            ImGui::SetNextItemWidth(-1.0f);
+            const auto callback = [](ImGuiInputTextCallbackData* data) {
+                auto* console = static_cast<ConsoleState*>(data->UserData);
+                if (data->EventFlag == ImGuiInputTextFlags_CallbackHistory) {
+                    if (data->EventKey == ImGuiKey_UpArrow) console->history.previous();
+                    else if (data->EventKey == ImGuiKey_DownArrow) console->history.next();
+                    const auto& text = console->history.current();
+                    data->DeleteChars(0, data->BufTextLen);
+                    data->InsertChars(0, text.c_str());
+                } else if (data->EventFlag == ImGuiInputTextFlags_CallbackEdit) {
+                    console->history.edit(std::string(data->Buf, data->BufTextLen));
+                }
+                if (console->positionCursor) {
+                    data->CursorPos = data->SelectionStart = data->SelectionEnd = data->BufTextLen;
+                    console->positionCursor = false;
+                }
+                return 0;
+            };
+            constexpr auto inputFlags = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackEdit | ImGuiInputTextFlags_CallbackAlways;
+            if (ImGui::InputText("##ConsoleInput", console_.input.data(), console_.input.size(), inputFlags, callback, &console_)) {
+                if (!trimText(console_.input.data()).empty()) console_.pendingInputs.emplace_back(console_.input.data());
+                console_.history.submit();
+                console_.input[0] = '\0';
+                console_.focusInput = true;
+                console_.positionCursor = true;
+                console_.openingCharacter = 0;
+            }
+        }
     }
+    ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 orientation::Basis RenderContext::cameraBasis() const {

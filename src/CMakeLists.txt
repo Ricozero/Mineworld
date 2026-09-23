@@ -84,7 +84,6 @@ target_link_libraries(mineworld_core PUBLIC
 
 target_compile_definitions(mineworld_core PUBLIC
     GLM_ENABLE_EXPERIMENTAL
-    GLFW_EXPOSE_NATIVE_WIN32
 )
 
 if(WIN32)
@@ -93,6 +92,11 @@ if(WIN32)
         WIN32_LEAN_AND_MEAN
         NOMINMAX
     )
+    target_compile_definitions(mineworld_core PRIVATE GLFW_EXPOSE_NATIVE_WIN32)
+elseif(LINUX)
+    target_compile_definitions(mineworld_core PRIVATE GLFW_EXPOSE_NATIVE_X11)
+else()
+    message(FATAL_ERROR "Mineworld supports Windows and Linux.")
 endif()
 
 if(MSVC)

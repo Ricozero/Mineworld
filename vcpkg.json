@@ -13,7 +13,12 @@
                 "tools"
             ]
         },
-        "imgui",
+        {
+            "name": "imgui",
+            "features": [
+                "glfw-binding"
+            ]
+        },
         {
             "name": "tracy",
             "features": [

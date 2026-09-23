@@ -2,16 +2,25 @@
 
 #include <flatbuffers/flatbuffers.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "chunk.h"
 #include "command.h"
 #include "entity.h"
 #include "net_protocol_generated.h"
+
+inline constexpr size_t MAX_CHAT_TEXT_BYTES = 1024;
+
+struct ChatMessage {
+    std::string name;
+    std::string text;
+};
 
 struct NetActorState {
     ActorId id = 0;
@@ -95,3 +104,9 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
 
 std::vector<uint8_t> serializeCommandResponse(const CommandResponse& response);
 bool deserializeCommandResponse(std::span<const uint8_t> bytes, CommandResponse& outResponse);
+
+std::vector<uint8_t> serializeChatRequest(std::string_view text);
+bool deserializeChatRequest(std::span<const uint8_t> bytes, std::string& outText);
+
+std::vector<uint8_t> serializeChatMessage(const ChatMessage& message);
+bool deserializeChatMessage(std::span<const uint8_t> bytes, ChatMessage& outMessage);

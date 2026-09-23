@@ -6,12 +6,11 @@
 #include <type_traits>
 
 #include "chunk_layout.h"
+#include "text.h"
 
 namespace {
 
 constexpr size_t kMaxActors = 2048;
-constexpr size_t kMaxCommandArguments = 16;
-constexpr size_t kMaxCommandStringLength = 256;
 
 template <typename Payload>
 std::vector<uint8_t> finishMessage(flatbuffers::FlatBufferBuilder& builder, flatbuffers::Offset<Payload> payload) {
@@ -93,6 +92,7 @@ std::vector<uint8_t> serializeClientReady() {
 }
 
 std::vector<uint8_t> serializeServerHello(const NetServerHello& hello) {
+    if (!isValidName(hello.actorName)) return {};
     return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
         const auto name = hello.actorName.empty() ? flatbuffers::Offset<flatbuffers::String>{} : builder.CreateString(hello.actorName);
         const mineworld::net::Vec3 position = toFbVec3(hello.position);
@@ -123,11 +123,13 @@ bool deserializeServerHello(std::span<const uint8_t> bytes, NetServerHello& outH
     if (!hello || hello->actor_id() == 0) {
         return false;
     }
+    const auto name = hello->actor_name() ? hello->actor_name()->string_view() : std::string_view{};
+    if (!isValidName(name)) return false;
 
     NetServerHello result;
     result.sessionId = hello->session_id();
     result.actorId = hello->actor_id();
-    result.actorName = hello->actor_name() ? hello->actor_name()->str() : std::string{};
+    result.actorName = name;
     result.position = fromFbVec3(hello->position());
     result.yaw = hello->yaw();
     result.pitch = hello->pitch();
@@ -183,7 +185,7 @@ std::vector<uint8_t> serializeEntitySnapshot(uint32_t sequence, std::span<const 
     std::vector<flatbuffers::Offset<mineworld::net::ActorState>> entries;
     entries.reserve(actors.size());
     for (const auto* state : actors) {
-        if (!state || state->id == 0) {
+        if (!state || state->id == 0 || !isValidName(state->name)) {
             return {};
         }
         const auto& actor = *state;
@@ -218,9 +220,11 @@ bool deserializeEntitySnapshot(std::span<const uint8_t> bytes, NetEntitySnapshot
             if (!actor || actor->id() == 0) {
                 continue;
             }
+            const auto name = actor->name() ? actor->name()->string_view() : std::string_view{};
+            if (!isValidName(name)) return false;
             result.actors.push_back(NetActorState{
                 actor->id(),
-                actor->name() ? actor->name()->str() : std::string{},
+                std::string(name),
                 fromFbVec3(actor->position()),
                 fromFbVec3(actor->velocity()),
                 actor->yaw(),
@@ -375,7 +379,7 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
         return false;
     }
     const mineworld::net::CommandRequest* command = message->payload_as_CommandRequest();
-    if (!command || (command->arguments() && command->arguments()->size() > kMaxCommandArguments)) {
+    if (!command || (command->arguments() && command->arguments()->size() > MAX_COMMAND_ARGUMENTS)) {
         return false;
     }
 
@@ -391,7 +395,7 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
             switch (argument->value_type()) {
                 case mineworld::net::CommandArgumentValue::StringArgument: {
                     const auto* value = argument->value_as_StringArgument();
-                    if (!value || !value->value() || value->value()->size() > kMaxCommandStringLength) {
+                    if (!value || !value->value() || value->value()->size() > MAX_COMMAND_STRING_BYTES) {
                         return false;
                     }
                     result.arguments.emplace_back(value->value()->str());
@@ -439,11 +443,13 @@ bool deserializeCommandRequest(std::span<const uint8_t> bytes, CommandRequest& o
 }
 
 std::vector<uint8_t> serializeCommandResponse(const CommandResponse& response) {
+    if (response.message.size() > MAX_INPUT_TEXT_BYTES || !isValidUtf8(response.message)) return {};
     return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
         return mineworld::net::CreateCommandResponse(
             builder,
             response.requestId,
-            toWireEnum(response.status));
+            response.success,
+            builder.CreateString(response.message));
     });
 }
 
@@ -453,10 +459,46 @@ bool deserializeCommandResponse(std::span<const uint8_t> bytes, CommandResponse&
         return false;
     }
     const mineworld::net::CommandResponse* response = message->payload_as_CommandResponse();
-    if (!response) {
+    if (!response || !response->message() || response->message()->size() > MAX_INPUT_TEXT_BYTES || !isValidUtf8(response->message()->string_view())) {
         return false;
     }
     outResponse.requestId = response->request_id();
-    outResponse.status = fromWireEnum(response->status(), CommandStatus::Failed);
+    outResponse.success = response->success();
+    outResponse.message = response->message()->str();
+    return true;
+}
+
+std::vector<uint8_t> serializeChatRequest(std::string_view text) {
+    if (trimText(text).empty() || !isSingleLineText(text, MAX_CHAT_TEXT_BYTES)) return {};
+    return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
+        return mineworld::net::CreateChatRequest(builder, builder.CreateString(text));
+    });
+}
+
+bool deserializeChatRequest(std::span<const uint8_t> bytes, std::string& outText) {
+    const auto* message = tryGetMessage(bytes);
+    const auto* request = message ? message->payload_as_ChatRequest() : nullptr;
+    if (!request || !request->text()) return false;
+    const auto text = request->text()->string_view();
+    if (trimText(text).empty() || !isSingleLineText(text, MAX_CHAT_TEXT_BYTES)) return false;
+    outText = text;
+    return true;
+}
+
+std::vector<uint8_t> serializeChatMessage(const ChatMessage& message) {
+    if (message.name.empty() || !isValidName(message.name) || trimText(message.text).empty() || !isSingleLineText(message.text, MAX_CHAT_TEXT_BYTES)) return {};
+    return finishMessage([&](flatbuffers::FlatBufferBuilder& builder) {
+        return mineworld::net::CreateChatMessage(builder, builder.CreateString(message.name), builder.CreateString(message.text));
+    });
+}
+
+bool deserializeChatMessage(std::span<const uint8_t> bytes, ChatMessage& outMessage) {
+    const auto* message = tryGetMessage(bytes);
+    const auto* chat = message ? message->payload_as_ChatMessage() : nullptr;
+    if (!chat || !chat->name() || !chat->text()) return false;
+    const auto name = chat->name()->string_view();
+    const auto text = chat->text()->string_view();
+    if (name.empty() || !isValidName(name) || trimText(text).empty() || !isSingleLineText(text, MAX_CHAT_TEXT_BYTES)) return false;
+    outMessage = {std::string(name), std::string(text)};
     return true;
 }

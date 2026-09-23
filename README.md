@@ -9,12 +9,15 @@ Mineworld 是一个使用 C++20 开发的多人在线体素游戏实验项目
 - 基于 EnTT 的玩家、机器人和物理实体
 - 基于 bgfx、GLFW 和 ImGui 的渲染及界面
 - 基于 Asio、UDP 和 KCP 的可靠网络通信
-- 使用 FlatBuffers 序列化握手、输入、命令、实体和区块数据
+- 使用 FlatBuffers 序列化握手、输入、命令、聊天、实体和区块数据
+- 游戏内聊天与调试命令、统一输入历史，以及专用服务器和无窗口客户端的命令行入口
 - 集成 Tracy 性能分析
 
 ## 构建
 
 项目使用 C++20、CMake、Ninja 和 vcpkg，并已在 MSVC 下测试通过
+
+已加入 Windows / Linux 分支，Linux 分支尚未构建或运行验证
 
 ```console
 cmake --build build --config Debug
@@ -22,7 +25,7 @@ cmake --build build --config Debug
 
 可执行文件和运行配置生成到 `bin/`
 
-修改头文件或类布局后，如果编译链接成功，但开始游戏就崩溃，编译时增加参数 `--clean-first`
+修改头文件或类布局后，如果编译链接成功，但出现崩溃/输入无反应等疑难问题，尝试编译时增加参数 `--clean-first`
 
 ### 测试
 
@@ -70,7 +73,6 @@ bin/mineworld.exe headless-client --integrated-server --port 40001
 ### 当前
 
 - 整理profiler，平均改成每秒
-- 加入游戏内和命令行调试命令
 
 ### 架构
 
@@ -141,6 +143,8 @@ bin/mineworld.exe headless-client --integrated-server --port 40001
 - 方块光照传播算法
 - LOD
 - 光线追踪
+- ImGui动态纹理
+  - 删除GetGlyphRangesChineseFull
 
 ### 工具
 

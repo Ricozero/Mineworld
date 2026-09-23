@@ -3,7 +3,9 @@
 #include <spdlog/logger.h>
 #include <spdlog/spdlog.h>
 
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace logging {
@@ -18,6 +20,9 @@ void init(const std::string& dir);
 std::shared_ptr<spdlog::logger> getLogger(Channel channel);
 std::shared_ptr<spdlog::logger> currentLogger();
 void setThreadChannel(Channel channel);
+
+std::mutex& consoleOutputMutex();
+void setConsoleInputRedraw(std::function<void(bool)> redraw);
 
 template <typename... Args>
 void trace(fmt::format_string<Args...> fmt, Args&&... args) {

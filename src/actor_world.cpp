@@ -1,5 +1,7 @@
 #include "actor_world.h"
 
+#include "text.h"
+
 namespace {
 
 BoxColliderComponent createPlayerCollider() {
@@ -31,6 +33,7 @@ entt::entity ActorWorld::createRemotePlayer(ActorId id, std::string_view name, g
 }
 
 entt::entity ActorWorld::createPlayerEntity(ActorId id, std::string_view name, std::optional<uint32_t> sessionId, glm::vec3 position, PlayerMode mode) {
+    if (!isValidName(name)) return entt::null;
     const auto entity = createActor(id, position);
     if (entity == entt::null) {
         return entity;
@@ -52,6 +55,7 @@ entt::entity ActorWorld::createPlayerEntity(ActorId id, std::string_view name, s
 }
 
 entt::entity ActorWorld::createRobot(ActorId id, std::string_view name, glm::vec3 position) {
+    if (!isValidName(name)) return entt::null;
     const auto entity = createActor(id, position);
     if (entity == entt::null) {
         return entity;
@@ -103,12 +107,14 @@ std::vector<ActorId> ActorWorld::findActorsByName(std::string_view name) const {
     return ids;
 }
 
-void ActorWorld::setName(entt::entity entity, std::string_view name) {
+bool ActorWorld::setName(entt::entity entity, std::string_view name) {
+    if (!registry_.valid(entity) || !isValidName(name)) return false;
     if (name.empty()) {
         registry_.remove<NameComponent>(entity);
     } else if (const auto* current = registry_.try_get<NameComponent>(entity); !current || current->name != name) {
         registry_.emplace_or_replace<NameComponent>(entity, std::string(name));
     }
+    return true;
 }
 
 void ActorWorld::setPlayerMode(entt::entity entity, PlayerMode mode) {

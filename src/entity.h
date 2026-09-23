@@ -44,7 +44,6 @@ struct ControllerInputComponent {
     glm::vec3 move{0.0f};
     bool jump = false;
     bool sprint = false;
-    float deltaTime = 0.0f;
 };
 
 enum class EntityType : uint8_t {

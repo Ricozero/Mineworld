@@ -112,6 +112,8 @@ struct AppConfig {
     // [render]
     std::string graphicsApi = "dx11";
     bool vsync = true;
+    std::string fontPath = "../fonts/Arimo-Regular.ttf";
+    float fontSize = 18.0f;
 
     // [server]
     std::string serverAddress = "127.0.0.1";
@@ -146,6 +148,9 @@ struct AppConfig {
         windowHeight = cfg.getInt("window.height", windowHeight);
         graphicsApi = cfg.get("render.graphics_api", graphicsApi);
         vsync = cfg.getBool("render.vsync", vsync);
+        fontPath = cfg.get("render.font_path", fontPath);
+        const float configuredFontSize = cfg.getFloat("render.font_size", fontSize);
+        if (configuredFontSize > 0.0f) fontSize = configuredFontSize;
         serverAddress = cfg.get("server.address", serverAddress);
         port = static_cast<uint16_t>(cfg.getInt("server.port", port));
         ticksPerSecond = cfg.getInt("server.ticks_per_second", ticksPerSecond);

@@ -31,7 +31,7 @@ table ServerHello {
   position:Vec3;
   yaw:float;
   pitch:float;
-  player_mode:ubyte = 0;
+  player_mode:ubyte;
   core_chunks:[IVec3];
 }
 
@@ -40,8 +40,8 @@ table ClientInput {
   velocity:Vec3;
   yaw:float;
   pitch:float;
-  player_mode:ubyte = 0;
-  sequence:uint = 0;
+  player_mode:ubyte;
+  sequence:uint;
 }
 
 table ActorState {
@@ -51,10 +51,9 @@ table ActorState {
   velocity:Vec3;
   yaw:float;
   pitch:float;
-  entity_type:ubyte = 0;
-  player_mode:ubyte = 0;
+  entity_type:ubyte;
+  player_mode:ubyte;
 }
-
 
 table EntitySnapshot {
   sequence:uint;
@@ -122,7 +121,17 @@ table CommandRequest {
 
 table CommandResponse {
   request_id:ulong;
-  status:ubyte;
+  success:bool;
+  message:string;
+}
+
+table ChatRequest {
+  text:string;
+}
+
+table ChatMessage {
+  name:string;
+  text:string;
 }
 
 union NetMessagePayload {
@@ -135,7 +144,9 @@ union NetMessagePayload {
   ChunkUpsertBatch,
   ChunkUnloadBatch,
   CommandRequest,
-  CommandResponse
+  CommandResponse,
+  ChatRequest,
+  ChatMessage
 }
 
 table NetMessage {
