@@ -39,9 +39,9 @@ struct CounterEntry {
     std::string name;
     int64_t lastValue = 0;
     int64_t curValue = 0;
-    double avgValue = 0.0;
+    double perSecondValue = 0.0;
     int64_t maxValue = 0;
-    int64_t totalValue = 0;
+    int64_t windowValue = 0;
 };
 
 struct GaugeEntry {
@@ -68,7 +68,7 @@ public:
     void finishFrame(double frameMs);
     void addCounter(std::string_view name, int64_t amount = 1);
     void setGauge(std::string_view name, double value);
-    Snapshot snapshot() const;
+    Snapshot snapshot(bool includeDetails = true) const;
     void setThreadName(const char* name);
 
 private:
@@ -80,6 +80,7 @@ private:
     double frameMs_ = 0.0;
     double fps_ = 0.0;
     int64_t frameIndex_ = 0;
+    std::chrono::steady_clock::time_point counterWindowStart_ = std::chrono::steady_clock::now();
 };
 
 class ScopedTimer {

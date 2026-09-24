@@ -61,18 +61,11 @@ bin/mineworld.exe headless-client --integrated-server
 bin/mineworld.exe headless-client --integrated-server --port 40001
 ```
 
-## 开发环境
-
-- 使用 clangd 提供代码分析和格式化，需要手动安装
-- 已关闭 VSCode cpptools 的 IntelliSense，`c_cpp_properties.json` 不再使用
-- FlatBuffers 生成文件位于 `build/src/generated/`，不要直接修改
-- 使用 Tracy 查看客户端帧、服务端 tick 和自定义性能指标
-
 ## 计划
 
 ### 当前
 
-- 整理profiler，平均改成每秒
+- 无
 
 ### 架构
 

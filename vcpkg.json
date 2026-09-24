@@ -22,7 +22,8 @@
         {
             "name": "tracy",
             "features": [
-                "gui-tools"
+                "gui-tools",
+                "on-demand"
             ]
         },
         "lz4",

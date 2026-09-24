@@ -3,11 +3,9 @@ file(GLOB_RECURSE MINEWORLD_TEST_SOURCE CONFIGURE_DEPENDS *.cpp)
 add_executable(mineworld_tests ${MINEWORLD_TEST_SOURCE})
 add_dependencies(mineworld_tests mineworld_fbs)
 target_link_libraries(mineworld_tests PRIVATE mineworld_core GTest::gtest_main)
-set_target_properties(mineworld_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-
 foreach(config Debug Release RelWithDebInfo MinSizeRel)
     string(TOUPPER ${config} config_upper)
-    set_target_properties(mineworld_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config_upper} ${CMAKE_CURRENT_BINARY_DIR})
+    set_target_properties(mineworld_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_CURRENT_BINARY_DIR}/${config}")
 endforeach()
 
 include(GoogleTest)

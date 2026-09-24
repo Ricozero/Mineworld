@@ -20,11 +20,13 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <glm/packing.hpp>
+#include <type_traits>
 #include <vector>
 
 #include "actor_world.h"
@@ -308,8 +310,8 @@ void recordBgfxStats(const bgfx::Stats* stats) {
     MW_PROFILE_GAUGE("BGFX.ComputeCalls", static_cast<double>(stats->numCompute));
     MW_PROFILE_GAUGE("BGFX.BlitCalls", static_cast<double>(stats->numBlit));
     MW_PROFILE_GAUGE("BGFX.GpuLatency", static_cast<double>(stats->maxGpuLatency));
-    MW_PROFILE_GAUGE("BGFX.GpuMemUsedMB", static_cast<double>(stats->gpuMemoryUsed) / (1024.0 * 1024.0));
-    MW_PROFILE_GAUGE("BGFX.GpuMemMaxMB", static_cast<double>(stats->gpuMemoryMax) / (1024.0 * 1024.0));
+    MW_PROFILE_GAUGE("BGFX.GpuMemUsed", static_cast<double>(stats->gpuMemoryUsed));
+    MW_PROFILE_GAUGE("BGFX.GpuMemMax", static_cast<double>(stats->gpuMemoryMax));
 }
 
 void submitMeshBatch(const MeshBuilder& mesh, unsigned short programIndex, uint32_t depth) {
@@ -1022,9 +1024,9 @@ void RenderContext::renderWorld(const ActorWorld& actorWorld, const ClientChunkM
             MW_PROFILE_COUNTER("Render.ChunkVertices", submittedVertices);
         }
 
-        MW_PROFILE_GAUGE("Render.ChunkPoolReservedMB", static_cast<double>(chunkManager.meshBytesReserved()) / (1024.0 * 1024.0));
-        MW_PROFILE_GAUGE("Render.ChunkPoolCommittedMB", static_cast<double>(chunkManager.meshBytesCommitted()) / (1024.0 * 1024.0));
-        MW_PROFILE_GAUGE("Render.ChunkPoolUsedMB", static_cast<double>(chunkManager.meshBytesUsed()) / (1024.0 * 1024.0));
+        MW_PROFILE_GAUGE("Render.ChunkPoolReserved", static_cast<double>(chunkManager.meshBytesReserved()));
+        MW_PROFILE_GAUGE("Render.ChunkPoolCommitted", static_cast<double>(chunkManager.meshBytesCommitted()));
+        MW_PROFILE_GAUGE("Render.ChunkPoolUsed", static_cast<double>(chunkManager.meshBytesUsed()));
     }
 
     {
@@ -1125,7 +1127,7 @@ void RenderContext::renderEntityNames(const ActorWorld& actorWorld, const float*
 void RenderContext::renderProfilerOverlay() {
     MW_PROFILE_SCOPE("Render.Profiler");
 
-    const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot();
+    const profiling::Snapshot snapshot = profiling::Profiler::instance().snapshot(profilerMode_ == ProfilerMode::Full);
 
     ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Always);
@@ -1136,7 +1138,7 @@ void RenderContext::renderProfilerOverlay() {
         ImGuiWindowFlags_NoFocusOnAppearing |
         ImGuiWindowFlags_NoNav;
 
-    constexpr float kColName = 220.0f;
+    constexpr float kColName = 240.0f;
     constexpr float kVisibleTableRows = 8.0f;
     constexpr ImGuiTableFlags kProfilerTableFlags = ImGuiTableFlags_SizingStretchSame |
                                                     ImGuiTableFlags_BordersInnerV |
@@ -1153,9 +1155,35 @@ void RenderContext::renderProfilerOverlay() {
         }
         ImGui::TextUnformatted(text);
     };
+    auto rightAlignedCompactNumber = [&rightAlignedText](auto value) {
+        constexpr bool kInteger = std::is_integral_v<decltype(value)>;
+        if (std::abs(static_cast<double>(value)) < 999.95) {
+            if constexpr (kInteger) {
+                rightAlignedText("%lld", static_cast<long long>(value));
+            } else {
+                rightAlignedText("%.1f", value);
+            }
+            return;
+        }
+
+        constexpr std::array kSuffixes = {"K", "M", "B", "T", "P", "E"};
+        double scaled = static_cast<double>(value) / 1'000.0;
+        size_t suffixIndex = 0;
+        while (std::abs(scaled) >= 999.95 && suffixIndex + 1 < kSuffixes.size()) {
+            scaled /= 1'000.0;
+            ++suffixIndex;
+        }
+        rightAlignedText("%.1f %s", scaled, kSuffixes[suffixIndex]);
+        if (ImGui::IsItemHovered()) {
+            if constexpr (kInteger) {
+                ImGui::SetTooltip("%lld", static_cast<long long>(value));
+            } else {
+                ImGui::SetTooltip("%.1f", value);
+            }
+        }
+    };
 
     if (ImGui::Begin("ProfilerOverlay", nullptr, kWindowFlags)) {
-        char buffer[128];
         const glm::ivec3 chunkCoord = ChunkLayout::worldToChunk(cameraPosition_);
         if (ImGui::BeginTable("ProfilerSummaryTop", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_BordersInnerV)) {
             ImGui::TableSetupColumn("Camera", ImGuiTableColumnFlags_WidthStretch);
@@ -1163,11 +1191,9 @@ void RenderContext::renderProfilerOverlay() {
             ImGui::TableHeadersRow();
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            std::snprintf(buffer, sizeof(buffer), "%.1f, %.1f, %.1f", cameraPosition_.x, cameraPosition_.y, cameraPosition_.z);
-            rightAlignedText("%s", buffer);
+            rightAlignedText("%.1f, %.1f, %.1f", cameraPosition_.x, cameraPosition_.y, cameraPosition_.z);
             ImGui::TableNextColumn();
-            std::snprintf(buffer, sizeof(buffer), "%d, %d, %d", chunkCoord.x, chunkCoord.y, chunkCoord.z);
-            rightAlignedText("%s", buffer);
+            rightAlignedText("%d, %d, %d", chunkCoord.x, chunkCoord.y, chunkCoord.z);
             ImGui::EndTable();
         }
 
@@ -1214,24 +1240,21 @@ void RenderContext::renderProfilerOverlay() {
         if (profilerMode_ == ProfilerMode::Full && ImGui::BeginTable("ProfilerCounters", 4, kProfilerTableFlags, ImVec2(0.0f, tableHeight))) {
             ImGui::TableSetupColumn("Counter", ImGuiTableColumnFlags_WidthFixed, kColName);
             ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Avg", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Per Sec", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn("Max", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableHeadersRow();
 
             for (const profiling::CounterEntry& entry : snapshot.counters) {
-                if (entry.lastValue == 0 && entry.totalValue == 0) {
-                    continue;
-                }
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(entry.name.c_str());
                 ImGui::TableNextColumn();
-                rightAlignedText("%lld", static_cast<long long>(entry.lastValue));
+                rightAlignedCompactNumber(entry.lastValue);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.avgValue);
+                rightAlignedCompactNumber(entry.perSecondValue);
                 ImGui::TableNextColumn();
-                rightAlignedText("%lld", static_cast<long long>(entry.maxValue));
+                rightAlignedCompactNumber(entry.maxValue);
             }
             ImGui::EndTable();
         }
@@ -1249,11 +1272,11 @@ void RenderContext::renderProfilerOverlay() {
                 ImGui::TableNextColumn();
                 ImGui::TextUnformatted(entry.name.c_str());
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.value);
+                rightAlignedCompactNumber(entry.value);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.avgValue);
+                rightAlignedCompactNumber(entry.avgValue);
                 ImGui::TableNextColumn();
-                rightAlignedText("%.1f", entry.maxValue);
+                rightAlignedCompactNumber(entry.maxValue);
             }
             ImGui::EndTable();
         }

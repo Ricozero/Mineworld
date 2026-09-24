@@ -13,18 +13,6 @@ std::mutex& profilerMutex() {
 
 template <typename Entry>
 Entry& findOrAdd(std::vector<Entry>& entries, std::string_view name) {
-    auto it = std::find_if(entries.begin(), entries.end(), [name](const Entry& entry) {
-        return entry.name == name;
-    });
-    if (it == entries.end()) {
-        entries.push_back(Entry{std::string(name)});
-        it = entries.end() - 1;
-    }
-    return *it;
-}
-
-template <typename Entry>
-Entry& findOrAddSorted(std::vector<Entry>& entries, std::string_view name) {
     auto it = std::lower_bound(entries.begin(), entries.end(), name, [](const Entry& entry, std::string_view n) {
         return entry.name < n;
     });
@@ -50,7 +38,7 @@ Profiler& Profiler::instance() {
 void Profiler::recordScope(std::string_view name, double elapsedMs) {
     std::lock_guard lock(profilerMutex());
 
-    ScopeEntry& entry = findOrAddSorted(scopes_, name);
+    ScopeEntry& entry = findOrAdd(scopes_, name);
     entry.curMs += elapsedMs;
 }
 
@@ -60,27 +48,31 @@ void Profiler::finishFrame(double frameMs) {
 }
 
 void Profiler::addCounter(std::string_view name, int64_t amount) {
+    if (amount == 0) {
+        return;
+    }
     std::lock_guard lock(profilerMutex());
-    CounterEntry& entry = findOrAddSorted(counters_, name);
+    CounterEntry& entry = findOrAdd(counters_, name);
     entry.curValue += amount;
-    entry.totalValue += amount;
 }
 
 void Profiler::setGauge(std::string_view name, double value) {
     std::lock_guard lock(profilerMutex());
-    GaugeEntry& entry = findOrAddSorted(gauges_, name);
+    GaugeEntry& entry = findOrAdd(gauges_, name);
     entry.value = value;
     entry.avgValue = smooth(entry.avgValue, value, kSmoothAlpha);
     entry.maxValue = std::max(entry.maxValue, value);
 }
 
-Snapshot Profiler::snapshot() const {
+Snapshot Profiler::snapshot(bool includeDetails) const {
     std::lock_guard lock(profilerMutex());
 
     Snapshot out;
-    out.scopes = scopes_;
-    out.counters = counters_;
-    out.gauges = gauges_;
+    if (includeDetails) {
+        out.scopes = scopes_;
+        out.counters = counters_;
+        out.gauges = gauges_;
+    }
     out.frameMs = frameMs_;
     out.fps = fps_;
     out.frameIndex = frameIndex_;
@@ -97,6 +89,10 @@ void Profiler::setThreadName(const char* name) {
 }
 
 void Profiler::finishFrameLocked(double frameMs) {
+    const auto now = std::chrono::steady_clock::now();
+    const bool updatePerSecond = now - counterWindowStart_ >= std::chrono::seconds(1);
+    const double windowSeconds = updatePerSecond ? std::chrono::duration<double>(now - counterWindowStart_).count() : 0.0;
+
     frameMs_ = frameMs;
     fps_ = frameMs > 0.0 ? 1000.0 / frameMs : 0.0;
     ++frameIndex_;
@@ -105,11 +101,20 @@ void Profiler::finishFrameLocked(double frameMs) {
         entry.lastMs = entry.curMs;
         entry.avgMs = smooth(entry.avgMs, entry.lastMs, kSmoothAlpha);
         entry.maxMs = std::max(entry.maxMs, entry.lastMs);
+        entry.curMs = 0.0;
     }
     for (CounterEntry& entry : counters_) {
         entry.lastValue = entry.curValue;
-        entry.avgValue = smooth(entry.avgValue, static_cast<double>(entry.lastValue), kSmoothAlpha);
         entry.maxValue = std::max(entry.maxValue, entry.lastValue);
+        entry.windowValue += entry.curValue;
+        entry.curValue = 0;
+        if (updatePerSecond) {
+            entry.perSecondValue = static_cast<double>(entry.windowValue) / windowSeconds;
+            entry.windowValue = 0;
+        }
+    }
+    if (updatePerSecond) {
+        counterWindowStart_ = now;
     }
 
 #if defined(TRACY_ENABLE)
@@ -117,13 +122,6 @@ void Profiler::finishFrameLocked(double frameMs) {
     TracyCPlot("Frame.fps", fps_);
     TracyCFrameMark;
 #endif
-
-    for (ScopeEntry& entry : scopes_) {
-        entry.curMs = 0.0;
-    }
-    for (CounterEntry& entry : counters_) {
-        entry.curValue = 0;
-    }
 }
 
 #if defined(TRACY_ENABLE)

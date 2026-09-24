@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 #include "chunk_mesh.h"
 #include "client_system.h"
@@ -504,16 +505,19 @@ void GameClient::updateRemoteInterpolation(float deltaTime) {
     const double renderTime = snapshotClock_ - kInterpolationDelay;
     auto& registry = actorWorld_.registry();
     auto view = registry.view<TransformComponent, InterpolationComponent>(entt::exclude<SessionComponent>);
+    double minHeadroomMs = std::numeric_limits<double>::max();
     for (auto entity : view) {
         auto& interpolation = view.get<InterpolationComponent>(entity);
         auto& samples = interpolation.samples;
         if (samples.empty()) {
+            minHeadroomMs = std::min(minHeadroomMs, 0.0);
             continue;
         }
 
         while (samples.size() >= 2 && samples[1].time <= renderTime) {
             samples.pop_front();
         }
+        minHeadroomMs = std::min(minHeadroomMs, (samples.back().time - renderTime) * 1000.0);
 
         auto& transform = view.get<TransformComponent>(entity);
         if (samples.size() < 2 || renderTime <= samples.front().time) {
@@ -536,4 +540,5 @@ void GameClient::updateRemoteInterpolation(float deltaTime) {
             registry.get<PlayerComponent>(entity).mode = to.playerMode;
         }
     }
+    MW_PROFILE_GAUGE("Client.InterpolationHeadroomMs", minHeadroomMs == std::numeric_limits<double>::max() ? 0.0 : minHeadroomMs);
 }
